@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.angular/
+.wrangler/
+.dev.vars
+playwright-report/
+test-results/
+*.log

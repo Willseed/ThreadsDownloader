@@ -1,0 +1,18 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "threads-downloader",
+  "main": "apps/worker/src/index.ts",
+  "compatibility_date": "2026-07-25",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "EXPECTED_HOST": "threads.pylot.dev",
+    "EXPECTED_ORIGIN": "https://threads.pylot.dev",
+  },
+  "assets": {
+    "directory": "./dist/web/browser",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true,
+  },
+}

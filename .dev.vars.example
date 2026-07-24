@@ -1,0 +1,2 @@
+EXPECTED_HOST=localhost
+EXPECTED_ORIGIN=http://localhost:8787

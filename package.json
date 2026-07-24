@@ -1,0 +1,55 @@
+{
+  "name": "threads-downloader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": "24.18.0",
+    "npm": "11.16.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "build:web": "npm run build --workspace=@threads-downloader/web",
+    "build:worker": "npm run build --workspace=@threads-downloader/worker",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:web": "npm run test --workspace=@threads-downloader/web",
+    "test:worker": "npm run test --workspace=@threads-downloader/worker",
+    "coverage": "npm run coverage --workspace=@threads-downloader/worker",
+    "e2e": "playwright test",
+    "worker:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "@angular-eslint/eslint-plugin": "22.1.0",
+    "@angular-eslint/eslint-plugin-template": "22.1.0",
+    "@angular-eslint/template-parser": "22.1.0",
+    "@angular/build": "22.0.8",
+    "@angular/cli": "22.0.8",
+    "@angular/compiler-cli": "22.0.8",
+    "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.61.1",
+    "@types/node": "24.13.3",
+    "@typescript-eslint/eslint-plugin": "8.65.0",
+    "@typescript-eslint/parser": "8.65.0",
+    "eslint": "10.7.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-sonarjs": "4.2.0",
+    "jsdom": "27.4.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10",
+    "@vitest/coverage-v8": "4.1.10",
+    "@cloudflare/workers-types": "5.20260724.1",
+    "wrangler": "4.114.0"
+  }
+}

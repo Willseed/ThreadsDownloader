@@ -1,0 +1,16 @@
+{
+  "name": "@threads-downloader/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --config ../../wrangler.jsonc",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@threads-downloader/contracts": "file:../../packages/contracts",
+    "hono": "4.12.32"
+  }
+}

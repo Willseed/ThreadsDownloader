@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.angular/
+.wrangler/
+package-lock.json
+AGENTS.md
+DESIGN.md
