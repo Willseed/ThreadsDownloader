@@ -70,4 +70,22 @@ describe('worker entry policy', () => {
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
+
+  it('returns a safe JSON envelope when an unexpected failure occurs', async () => {
+    const env = createEnv();
+    vi.mocked(env.ASSETS.fetch).mockRejectedValueOnce(
+      new Error('internal stack detail and vault-secret-value'),
+    );
+
+    const response = await fetchWorker('/', env);
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    expect(JSON.parse(body)).toMatchObject({
+      error: { code: 'INTERNAL_ERROR', message: '伺服器暫時無法處理請求。' },
+    });
+    expect(body).not.toContain('stack');
+    expect(body).not.toContain('vault-secret-value');
+  });
 });

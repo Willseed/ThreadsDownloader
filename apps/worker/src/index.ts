@@ -1,6 +1,8 @@
 import { createApiError, type HealthResponse } from '@threads-downloader/contracts';
 import { Hono } from 'hono';
 
+import { createOpaqueId } from './security/cryptography.js';
+
 export interface Env {
   readonly ASSETS: {
     fetch(request: Request): Promise<Response>;
@@ -20,7 +22,7 @@ const securityHeaders = {
 } as const;
 
 function requestId(): string {
-  return crypto.randomUUID();
+  return createOpaqueId();
 }
 
 function applyResponsePolicy(response: Response): Response {
@@ -41,7 +43,15 @@ function notFoundApi(id: string): Response {
   return Response.json(createApiError('NOT_FOUND', '找不到請求的 API 路徑。', id), { status: 404 });
 }
 
+function internalServerError(): Response {
+  return Response.json(createApiError('INTERNAL_ERROR', '伺服器暫時無法處理請求。', requestId()), {
+    status: 500,
+  });
+}
+
 export const app = new Hono<{ Bindings: Env }>();
+
+app.onError(() => internalServerError());
 
 app.get('/api/health', (context) => {
   const response: HealthResponse = { status: 'ok', requestId: requestId() };

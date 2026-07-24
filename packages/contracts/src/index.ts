@@ -1,4 +1,4 @@
-export const API_ERROR_CODES = ['HOST_NOT_ALLOWED', 'NOT_FOUND'] as const;
+export const API_ERROR_CODES = ['HOST_NOT_ALLOWED', 'NOT_FOUND', 'INTERNAL_ERROR'] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 
