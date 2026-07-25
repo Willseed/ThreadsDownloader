@@ -19,6 +19,7 @@ import {
   type ValidationErrors,
   type ValidatorFn,
 } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { type ResolveCandidate } from '@threads-downloader/contracts';
 
 import {
@@ -96,7 +97,7 @@ function statusText(state: DownloaderWorkflowState): string {
 
 @Component({
   selector: 'app-downloader-page',
-  imports: [ReactiveFormsModule],
+  imports: [ReactiveFormsModule, RouterLink],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main id="main-content" class="downloader-page" aria-labelledby="page-title">
@@ -251,9 +252,17 @@ function statusText(state: DownloaderWorkflowState): string {
             上述目的與非商業聲明不代表營運者或使用者已取得任何內容授權，不表示特定下載、保存或其他使用必然合法或符合著作權限制或例外，也不免除任何人依適用法律應負的責任。
           </p>
           <p>
+            公開可見、研究或非商業目的不等於授權；使用者必須擁有內容、取得有效授權，或依實際適用法律確實得為預定使用。
+          </p>
+          <p>
             本服務僅處理無需登入即可存取的公開內容，不繞過登入、存取控制、付費牆或其他技術限制。
           </p>
           <p>本服務並非 Meta、Instagram、Threads 或 SpaceX 的官方產品，亦未獲其背書或授權。</p>
+          <nav class="boundary-links" aria-label="使用與權利資訊">
+            <a routerLink="/terms">閱讀使用條款</a>
+            <a routerLink="/privacy">閱讀隱私與資料處理說明</a>
+            <a routerLink="/copyright">著作權與下架通知</a>
+          </nav>
         </div>
       </section>
     </main>

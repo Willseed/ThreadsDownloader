@@ -74,4 +74,31 @@ describe('AppComponent routing', () => {
     expect(router.url).toBe('/');
     expect(root.querySelectorAll('#main-content')).toHaveLength(1);
   });
+
+  it.each([
+    ['/terms', '使用條款'],
+    ['/privacy', '隱私與資料處理說明'],
+    ['/copyright', '著作權與下架通知'],
+  ])('routes %s to one labelled legal main landmark', async (path, heading) => {
+    await router.navigateByUrl(path);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const main = root.querySelector<HTMLElement>('main#main-content');
+    const headerLinks = [...root.querySelectorAll<HTMLAnchorElement>('.site-nav a')].map((link) =>
+      link.getAttribute('href'),
+    );
+    const footerLinks = [
+      ...root.querySelectorAll<HTMLAnchorElement>('.site-footer nav[aria-label="法務資訊"] a'),
+    ].map((link) => link.getAttribute('href'));
+
+    expect(router.url).toBe(path);
+    expect(root.querySelectorAll('#main-content')).toHaveLength(1);
+    expect(main?.getAttribute('aria-labelledby')).toBe('page-title');
+    expect(main?.querySelector('#page-title')?.textContent?.trim()).toBe(heading);
+    expect(headerLinks).toEqual(['/', '/terms', '/privacy', '/copyright']);
+    expect(footerLinks).toEqual(['/terms', '/privacy', '/copyright']);
+  });
 });
