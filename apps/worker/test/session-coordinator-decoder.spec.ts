@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  decodeAcquireSessionDownloadPermitRequest,
   decodeAcquireResolvePermitRequest,
   decodeAuthorizeSessionRequest,
   decodeBootstrapSessionRequest,
   decodeReleaseResolvePermitRequest,
+  decodeReleaseSessionDownloadPermitRequest,
+  decodeRenewSessionDownloadPermitRequest,
   SessionCoordinator,
   type SessionCoordinatorEnv,
 } from '../src/session-coordinator.js';
@@ -19,6 +22,8 @@ const vaultPermitId = encodeBase64Url(new Uint8Array(24).fill(3));
 const vaultResolveId = encodeBase64Url(new Uint8Array(24).fill(4));
 const vaultCandidateId = encodeBase64Url(new Uint8Array(24).fill(5));
 const vaultReservationId = encodeBase64Url(new Uint8Array(24).fill(6));
+const downloadId = encodeBase64Url(new Uint8Array(24).fill(7));
+const downloadPermitId = encodeBase64Url(new Uint8Array(24).fill(8));
 const vaultCandidateWire = {
   finalUrl: 'https://video.cdninstagram.com/media/test.mp4',
   contentType: 'video/mp4',
@@ -59,11 +64,36 @@ describe('SessionCoordinator internal request decoders', () => {
     expect(decodeReleaseResolvePermitRequest({ ...valid, now: '100' })).toBeNull();
   });
 
+  it('decodes exact server-timed session download permit shapes', () => {
+    const binding = {
+      sessionHash: vaultSessionHash,
+      downloadId,
+      permitId: downloadPermitId,
+    };
+    expect(decodeAcquireSessionDownloadPermitRequest(binding)).toEqual(binding);
+    expect(decodeReleaseSessionDownloadPermitRequest(binding)).toEqual(binding);
+    expect(decodeRenewSessionDownloadPermitRequest({ ...binding, sequence: 1 })).toEqual({
+      ...binding,
+      sequence: 1,
+    });
+    expect(decodeAcquireSessionDownloadPermitRequest({ ...binding, now: 100 })).toBeNull();
+    expect(
+      decodeRenewSessionDownloadPermitRequest({ ...binding, sequence: 2, rawId: 'raw' }),
+    ).toBeNull();
+    expect(decodeRenewSessionDownloadPermitRequest({ ...binding, sequence: -1 })).toBeNull();
+    expect(
+      decodeReleaseSessionDownloadPermitRequest({ ...binding, permitId: 'not-canonical' }),
+    ).toBeNull();
+  });
+
   it.each([
     decodeBootstrapSessionRequest,
     decodeAuthorizeSessionRequest,
     decodeAcquireResolvePermitRequest,
     decodeReleaseResolvePermitRequest,
+    decodeAcquireSessionDownloadPermitRequest,
+    decodeRenewSessionDownloadPermitRequest,
+    decodeReleaseSessionDownloadPermitRequest,
   ])('rejects non-object internal payloads', (decoder) => {
     expect(decoder(null)).toBeNull();
     expect(decoder([])).toBeNull();
@@ -84,7 +114,10 @@ describe('SessionCoordinator request error contract', () => {
       setAlarm: vi.fn(() => Promise.resolve()),
     };
     return new SessionCoordinator(
-      { storage } as unknown as DurableObjectState,
+      {
+        storage,
+        blockConcurrencyWhile: <T>(callback: () => Promise<T>): Promise<T> => callback(),
+      } as unknown as DurableObjectState,
       { RESOLVED_MEDIA_GRANT_KEY: 'unused-by-decoder-tests' } as SessionCoordinatorEnv,
     );
   }
@@ -105,6 +138,9 @@ describe('SessionCoordinator request error contract', () => {
     '/authorize',
     '/resolve-permits/acquire',
     '/resolve-permits/release',
+    '/download-permits/acquire',
+    '/download-permits/renew',
+    '/download-permits/release',
     '/resolve-vault/store',
     '/resolve-vault/claim',
     '/resolve-vault/settle',
@@ -124,6 +160,18 @@ describe('SessionCoordinator request error contract', () => {
     ['/authorize', { sessionHash, csrfHash, now: 100 }],
     ['/resolve-permits/acquire', { sessionHash, csrfHash, permitId, now: 100 }],
     ['/resolve-permits/release', { sessionHash, permitId, now: 100 }],
+    [
+      '/download-permits/acquire',
+      { sessionHash: vaultSessionHash, downloadId, permitId: downloadPermitId },
+    ],
+    [
+      '/download-permits/renew',
+      { sessionHash: vaultSessionHash, downloadId, permitId: downloadPermitId, sequence: 1 },
+    ],
+    [
+      '/download-permits/release',
+      { sessionHash: vaultSessionHash, downloadId, permitId: downloadPermitId },
+    ],
   ])('denies a valid %s request when the session is missing', async (path, body) => {
     const response = await coordinator().fetch(
       new Request(`https://session.internal${path}`, {

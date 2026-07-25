@@ -15,6 +15,21 @@ import {
   type SessionRecord,
 } from './security/session-record.js';
 import {
+  acquireSessionDownloadPermit,
+  isSessionDownloadId,
+  isSessionDownloadPermitId,
+  isSessionIdentityHash,
+  nextSessionDownloadPermitDeadline,
+  pruneSessionDownloadPermits,
+  releaseSessionDownloadPermit,
+  restoreSessionDownloadPermitAfterAlarmFailure,
+  renewSessionDownloadPermit,
+  SessionDownloadAdmissionStateError,
+  SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS,
+  type SessionDownloadAdmissionState,
+  type SessionDownloadPermit,
+} from './security/session-download-admission.js';
+import {
   acquireResolvePermit,
   nextResolvePermitDeadline,
   releaseResolvePermit,
@@ -60,6 +75,16 @@ const resolvePermitsTableSql = `CREATE TABLE IF NOT EXISTS resolve_permits (
   permit_id TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
 )`;
+const sessionDownloadPermitsTableSql = `CREATE TABLE IF NOT EXISTS session_download_permits (
+  permit_id TEXT PRIMARY KEY,
+  download_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  acquired_at INTEGER NOT NULL,
+  renewed_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+)`;
+const sessionDownloadPermitsExpiryIndexSql = `CREATE INDEX IF NOT EXISTS session_download_permits_expiry
+  ON session_download_permits (expires_at)`;
 const resolveVaultBatchesTableSql = `CREATE TABLE IF NOT EXISTS resolved_media_batches (
   resolve_id TEXT PRIMARY KEY,
   session_hash TEXT NOT NULL,
@@ -99,6 +124,20 @@ interface ReleasePermitInput {
   readonly permitId: string;
   readonly now: number;
 }
+
+export interface AcquireSessionDownloadPermitRequest {
+  readonly sessionHash: string;
+  readonly downloadId: string;
+  readonly permitId: string;
+}
+
+export interface RenewSessionDownloadPermitRequest extends AcquireSessionDownloadPermitRequest {
+  readonly sequence: number;
+}
+
+export type ReleaseSessionDownloadPermitRequest = AcquireSessionDownloadPermitRequest;
+
+type SessionDownloadAdmissionHttpErrorStatus = 401 | 409 | 429 | 500;
 
 export interface SessionCoordinatorEnv {
   readonly RESOLVED_MEDIA_GRANT_KEY: string;
@@ -202,8 +241,63 @@ export function decodeReleaseResolvePermitRequest(value: unknown): ReleasePermit
     : null;
 }
 
+export function decodeAcquireSessionDownloadPermitRequest(
+  value: unknown,
+): AcquireSessionDownloadPermitRequest | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['downloadId', 'permitId', 'sessionHash']) ||
+    !isSessionIdentityHash(value['sessionHash']) ||
+    !isSessionDownloadId(value['downloadId']) ||
+    !isSessionDownloadPermitId(value['permitId'])
+  ) {
+    return null;
+  }
+  return {
+    sessionHash: value['sessionHash'],
+    downloadId: value['downloadId'],
+    permitId: value['permitId'],
+  };
+}
+
+export function decodeRenewSessionDownloadPermitRequest(
+  value: unknown,
+): RenewSessionDownloadPermitRequest | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['downloadId', 'permitId', 'sequence', 'sessionHash']) ||
+    !isSessionIdentityHash(value['sessionHash']) ||
+    !isSessionDownloadId(value['downloadId']) ||
+    !isSessionDownloadPermitId(value['permitId']) ||
+    !Number.isSafeInteger(value['sequence']) ||
+    (value['sequence'] as number) < 0
+  ) {
+    return null;
+  }
+  return {
+    sessionHash: value['sessionHash'],
+    downloadId: value['downloadId'],
+    permitId: value['permitId'],
+    sequence: value['sequence'] as number,
+  };
+}
+
+export const decodeReleaseSessionDownloadPermitRequest = decodeAcquireSessionDownloadPermitRequest;
+
 function safeJson(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, { status });
+}
+
+function sessionDownloadAdmissionErrorStatus(
+  error: SessionDownloadAdmissionStateError,
+): 409 | 429 | 500 {
+  if (error.code === 'SESSION_DOWNLOAD_LIMIT') {
+    return 429;
+  }
+  if (error.code === 'SESSION_DOWNLOAD_CONFLICT' || error.code === 'SESSION_DOWNLOAD_EXPIRED') {
+    return 409;
+  }
+  return 500;
 }
 
 export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
@@ -220,6 +314,8 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     this.ctx.storage.sql.exec(sessionTableSql);
     this.ctx.storage.sql.exec(resolveEventsTableSql);
     this.ctx.storage.sql.exec(resolvePermitsTableSql);
+    this.ctx.storage.sql.exec(sessionDownloadPermitsTableSql);
+    this.ctx.storage.sql.exec(sessionDownloadPermitsExpiryIndexSql);
     this.ctx.storage.sql.exec(resolveVaultBatchesTableSql);
     this.ctx.storage.sql.exec(resolveVaultCandidatesTableSql);
     this.ctx.storage.sql.exec(resolveVaultExpiryIndexSql);
@@ -319,6 +415,53 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     return { events, permits };
   }
 
+  private readSessionDownloadState(): SessionDownloadAdmissionState {
+    const permits = this.ctx.storage.sql
+      .exec<{
+        permit_id: string;
+        download_id: string;
+        sequence: number;
+        acquired_at: number;
+        renewed_at: number;
+        expires_at: number;
+      }>(
+        `SELECT permit_id, download_id, sequence, acquired_at, renewed_at, expires_at
+         FROM session_download_permits ORDER BY expires_at, permit_id`,
+      )
+      .toArray()
+      .map((row): SessionDownloadPermit => ({
+        permitId: row['permit_id'],
+        downloadId: row['download_id'],
+        sequence: row['sequence'],
+        acquiredAt: row['acquired_at'],
+        renewedAt: row['renewed_at'],
+        expiresAt: row['expires_at'],
+      }));
+    return { permits };
+  }
+
+  private writeSessionDownloadState(state: SessionDownloadAdmissionState): void {
+    this.ctx.storage.sql.exec('DELETE FROM session_download_permits');
+    for (const permit of state.permits) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO session_download_permits
+          (permit_id, download_id, sequence, acquired_at, renewed_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        permit.permitId,
+        permit.downloadId,
+        permit.sequence,
+        permit.acquiredAt,
+        permit.renewedAt,
+        permit.expiresAt,
+      );
+    }
+  }
+
+  private pruneSessionDownloadStorage(now: number): void {
+    const next = pruneSessionDownloadPermits(this.readSessionDownloadState(), now);
+    this.writeSessionDownloadState(next);
+  }
+
   private readVaultDeadline(): number | null {
     const batchDeadline = this.ctx.storage.sql
       .exec<{ deadline: number | null }>(
@@ -345,10 +488,16 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
 
   private async scheduleAlarm(record: SessionRecord): Promise<void> {
     const permitDeadline = nextResolvePermitDeadline(this.readResolveState());
-    const vaultDeadline = this.readVaultDeadline();
-    const deadlines = [record.expiresAt, permitDeadline, vaultDeadline].filter(
-      (value): value is number => value !== null,
+    const downloadPermitDeadline = nextSessionDownloadPermitDeadline(
+      this.readSessionDownloadState(),
     );
+    const vaultDeadline = this.readVaultDeadline();
+    const deadlines = [
+      record.expiresAt,
+      permitDeadline,
+      downloadPermitDeadline,
+      vaultDeadline,
+    ].filter((value): value is number => value !== null);
     await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
 
@@ -1088,6 +1237,248 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       : safeJson(401, { ok: false });
   }
 
+  private async acquireSessionDownloadPermit(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeAcquireSessionDownloadPermitRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+    return this.ctx.blockConcurrencyWhile(() => this.acquireSessionDownloadPermitDecoded(input));
+  }
+
+  private async acquireSessionDownloadPermitDecoded(
+    input: AcquireSessionDownloadPermitRequest,
+  ): Promise<Response> {
+    const acquiredAt = Date.now();
+    let result:
+      | {
+          readonly status: 201;
+          readonly record: SessionRecord;
+          readonly permit: SessionDownloadPermit;
+          readonly newlyAdmitted: boolean;
+        }
+      | { readonly status: SessionDownloadAdmissionHttpErrorStatus };
+    try {
+      result = this.ctx.storage.transactionSync(() => {
+        const record = this.readRecord();
+        if (
+          record === null ||
+          record.sessionHash !== input.sessionHash ||
+          record.expiresAt - acquiredAt < SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS
+        ) {
+          return { status: 401 } as const;
+        }
+        const current = this.readSessionDownloadState();
+        const newlyAdmitted = !current.permits.some((permit) => permit.permitId === input.permitId);
+        try {
+          const transition = acquireSessionDownloadPermit(current, {
+            now: acquiredAt,
+            sessionExpiresAt: record.expiresAt,
+            permitId: input.permitId,
+            downloadId: input.downloadId,
+          });
+          this.writeSessionDownloadState(transition.state);
+          return {
+            status: 201,
+            record,
+            permit: transition.permit,
+            newlyAdmitted,
+          } as const;
+        } catch (error: unknown) {
+          if (error instanceof SessionDownloadAdmissionStateError) {
+            return { status: sessionDownloadAdmissionErrorStatus(error) } as const;
+          }
+          throw error;
+        }
+      });
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (result.status !== 201) {
+      return safeJson(result.status, { ok: false });
+    }
+    try {
+      await this.scheduleAlarm(result.record);
+    } catch {
+      if (result.newlyAdmitted) {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec(
+            `DELETE FROM session_download_permits
+             WHERE permit_id = ? AND download_id = ? AND sequence = ?
+               AND acquired_at = ? AND renewed_at = ? AND expires_at = ?`,
+            result.permit.permitId,
+            result.permit.downloadId,
+            result.permit.sequence,
+            result.permit.acquiredAt,
+            result.permit.renewedAt,
+            result.permit.expiresAt,
+          );
+        });
+      }
+      return safeJson(500, { ok: false });
+    }
+    return safeJson(201, {
+      ok: true,
+      permitId: result.permit.permitId,
+      sequence: result.permit.sequence,
+      expiresAt: result.permit.expiresAt,
+    });
+  }
+
+  private async renewSessionDownloadPermit(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeRenewSessionDownloadPermitRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+    return this.ctx.blockConcurrencyWhile(() => this.renewSessionDownloadPermitDecoded(input));
+  }
+
+  private async renewSessionDownloadPermitDecoded(
+    input: RenewSessionDownloadPermitRequest,
+  ): Promise<Response> {
+    const renewedAt = Date.now();
+    let result:
+      | {
+          readonly status: 200;
+          readonly record: SessionRecord;
+          readonly permit: SessionDownloadPermit;
+          readonly previous: SessionDownloadPermit;
+          readonly advanced: boolean;
+        }
+      | { readonly status: SessionDownloadAdmissionHttpErrorStatus };
+    try {
+      result = this.ctx.storage.transactionSync(() => {
+        const record = this.readRecord();
+        if (
+          record === null ||
+          record.sessionHash !== input.sessionHash ||
+          record.expiresAt - renewedAt < SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS
+        ) {
+          return { status: 401 } as const;
+        }
+        const current = this.readSessionDownloadState();
+        const previous = current.permits.find((permit) => permit.permitId === input.permitId);
+        if (previous === undefined) {
+          return { status: 409 } as const;
+        }
+        try {
+          const transition = renewSessionDownloadPermit(current, {
+            now: renewedAt,
+            sessionExpiresAt: record.expiresAt,
+            permitId: input.permitId,
+            downloadId: input.downloadId,
+            sequence: input.sequence,
+          });
+          this.writeSessionDownloadState(transition.state);
+          return {
+            status: 200,
+            record,
+            permit: transition.permit,
+            previous,
+            advanced: transition.permit.sequence > previous.sequence,
+          } as const;
+        } catch (error: unknown) {
+          if (error instanceof SessionDownloadAdmissionStateError) {
+            return { status: sessionDownloadAdmissionErrorStatus(error) } as const;
+          }
+          throw error;
+        }
+      });
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (result.status !== 200) {
+      return safeJson(result.status, { ok: false });
+    }
+    try {
+      await this.scheduleAlarm(result.record);
+    } catch {
+      if (result.advanced) {
+        this.ctx.storage.transactionSync(() => {
+          const restored = restoreSessionDownloadPermitAfterAlarmFailure(
+            this.readSessionDownloadState(),
+            { previous: result.previous, attempted: result.permit },
+          );
+          this.writeSessionDownloadState(restored);
+        });
+      }
+      return safeJson(500, { ok: false });
+    }
+    return safeJson(200, {
+      ok: true,
+      permitId: result.permit.permitId,
+      sequence: result.permit.sequence,
+      expiresAt: result.permit.expiresAt,
+    });
+  }
+
+  private async releaseSessionDownloadPermit(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeReleaseSessionDownloadPermitRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+    return this.ctx.blockConcurrencyWhile(() => this.releaseSessionDownloadPermitDecoded(input));
+  }
+
+  private async releaseSessionDownloadPermitDecoded(
+    input: ReleaseSessionDownloadPermitRequest,
+  ): Promise<Response> {
+    const releasedAt = Date.now();
+    let result:
+      | { readonly status: 200; readonly record: SessionRecord }
+      | { readonly status: SessionDownloadAdmissionHttpErrorStatus };
+    try {
+      result = this.ctx.storage.transactionSync(() => {
+        const record = this.readRecord();
+        if (record === null || record.sessionHash !== input.sessionHash) {
+          return { status: 401 } as const;
+        }
+        try {
+          const state = releaseSessionDownloadPermit(this.readSessionDownloadState(), {
+            now: releasedAt,
+            permitId: input.permitId,
+            downloadId: input.downloadId,
+          });
+          this.writeSessionDownloadState(state);
+          return { status: 200, record } as const;
+        } catch (error: unknown) {
+          if (error instanceof SessionDownloadAdmissionStateError) {
+            return { status: sessionDownloadAdmissionErrorStatus(error) } as const;
+          }
+          throw error;
+        }
+      });
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (result.status !== 200) {
+      return safeJson(result.status, { ok: false });
+    }
+    try {
+      await this.scheduleAlarm(result.record);
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    return safeJson(200, { ok: true });
+  }
+
   private async acquirePermit(request: Request): Promise<Response> {
     let body: unknown;
     try {
@@ -1187,6 +1578,15 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     if (pathname === '/resolve-permits/release') {
       return this.releasePermit(request);
     }
+    if (pathname === '/download-permits/acquire') {
+      return this.acquireSessionDownloadPermit(request);
+    }
+    if (pathname === '/download-permits/renew') {
+      return this.renewSessionDownloadPermit(request);
+    }
+    if (pathname === '/download-permits/release') {
+      return this.releaseSessionDownloadPermit(request);
+    }
     if (pathname === '/resolve-vault/store') {
       return this.storeVault(request);
     }
@@ -1208,7 +1608,10 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       this.initializeTables();
       return;
     }
-    this.ctx.storage.transactionSync(() => this.pruneResolveStorage(now));
+    this.ctx.storage.transactionSync(() => {
+      this.pruneResolveStorage(now);
+      this.pruneSessionDownloadStorage(now);
+    });
     await this.scheduleAlarm(this.readRecord()!);
   }
 }

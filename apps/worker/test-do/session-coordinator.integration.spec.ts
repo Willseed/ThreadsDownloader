@@ -12,13 +12,15 @@ interface TestEnv {
   readonly SESSIONS: DurableObjectNamespace<SessionCoordinator>;
 }
 
+type SqlValue = string | number | ArrayBuffer | null;
+
 interface SessionBody {
   readonly csrfToken: string;
   readonly expiresAt: string;
 }
 
 interface StoredRow {
-  readonly [key: string]: string | number | ArrayBuffer | null;
+  readonly [key: string]: SqlValue;
   readonly schema_version: number;
   readonly session_hash: string;
   readonly csrf_hash: string;
@@ -39,6 +41,16 @@ interface StoredVaultBatch {
   readonly candidates: readonly StoredVaultCandidate[];
 }
 
+interface SessionDownloadPermitRow {
+  readonly [key: string]: SqlValue;
+  readonly permit_id: string;
+  readonly download_id: string;
+  readonly sequence: number;
+  readonly acquired_at: number;
+  readonly renewed_at: number;
+  readonly expires_at: number;
+}
+
 interface ClaimedVaultCandidate {
   readonly reservationId: string;
   readonly reservedAt: number;
@@ -47,7 +59,7 @@ interface ClaimedVaultCandidate {
 }
 
 interface VaultRow {
-  readonly [key: string]: string | number | ArrayBuffer | null;
+  readonly [key: string]: SqlValue;
   readonly resolve_id: string;
   readonly permit_id: string;
   readonly state: string;
@@ -67,6 +79,17 @@ const privateMediaUrl =
   'https://video.cdninstagram.com/media/private.mp4?token=must-stay-in-the-vault';
 
 const testEnv = env as unknown as TestEnv;
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 function sessionStub(rawId: string): DurableObjectStub<SessionCoordinator> {
   return testEnv.SESSIONS.get(testEnv.SESSIONS.idFromName(rawId));
@@ -140,6 +163,108 @@ async function releasePermit(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sessionHash, permitId, now }),
   });
+}
+
+async function sessionDownloadPermit(
+  stub: DurableObjectStub<SessionCoordinator>,
+  operation: 'acquire' | 'release' | 'renew',
+  input: {
+    readonly sessionHash: string;
+    readonly downloadId: string;
+    readonly permitId: string;
+    readonly sequence?: number;
+  },
+): Promise<Response> {
+  return stub.fetch(`https://session.internal/download-permits/${operation}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+function sessionDownloadPermitRequest(
+  operation: 'acquire' | 'release' | 'renew',
+  input: {
+    readonly sessionHash: string;
+    readonly downloadId: string;
+    readonly permitId: string;
+    readonly sequence?: number;
+  },
+): Request {
+  return new Request(`https://session.internal/download-permits/${operation}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+
+async function concurrentAlarmFailure(
+  stub: DurableObjectStub<SessionCoordinator>,
+  operation: 'acquire' | 'renew',
+  input: {
+    readonly sessionHash: string;
+    readonly downloadId: string;
+    readonly permitId: string;
+    readonly sequence?: number;
+  },
+): Promise<{
+  readonly firstStatus: number;
+  readonly replayBlocked: boolean;
+  readonly replayStatus: number;
+}> {
+  return runInDurableObject(stub, async (instance) => {
+    const started = deferred<void>();
+    const failure = deferred<void>();
+    const storage = (
+      instance as unknown as { readonly ctx: { readonly storage: DurableObjectStorage } }
+    ).ctx.storage;
+    const setAlarm = storage.setAlarm.bind(storage);
+    let intercept = true;
+    Object.defineProperty(storage, 'setAlarm', {
+      configurable: true,
+      async value(timestamp: number): Promise<void> {
+        if (!intercept) {
+          await setAlarm(timestamp);
+          return;
+        }
+        intercept = false;
+        started.resolve(undefined);
+        await failure.promise;
+        throw new Error('alarm unavailable');
+      },
+    });
+
+    const first = instance.fetch(sessionDownloadPermitRequest(operation, input));
+    await started.promise;
+    let replaySettled = false;
+    const replay = instance
+      .fetch(sessionDownloadPermitRequest(operation, input))
+      .then((response) => {
+        replaySettled = true;
+        return response;
+      });
+    await Promise.resolve();
+    const replayBlocked = !replaySettled;
+    failure.resolve(undefined);
+    return {
+      firstStatus: (await first).status,
+      replayBlocked,
+      replayStatus: (await replay).status,
+    };
+  });
+}
+
+async function readSessionDownloadPermits(
+  stub: DurableObjectStub<SessionCoordinator>,
+): Promise<SessionDownloadPermitRow[]> {
+  return runInDurableObject(stub, (_instance, state) =>
+    state.storage.sql
+      .exec<SessionDownloadPermitRow>(
+        `SELECT permit_id, download_id, sequence, acquired_at, renewed_at, expires_at
+         FROM session_download_permits ORDER BY permit_id`,
+      )
+      .toArray(),
+  );
 }
 
 function probedMedia(overrides: Partial<ProbedMedia> = {}): ProbedMedia {
@@ -406,6 +531,247 @@ describe('SessionCoordinator in workerd', () => {
     expect(
       (await acquirePermit(stub, sessionHash, csrfHash, createOpaqueId(), now + 20)).status,
     ).toBe(429);
+  });
+
+  it('limits browser-session downloads across download objects with exact lease transitions', async () => {
+    const rawId = 'concurrent-download-session';
+    const rawCsrf = 'concurrent-download-csrf';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier(rawCsrf);
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const downloadId = createOpaqueId();
+    const otherDownloadId = createOpaqueId();
+    const permitIds = Array.from({ length: 5 }, () => createOpaqueId());
+    let firstAcquireBody: Record<string, unknown> | undefined;
+
+    for (const [index, permitId] of permitIds.slice(0, 4).entries()) {
+      const response = await sessionDownloadPermit(stub, 'acquire', {
+        sessionHash,
+        downloadId,
+        permitId,
+      });
+      expect(response.status).toBe(201);
+      if (index === 0) {
+        firstAcquireBody = (await response.json()) as Record<string, unknown>;
+      }
+    }
+    expect(firstAcquireBody?.['expiresAt']).toEqual(expect.any(Number));
+    expect(firstAcquireBody?.['expiresAt']).toBeGreaterThan(now);
+    expect(firstAcquireBody?.['expiresAt']).toBeLessThanOrEqual(Date.now() + 90_000);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId: otherDownloadId,
+          permitId: permitIds[4]!,
+        })
+      ).status,
+    ).toBe(429);
+    const beforeWrongHash = await readSessionDownloadPermits(stub);
+    const wrongHash = await hashIdentifier('wrong-download-session');
+    for (const [operation, request] of [
+      ['acquire', { sessionHash: wrongHash, downloadId, permitId: createOpaqueId() }],
+      ['renew', { sessionHash: wrongHash, downloadId, permitId: permitIds[0]!, sequence: 1 }],
+      ['release', { sessionHash: wrongHash, downloadId, permitId: permitIds[0]! }],
+    ] as const) {
+      expect((await sessionDownloadPermit(stub, operation, request)).status).toBe(401);
+    }
+    expect(await readSessionDownloadPermits(stub)).toEqual(beforeWrongHash);
+    const replay = await sessionDownloadPermit(stub, 'acquire', {
+      sessionHash,
+      downloadId,
+      permitId: permitIds[0]!,
+    });
+    await expect(replay.json()).resolves.toMatchObject({ ok: true, sequence: 0 });
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId: otherDownloadId,
+          permitId: permitIds[0]!,
+        })
+      ).status,
+    ).toBe(409);
+
+    const renewed = await sessionDownloadPermit(stub, 'renew', {
+      sessionHash,
+      downloadId,
+      permitId: permitIds[0]!,
+      sequence: 1,
+    });
+    const renewedBody = (await renewed.json()) as Record<string, unknown>;
+    expect(renewed.status).toBe(200);
+    expect(renewedBody).toMatchObject({ ok: true, sequence: 1 });
+    const renewReplay = await sessionDownloadPermit(stub, 'renew', {
+      sessionHash,
+      downloadId,
+      permitId: permitIds[0]!,
+      sequence: 1,
+    });
+    await expect(renewReplay.json()).resolves.toEqual(renewedBody);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'renew', {
+          sessionHash,
+          downloadId,
+          permitId: permitIds[0]!,
+          sequence: 3,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'release', {
+          sessionHash,
+          downloadId: otherDownloadId,
+          permitId: permitIds[0]!,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'release', {
+          sessionHash,
+          downloadId,
+          permitId: permitIds[0]!,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'release', {
+          sessionHash,
+          downloadId,
+          permitId: permitIds[0]!,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId: otherDownloadId,
+          permitId: permitIds[4]!,
+        })
+      ).status,
+    ).toBe(201);
+
+    const stored = await readSessionDownloadPermits(stub);
+    expect(stored).toHaveLength(4);
+    expect(stored.find((row) => row['permit_id'] === permitIds[4])?.['download_id']).toBe(
+      otherDownloadId,
+    );
+    expect(JSON.stringify(stored)).not.toContain(rawId);
+    expect(JSON.stringify(stored)).not.toContain(rawCsrf);
+    expect(JSON.stringify(stored)).not.toContain(privateMediaUrl);
+  });
+
+  it('prunes expired session download permits through the coordinator alarm', async () => {
+    const rawId = 'expiring-download-permit-session';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('expiring-download-permit-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId: createOpaqueId(),
+          permitId: createOpaqueId(),
+        })
+      ).status,
+    ).toBe(201);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      const expiredAt = Date.now() - 1;
+      state.storage.sql.exec(
+        `UPDATE session_download_permits
+         SET acquired_at = ?, renewed_at = ?, expires_at = ?`,
+        expiredAt - 2,
+        expiredAt - 1,
+        expiredAt,
+      );
+    });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    expect(await readSessionDownloadPermits(stub)).toEqual([]);
+  });
+
+  it('rejects acquire and renew without a useful session lease window and preserves capacity', async () => {
+    const rawId = 'short-window-download-session';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('short-window-download-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const downloadId = createOpaqueId();
+    const permitId = createOpaqueId();
+    expect(
+      (await sessionDownloadPermit(stub, 'acquire', { sessionHash, downloadId, permitId })).status,
+    ).toBe(201);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec('UPDATE session_record SET expires_at = ?', Date.now() + 44_000);
+    });
+    const before = await readSessionDownloadPermits(stub);
+
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId,
+          permitId: createOpaqueId(),
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'renew', {
+          sessionHash,
+          downloadId,
+          permitId,
+          sequence: 1,
+        })
+      ).status,
+    ).toBe(401);
+    expect(await readSessionDownloadPermits(stub)).toEqual(before);
+  });
+
+  it('serializes acquire alarm compensation before an idempotent replay can observe the row', async () => {
+    const rawId = 'serialized-download-acquire';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('serialized-download-acquire-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const binding = {
+      sessionHash,
+      downloadId: createOpaqueId(),
+      permitId: createOpaqueId(),
+    };
+    const result = await concurrentAlarmFailure(stub, 'acquire', binding);
+    expect(result).toEqual({ firstStatus: 500, replayBlocked: true, replayStatus: 201 });
+    expect(await readSessionDownloadPermits(stub)).toHaveLength(1);
+  });
+
+  it('serializes renew rollback before the same sequence can replay successfully', async () => {
+    const rawId = 'serialized-download-renew';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('serialized-download-renew-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const binding = {
+      sessionHash,
+      downloadId: createOpaqueId(),
+      permitId: createOpaqueId(),
+    };
+    expect((await sessionDownloadPermit(stub, 'acquire', binding)).status).toBe(201);
+    const renewal = { ...binding, sequence: 1 };
+    const result = await concurrentAlarmFailure(stub, 'renew', renewal);
+    expect(result).toEqual({ firstStatus: 500, replayBlocked: true, replayStatus: 200 });
+    expect((await readSessionDownloadPermits(stub))[0]?.['sequence']).toBe(1);
   });
 
   it('persists only opaque permit state and cleans an expired lease by alarm', async () => {

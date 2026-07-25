@@ -5,10 +5,15 @@ import {
   DownloadSessionClientError,
   type DownloadSessionNamespace,
 } from '../src/security/download-session-client.js';
+import type {
+  SessionDownloadAdmission,
+  SessionDownloadAdmissionPort,
+} from '../src/security/session-download-admission-client.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
 import {
   createDownloadDelivery,
+  DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS,
   DownloadDeliveryError,
   type DownloadDeliveryInput,
 } from '../src/streaming/download-delivery.js';
@@ -23,12 +28,13 @@ function bytes(length: number, offset = 0): Uint8Array {
 }
 
 const downloadId = encodeBase64Url(bytes(24, 1));
+const rawId = encodeBase64Url(bytes(32, 4));
 const sessionHash = encodeBase64Url(bytes(32, 2));
 const holderId = encodeBase64Url(bytes(24, 3));
 
 const input: DownloadDeliveryInput = {
+  session: { rawId, sessionHash },
   downloadId,
-  sessionHash,
   rangeHeader: null,
   ifRangeHeader: null,
 };
@@ -65,6 +71,9 @@ interface SessionHarnessOptions {
   readonly renew?: (body: Record<string, unknown>) => Promise<Response>;
   readonly finish?: (body: Record<string, unknown>) => Promise<Response>;
   readonly interrupt?: (body: Record<string, unknown>) => Promise<Response>;
+  readonly admissionAcquire?: () => Promise<SessionDownloadAdmission>;
+  readonly admissionRenew?: () => Promise<void>;
+  readonly admissionRelease?: () => Promise<void>;
 }
 
 function inspectResponse(acquiredMedia: ProbedMedia): Response {
@@ -133,10 +142,15 @@ async function mutationResponse(
 }
 
 function sessionHarness(options: SessionHarnessOptions = {}): {
+  readonly admissionCalls: string[];
+  readonly admissions: SessionDownloadAdmissionPort;
   readonly calls: InternalCall[];
+  readonly events: string[];
   readonly namespace: DownloadSessionNamespace;
 } {
+  const admissionCalls: string[] = [];
   const calls: InternalCall[] = [];
+  const events: string[] = [];
   const acquiredMedia = options.acquiredMedia ?? media();
   const requestedInterval = options.requestedInterval ?? null;
   const namespace: DownloadSessionNamespace = {
@@ -148,6 +162,7 @@ function sessionHarness(options: SessionHarnessOptions = {}): {
         async fetch(request) {
           const path = new URL(request.url).pathname;
           const body: unknown = request.method === 'HEAD' ? null : await request.json();
+          events.push(`session:${path}`);
           calls.push({ body, method: request.method, path });
           if (path === '/inspect') {
             return inspectResponse(acquiredMedia);
@@ -162,7 +177,28 @@ function sessionHarness(options: SessionHarnessOptions = {}): {
       };
     },
   };
-  return { calls, namespace };
+  const admissions: SessionDownloadAdmissionPort = {
+    async acquire() {
+      events.push('admission:acquire');
+      admissionCalls.push('acquire');
+      if (options.admissionAcquire !== undefined) {
+        return options.admissionAcquire();
+      }
+      return {
+        async renew() {
+          events.push('admission:renew');
+          admissionCalls.push('renew');
+          await options.admissionRenew?.();
+        },
+        async release() {
+          events.push('admission:release');
+          admissionCalls.push('release');
+          await options.admissionRelease?.();
+        },
+      };
+    },
+  };
+  return { admissionCalls, admissions, calls, events, namespace };
 }
 
 function videoResponse(
@@ -185,7 +221,11 @@ function delivery(
   harness: ReturnType<typeof sessionHarness>,
   fetcher: (request: Request) => Promise<Response>,
 ) {
-  return createDownloadDelivery({ sessions: harness.namespace, fetcher });
+  return createDownloadDelivery({
+    admissions: harness.admissions,
+    sessions: harness.namespace,
+    fetcher,
+  });
 }
 
 function paths(harness: ReturnType<typeof sessionHarness>): string[] {
@@ -268,6 +308,14 @@ describe('download delivery setup', () => {
       expect(requests[0]!.headers.get(name)).toBeNull();
     }
     expect(paths(harness)).toEqual(['/inspect', '/acquire', '/finish']);
+    expect(harness.events).toEqual([
+      'session:/inspect',
+      'admission:acquire',
+      'session:/acquire',
+      'admission:renew',
+      'session:/finish',
+      'admission:release',
+    ]);
     expect(JSON.stringify(callBody(harness, '/finish'))).not.toContain(PRIVATE_URL);
   });
 
@@ -376,6 +424,7 @@ describe('download delivery setup', () => {
     });
     expect(fetcher).not.toHaveBeenCalled();
     expect(paths(harness)).toEqual(['/inspect', '/acquire']);
+    expect(harness.admissionCalls).toEqual(['acquire', 'release']);
   });
 
   it('follows only validated manual CDN redirects and cancels redirect bodies', async () => {
@@ -413,6 +462,7 @@ describe('download delivery setup', () => {
     ).rejects.toMatchObject({ code: 'DOWNLOAD_ORIGIN_INVALID' });
     expect(redirectCancelled).toHaveBeenCalledTimes(1);
     expect(paths(harness).at(-1)).toBe('/interrupt');
+    expect(harness.admissionCalls).toEqual(['acquire', 'release']);
   });
 
   it.each([
@@ -495,6 +545,33 @@ describe('download delivery setup', () => {
     ).rejects.toMatchObject({ code: 'DOWNLOAD_ORIGIN_INVALID' });
     expect(paths(harness).at(-1)).toBe('/interrupt');
   });
+
+  it('interrupts the local lease and cancels origin when final admission proof fails', async () => {
+    const harness = sessionHarness({
+      admissionRenew: async () => {
+        throw new Error('admission unavailable');
+      },
+    });
+    const cancelled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel: cancelled });
+
+    await expect(
+      delivery(
+        harness,
+        async () =>
+          new Response(body, {
+            headers: {
+              'content-length': '4',
+              'content-type': 'video/mp4',
+              etag: '"v1"',
+            },
+          }),
+      )(input),
+    ).rejects.toThrow('admission unavailable');
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(1));
+    expect(paths(harness)).toEqual(['/inspect', '/acquire', '/interrupt']);
+    expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'release']);
+  });
 });
 
 describe('download delivery stream accounting', () => {
@@ -505,6 +582,7 @@ describe('download delivery stream accounting', () => {
       await expect(response.arrayBuffer()).rejects.toThrow('DOWNLOAD_STREAM_FAILED');
       expect(paths(harness).at(-1)).toBe('/interrupt');
       expect(paths(harness)).not.toContain('/finish');
+      expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'release']);
     }
   });
 
@@ -571,6 +649,7 @@ describe('download delivery stream accounting', () => {
     expect(originCancelled).toHaveBeenCalledTimes(1);
     expect(paths(harness).filter((path) => path === '/interrupt')).toHaveLength(1);
     expect(paths(harness)).not.toContain('/finish');
+    expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'release']);
   });
 
   it('does not wait for a stuck origin cancellation before interrupting the lease', async () => {
@@ -626,14 +705,18 @@ describe('download delivery stream accounting', () => {
       const reader = response.body!.getReader();
       const pendingRead = reader.read();
 
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
+      expect(harness.admissionCalls.filter((call) => call === 'renew')).toHaveLength(2);
       expect(callBody(harness, '/renew')['sequence']).toBe(1);
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS - 1_000);
+      expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
 
       firstRenewal.resolve(Response.json({ ok: true, holderId, sequence: 1, expiresAt: 930_000 }));
-      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(2);
+      expect(harness.admissionCalls.filter((call) => call === 'renew')).toHaveLength(3);
       expect(harness.calls.filter((call) => call.path === '/renew').at(-1)!.body).toMatchObject({
         sequence: 2,
       });
@@ -642,8 +725,184 @@ describe('download delivery stream accounting', () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(2);
       expect(paths(harness).filter((path) => path === '/interrupt')).toHaveLength(1);
+      expect(harness.admissionCalls.filter((call) => call === 'release')).toHaveLength(1);
       await expect(pendingRead).resolves.toEqual({ done: true, value: undefined });
       blocked.resolve(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed after either heartbeat fails and cleans up with the latest acknowledged lease', async () => {
+    vi.useFakeTimers();
+    try {
+      const blocked = deferred<void>();
+      let admissionRenewals = 0;
+      const harness = sessionHarness({
+        admissionRenew: async () => {
+          admissionRenewals += 1;
+          if (admissionRenewals > 1) {
+            throw new Error('admission unavailable');
+          }
+        },
+      });
+      const origin = new ReadableStream<Uint8Array>(
+        { pull: () => blocked.promise },
+        { highWaterMark: 0 },
+      );
+      const response = await delivery(harness, async () => videoResponse(origin))(input);
+      const pendingRead = response.body!.getReader().read();
+      const failedRead = expect(pendingRead).rejects.toThrow('DOWNLOAD_STREAM_FAILED');
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => expect(paths(harness)).toContain('/interrupt'));
+
+      expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
+      expect(callBody(harness, '/interrupt')['sequence']).toBe(1);
+      expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'renew', 'release']);
+      await failedRead;
+      blocked.resolve(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['admission', 'download session'] as const)(
+    'bounds a never-settling %s heartbeat and lets cancellation cleanup converge',
+    async (stalledLease) => {
+      vi.useFakeTimers();
+      try {
+        const blocked = deferred<void>();
+        const neverAdmission = new Promise<void>(() => undefined);
+        const neverDownload = new Promise<Response>(() => undefined);
+        let admissionRenewals = 0;
+        const harness = sessionHarness({
+          ...(stalledLease === 'admission'
+            ? {
+                admissionRenew: () => {
+                  admissionRenewals += 1;
+                  return admissionRenewals === 1 ? Promise.resolve() : neverAdmission;
+                },
+              }
+            : {
+                renew: () => neverDownload,
+                interrupt: async (body) =>
+                  body['sequence'] === 1
+                    ? Response.json({ ok: true })
+                    : Response.json({ ok: false }, { status: 409 }),
+              }),
+        });
+        const origin = new ReadableStream<Uint8Array>(
+          { pull: () => blocked.promise },
+          { highWaterMark: 0 },
+        );
+        const response = await delivery(harness, async () => videoResponse(origin))(input);
+        const pendingRead = response.body!.getReader().read();
+        const failedRead = expect(pendingRead).rejects.toThrow('DOWNLOAD_STREAM_FAILED');
+
+        await vi.advanceTimersByTimeAsync(30_000 + DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS);
+        await vi.waitFor(() => expect(paths(harness)).toContain('/interrupt'));
+
+        expect(harness.admissionCalls.filter((call) => call === 'release')).toHaveLength(1);
+        expect(
+          harness.calls
+            .filter((call) => call.path === '/interrupt')
+            .map((call) => (call.body as Record<string, unknown>)['sequence']),
+        ).toEqual(stalledLease === 'admission' ? [1] : [0, 1]);
+        await failedRead;
+        blocked.resolve(undefined);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('cancels with the attempted sequence after a download-renew acknowledgement is lost', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = sessionHarness({
+        renew: () => new Promise<Response>(() => undefined),
+        interrupt: async (body) =>
+          body['sequence'] === 1
+            ? Response.json({ ok: true })
+            : Response.json({ ok: false }, { status: 409 }),
+      });
+      const origin = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            controller.enqueue(bytes(1));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const response = await delivery(harness, async () => videoResponse(origin))(input);
+      const reader = response.body!.getReader();
+      await reader.read();
+      await vi.advanceTimersByTimeAsync(30_000);
+      const cancellation = reader.cancel();
+      let settled = false;
+      void cancellation.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(cancellation).resolves.toBeUndefined();
+      expect(
+        harness.calls
+          .filter((call) => call.path === '/interrupt')
+          .map((call) => (call.body as Record<string, unknown>)['sequence']),
+      ).toEqual([0, 1]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finishes with the attempted sequence after a download-renew acknowledgement is lost', async () => {
+    vi.useFakeTimers();
+    try {
+      const closeOrigin = deferred<void>();
+      let sent = false;
+      const harness = sessionHarness({
+        renew: () => new Promise<Response>(() => undefined),
+        finish: async (body) =>
+          body['sequence'] === 1
+            ? Response.json({ ok: true })
+            : Response.json({ ok: false }, { status: 409 }),
+      });
+      const origin = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            if (!sent) {
+              sent = true;
+              controller.enqueue(bytes(4));
+              return;
+            }
+            await closeOrigin.promise;
+            controller.close();
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const response = await delivery(harness, async () => videoResponse(origin))(input);
+      const reader = response.body!.getReader();
+      await expect(reader.read()).resolves.toMatchObject({ done: false });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const eof = reader.read();
+      closeOrigin.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS);
+
+      await expect(eof).resolves.toEqual({ done: true, value: undefined });
+      expect(
+        harness.calls
+          .filter((call) => call.path === '/finish')
+          .map((call) => (call.body as Record<string, unknown>)['sequence']),
+      ).toEqual([0, 1]);
+      expect(paths(harness)).not.toContain('/interrupt');
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -665,6 +924,30 @@ describe('download delivery stream accounting', () => {
 
     finish.resolve(Response.json({ ok: true }));
     await expect(eof).resolves.toEqual({ done: true, value: undefined });
+    expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'release']);
+  });
+
+  it('bounds a never-settling admission release before closing a confirmed EOF', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = sessionHarness({
+        admissionRelease: () => new Promise<void>(() => undefined),
+      });
+      const response = await delivery(harness, async () => videoResponse())(input);
+      const completed = response.arrayBuffer();
+      let settled = false;
+      void completed.then(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(harness.admissionCalls).toContain('release'));
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS);
+      await expect(completed).resolves.toHaveProperty('byteLength', 4);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a confirmed EOF finish pending when downstream cancels and avoids controller reuse', async () => {

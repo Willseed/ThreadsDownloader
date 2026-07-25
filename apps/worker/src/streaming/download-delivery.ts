@@ -9,6 +9,11 @@ import {
   type DownloadSessionMetadataSnapshot,
   type DownloadSessionNamespace,
 } from '../security/download-session-client.js';
+import type {
+  SessionDownloadAdmission,
+  SessionDownloadAdmissionPort,
+} from '../security/session-download-admission-client.js';
+import type { BrowserSessionIdentity } from '../security/session-client.js';
 import { createTransferPlan, type TransferPlan } from '../security/range-transfer.js';
 import {
   decideRedirect,
@@ -18,12 +23,13 @@ import {
 } from '../security/upstream-policy.js';
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
+export const DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS = 8_000;
 const UPSTREAM_HEADER_TIMEOUT_MS = 8_000;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
 
 export interface DownloadDeliveryInput {
+  readonly session: BrowserSessionIdentity;
   readonly downloadId: string;
-  readonly sessionHash: string;
   readonly rangeHeader: string | null;
   readonly ifRangeHeader: string | null;
 }
@@ -31,6 +37,7 @@ export interface DownloadDeliveryInput {
 export interface DownloadDeliveryDependencies {
   readonly fetcher: (request: Request) => Promise<Response>;
   readonly sessions: DownloadSessionNamespace;
+  readonly admissions: SessionDownloadAdmissionPort;
 }
 
 export type DownloadDelivery = (input: DownloadDeliveryInput) => Promise<Response>;
@@ -51,6 +58,23 @@ interface OriginTransfer {
 
 function fail(code: DownloadDeliveryErrorCode): never {
   throw new DownloadDeliveryError(code);
+}
+
+async function boundedLifecycleMutation<T>(operation: () => Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(
+      () => reject(new Error('DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT')),
+      DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([operation(), expired]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function normalizedVideoType(headers: Headers): string {
@@ -231,6 +255,7 @@ class LeaseTrackedStream {
   private actualBytes = 0;
   private downstreamCancelled = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private attemptedSequence: number;
   private sequence: number;
   private renewInFlight: Promise<void> | null = null;
   private terminalInFlight: Promise<void> | null = null;
@@ -238,11 +263,13 @@ class LeaseTrackedStream {
 
   constructor(
     private readonly acquired: AcquiredDownloadStream,
+    private readonly admission: SessionDownloadAdmission,
     private readonly transfer: OriginTransfer,
-    private readonly identity: Pick<DownloadDeliveryInput, 'downloadId' | 'sessionHash'>,
+    private readonly identity: { readonly downloadId: string; readonly sessionHash: string },
     private readonly dependencies: DownloadDeliveryDependencies,
   ) {
     this.reader = transfer.response.body!.getReader();
+    this.attemptedSequence = acquired.sequence;
     this.sequence = acquired.sequence;
   }
 
@@ -279,13 +306,28 @@ class LeaseTrackedStream {
     }
     if (this.renewInFlight === null) {
       const sequence = this.sequence + 1;
-      this.renewInFlight = renewDownloadSessionStream(this.dependencies.sessions, {
-        ...this.identity,
-        holderId: this.acquired.holderId,
-        sequence,
-      })
-        .then((renewed) => {
-          this.sequence = renewed.sequence;
+      this.attemptedSequence = sequence;
+      this.renewInFlight = Promise.allSettled([
+        boundedLifecycleMutation(() => this.admission.renew()),
+        boundedLifecycleMutation(() =>
+          renewDownloadSessionStream(this.dependencies.sessions, {
+            ...this.identity,
+            holderId: this.acquired.holderId,
+            sequence,
+          }),
+        ),
+      ])
+        .then((results) => {
+          const downloadRenewal = results[1];
+          if (downloadRenewal.status === 'fulfilled') {
+            this.sequence = downloadRenewal.value.sequence;
+          }
+          const failure = results.find(
+            (result): result is PromiseRejectedResult => result.status === 'rejected',
+          );
+          if (failure !== undefined) {
+            throw failure.reason;
+          }
         })
         .finally(() => {
           this.renewInFlight = null;
@@ -295,15 +337,53 @@ class LeaseTrackedStream {
   }
 
   private async interruptLease(): Promise<void> {
-    try {
-      await interruptDownloadSessionStream(this.dependencies.sessions, {
-        ...this.identity,
-        holderId: this.acquired.holderId,
-        sequence: this.sequence,
-      });
-    } catch {
-      // Lease expiry and the DO alarm remain the fail-safe cleanup path.
+    for (const sequence of this.terminalSequenceCandidates()) {
+      try {
+        await boundedLifecycleMutation(() =>
+          interruptDownloadSessionStream(this.dependencies.sessions, {
+            ...this.identity,
+            holderId: this.acquired.holderId,
+            sequence,
+          }),
+        );
+        return;
+      } catch {
+        // An ambiguous renewal may require the other locally known sequence.
+      }
     }
+    // Lease expiry and the DO alarm remain the fail-safe cleanup path.
+  }
+
+  private terminalSequenceCandidates(): readonly number[] {
+    return this.attemptedSequence === this.sequence
+      ? [this.sequence]
+      : [this.sequence, this.attemptedSequence];
+  }
+
+  private async finishLease(): Promise<void> {
+    let failure: unknown;
+    for (const sequence of this.terminalSequenceCandidates()) {
+      try {
+        await boundedLifecycleMutation(() =>
+          finishDownloadSessionStream(this.dependencies.sessions, {
+            ...this.identity,
+            holderId: this.acquired.holderId,
+            sequence,
+            normalEof: true,
+            actualBytes: this.actualBytes,
+            upstream: {
+              status: this.transfer.response.status as 200 | 206,
+              headers: encodeDownloadHeaderEvidence(this.transfer.response.headers),
+            },
+          }),
+        );
+        this.sequence = sequence;
+        return;
+      } catch (error: unknown) {
+        failure = error;
+      }
+    }
+    throw failure;
   }
 
   private async terminate(kind: 'finish' | 'interrupt'): Promise<void> {
@@ -313,34 +393,32 @@ class LeaseTrackedStream {
     this.terminalKind = kind;
     this.stopHeartbeat();
     this.terminalInFlight = (async () => {
-      const pendingRenewal = this.renewInFlight;
-      if (pendingRenewal !== null) {
+      try {
+        const pendingRenewal = this.renewInFlight;
+        if (pendingRenewal !== null) {
+          try {
+            await pendingRenewal;
+          } catch {
+            // The latest independently acknowledged sequences remain authoritative.
+          }
+        }
+        if (kind === 'finish') {
+          try {
+            await this.finishLease();
+          } catch (error: unknown) {
+            await this.interruptLease();
+            throw error;
+          }
+          return;
+        }
+        await this.interruptLease();
+      } finally {
         try {
-          await pendingRenewal;
+          await boundedLifecycleMutation(() => this.admission.release());
         } catch {
-          // The last acknowledged sequence remains authoritative for cleanup.
+          // Admission release is best-effort and cannot replace the transfer result.
         }
       }
-      if (kind === 'finish') {
-        try {
-          await finishDownloadSessionStream(this.dependencies.sessions, {
-            ...this.identity,
-            holderId: this.acquired.holderId,
-            sequence: this.sequence,
-            normalEof: true,
-            actualBytes: this.actualBytes,
-            upstream: {
-              status: this.transfer.response.status as 200 | 206,
-              headers: encodeDownloadHeaderEvidence(this.transfer.response.headers),
-            },
-          });
-        } catch (error: unknown) {
-          await this.interruptLease();
-          throw error;
-        }
-        return;
-      }
-      await this.interruptLease();
     })();
     return this.terminalInFlight;
   }
@@ -494,16 +572,26 @@ class LeaseTrackedStream {
 async function interruptAcquired(
   dependencies: DownloadDeliveryDependencies,
   acquired: AcquiredDownloadStream,
-  identity: Pick<DownloadDeliveryInput, 'downloadId' | 'sessionHash'>,
+  identity: { readonly downloadId: string; readonly sessionHash: string },
 ): Promise<void> {
   try {
-    await interruptDownloadSessionStream(dependencies.sessions, {
-      ...identity,
-      holderId: acquired.holderId,
-      sequence: acquired.sequence,
-    });
+    await boundedLifecycleMutation(() =>
+      interruptDownloadSessionStream(dependencies.sessions, {
+        ...identity,
+        holderId: acquired.holderId,
+        sequence: acquired.sequence,
+      }),
+    );
   } catch {
     // Lease expiry and the DO alarm remain the fail-safe cleanup path.
+  }
+}
+
+async function releaseAdmission(admission: SessionDownloadAdmission): Promise<void> {
+  try {
+    await boundedLifecycleMutation(() => admission.release());
+  } catch {
+    // Admission expiry and the coordinator alarm remain the fail-safe cleanup path.
   }
 }
 
@@ -511,24 +599,48 @@ export function createDownloadDelivery(
   dependencies: DownloadDeliveryDependencies,
 ): DownloadDelivery {
   return async (input): Promise<Response> => {
-    const identity = { downloadId: input.downloadId, sessionHash: input.sessionHash };
+    const identity = { downloadId: input.downloadId, sessionHash: input.session.sessionHash };
     const metadata = await inspectDownloadSession(dependencies.sessions, identity);
-    const acquired = await acquireDownloadSessionStream(dependencies.sessions, input);
+    const admission = await dependencies.admissions.acquire({
+      session: input.session,
+      downloadId: input.downloadId,
+    });
+    let acquired: AcquiredDownloadStream;
+    try {
+      acquired = await acquireDownloadSessionStream(dependencies.sessions, {
+        ...identity,
+        rangeHeader: input.rangeHeader,
+        ifRangeHeader: input.ifRangeHeader,
+      });
+    } catch (error: unknown) {
+      await releaseAdmission(admission);
+      throw error;
+    }
     let response: Response | null = null;
     try {
       response = await fetchTerminalResponse(acquired, dependencies.fetcher);
       const transfer = validateOriginTransfer(response, acquired);
-      const body = new LeaseTrackedStream(acquired, transfer, identity, dependencies).readable();
+      await boundedLifecycleMutation(() => admission.renew());
+      const body = new LeaseTrackedStream(
+        acquired,
+        admission,
+        transfer,
+        identity,
+        dependencies,
+      ).readable();
       return new Response(body, {
         status: response.status,
         headers: responseHeaders(metadata, acquired, transfer),
       });
     } catch (error: unknown) {
-      const interruption = interruptAcquired(dependencies, acquired, identity);
+      const cleanup = Promise.all([
+        interruptAcquired(dependencies, acquired, identity),
+        releaseAdmission(admission),
+      ]);
       if (response !== null) {
         void cancelResponse(response);
       }
-      await interruption;
+      await cleanup;
       throw error;
     }
   };
