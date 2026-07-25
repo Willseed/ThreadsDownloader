@@ -19,6 +19,7 @@ interface HarnessOptions {
   readonly ipMalformedJson?: boolean;
   readonly ipThrows?: boolean;
   readonly releaseThrows?: boolean;
+  readonly sessionAcquireBody?: unknown;
   readonly sessionAcquireStatus?: number;
 }
 
@@ -60,7 +61,8 @@ function harness(options: HarnessOptions = {}): Harness {
           }
           const status = options.sessionAcquireStatus ?? 201;
           return Response.json(
-            status === 201 ? { ok: true, expiresAt: now + 30_000 } : { ok: false },
+            options.sessionAcquireBody ??
+              (status === 201 ? { ok: true, expiresAt: now + 30_000 } : { ok: false }),
             { status },
           );
         },
@@ -164,6 +166,36 @@ describe('resolve limit acquisition saga', () => {
       code: 'RESOLVE_LIMITS_UNAVAILABLE',
     });
     expect(unavailable.sequence).toEqual(['session:acquire']);
+  });
+
+  it('short-circuits an invalid session without touching the IP limiter or release', async () => {
+    const privateDetail = 'private durable-object detail';
+    const subject = harness({
+      sessionAcquireBody: { detail: privateDetail, ok: false },
+      sessionAcquireStatus: 401,
+    });
+
+    let caught: unknown;
+    try {
+      await acquire(subject);
+    } catch (error: unknown) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: 'SESSION_INVALID',
+      message: 'SESSION_INVALID',
+      name: 'ResolveLimitsError',
+    });
+    expect(JSON.parse(JSON.stringify(caught))).toEqual({
+      code: 'SESSION_INVALID',
+      name: 'ResolveLimitsError',
+    });
+    expect(String(caught)).not.toContain(privateDetail);
+    expect(String(caught)).not.toContain(identity.rawId);
+    expect(subject.sequence).toEqual(['session:acquire']);
+    expect(subject.ipNames).toEqual([]);
+    expect(subject.ipBodies).toEqual([]);
   });
 
   it('rolls back the session while preserving an IP denial', async () => {

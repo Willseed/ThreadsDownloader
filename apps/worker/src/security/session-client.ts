@@ -20,8 +20,11 @@ export interface SessionResolvePermit {
   readonly expiresAt: number;
 }
 
+export type SessionResolvePermitErrorCode =
+  'RESOLVE_PERMIT_DENIED' | 'RESOLVE_PERMIT_UNAVAILABLE' | 'SESSION_INVALID';
+
 export class SessionResolvePermitError extends Error {
-  constructor(readonly code: 'RESOLVE_PERMIT_DENIED' | 'RESOLVE_PERMIT_UNAVAILABLE') {
+  constructor(readonly code: SessionResolvePermitErrorCode) {
     super(code);
     this.name = 'SessionResolvePermitError';
   }
@@ -117,6 +120,9 @@ export async function acquireSessionResolvePermit(
     );
   } catch {
     throw new SessionResolvePermitError('RESOLVE_PERMIT_UNAVAILABLE');
+  }
+  if (response.status === 401) {
+    throw new SessionResolvePermitError('SESSION_INVALID');
   }
   if (response.status === 429) {
     throw new SessionResolvePermitError('RESOLVE_PERMIT_DENIED');

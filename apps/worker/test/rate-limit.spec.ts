@@ -137,6 +137,21 @@ describe('session resolve permit helpers', () => {
     };
   }
 
+  function failureNamespace(fetchResponse: () => Response): SessionNamespace {
+    return {
+      idFromName() {
+        return {} as DurableObjectId;
+      },
+      get() {
+        return {
+          async fetch() {
+            return fetchResponse();
+          },
+        };
+      },
+    };
+  }
+
   it('creates an opaque permit and sends only hashes and timestamps internally', async () => {
     const requests: unknown[] = [];
     const identity = { rawId: 'raw-session-id', sessionHash: 'A'.repeat(43) };
@@ -162,6 +177,13 @@ describe('session resolve permit helpers', () => {
     await expect(
       acquireSessionResolvePermit(namespace([], 429), identity, 'B'.repeat(43), 100),
     ).rejects.toMatchObject({ code: 'RESOLVE_PERMIT_DENIED' });
+    await expect(
+      acquireSessionResolvePermit(namespace([], 401), identity, 'B'.repeat(43), 100),
+    ).rejects.toMatchObject({
+      code: 'SESSION_INVALID',
+      message: 'SESSION_INVALID',
+      name: 'SessionResolvePermitError',
+    });
     const releaseRequests: unknown[] = [];
     await expect(
       releaseSessionResolvePermit(namespace(releaseRequests), identity, permitIds[0]!, 100),
@@ -173,5 +195,32 @@ describe('session resolve permit helpers', () => {
     await expect(
       releaseSessionResolvePermit(namespace([], 201, 500), identity, permitIds[0]!, 100),
     ).resolves.toBe(false);
+  });
+
+  it.each([
+    ['a non-special status', () => new Response('private status detail', { status: 503 })],
+    [
+      'a transport failure',
+      () => {
+        throw new Error('private transport detail');
+      },
+    ],
+    ['malformed JSON', () => new Response('{private malformed detail', { status: 201 })],
+    ['an expired permit', () => Response.json({ ok: true, expiresAt: 100 }, { status: 201 })],
+  ])('maps %s to a safe unavailable error', async (_case, fetchResponse) => {
+    const identity = { rawId: 'private-routing-id', sessionHash: 'A'.repeat(43) };
+    const error: unknown = await acquireSessionResolvePermit(
+      failureNamespace(fetchResponse),
+      identity,
+      'B'.repeat(43),
+      100,
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: 'RESOLVE_PERMIT_UNAVAILABLE',
+      message: 'RESOLVE_PERMIT_UNAVAILABLE',
+      name: 'SessionResolvePermitError',
+    });
+    expect(`${String(error)} ${JSON.stringify(error)}`).not.toContain('private');
   });
 });

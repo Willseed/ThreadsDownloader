@@ -22,6 +22,7 @@ export type ResolveLimitsErrorCode =
   | 'IP_RATE_LIMITED'
   | 'RESOLVE_CLIENT_IP_INVALID'
   | 'RESOLVE_LIMITS_UNAVAILABLE'
+  | 'SESSION_INVALID'
   | 'SESSION_RATE_LIMITED';
 
 export class ResolveLimitsError extends Error {
@@ -121,9 +122,15 @@ async function releaseIpPermit(
 }
 
 function sessionError(error: unknown): ResolveLimitsError {
-  return error instanceof SessionResolvePermitError && error.code === 'RESOLVE_PERMIT_DENIED'
-    ? new ResolveLimitsError('SESSION_RATE_LIMITED')
-    : unavailable();
+  if (error instanceof SessionResolvePermitError) {
+    if (error.code === 'SESSION_INVALID') {
+      return new ResolveLimitsError('SESSION_INVALID');
+    }
+    if (error.code === 'RESOLVE_PERMIT_DENIED') {
+      return new ResolveLimitsError('SESSION_RATE_LIMITED');
+    }
+  }
+  return unavailable();
 }
 
 export async function acquireResolveLimits(
