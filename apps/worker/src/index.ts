@@ -24,6 +24,7 @@ import { IpRateLimiter } from './ip-rate-limiter.js';
 import { SessionCoordinator } from './session-coordinator.js';
 import { TurnstileReplay } from './turnstile-replay.js';
 import { createResolvePublicMediaHandler } from './workflows/resolve-public-media.js';
+import { createPublicDownloadApiHandler } from './workflows/public-download-api.js';
 
 export {
   acquireSessionResolvePermit,
@@ -75,6 +76,12 @@ const resolvePublicMedia = createResolvePublicMediaHandler({
   requestId,
 });
 
+const publicDownloadApi = createPublicDownloadApiHandler({
+  fetcher: (request) => fetch(request),
+  now: Date.now,
+  requestId,
+});
+
 function applyResponsePolicy(response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of [...headers.keys()]) {
@@ -95,12 +102,16 @@ function applyResponsePolicy(response: Response): Response {
 }
 
 function notFoundApi(id: string): Response {
-  return Response.json(createApiError('NOT_FOUND', '找不到請求的 API 路徑。', id), { status: 404 });
+  return Response.json(createApiError('NOT_FOUND', '找不到請求的 API 路徑。', id), {
+    status: 404,
+    headers: { 'cache-control': 'no-store' },
+  });
 }
 
 function internalServerError(): Response {
   return Response.json(createApiError('INTERNAL_ERROR', '伺服器暫時無法處理請求。', requestId()), {
     status: 500,
+    headers: { 'cache-control': 'no-store' },
   });
 }
 
@@ -156,12 +167,20 @@ app.onError(() => internalServerError());
 
 app.get('/api/health', (context) => {
   const response: HealthResponse = { status: 'ok', requestId: requestId() };
-  return context.json(response, 200);
+  return context.json(response, 200, { 'cache-control': 'no-store' });
 });
 
 app.get('/api/session', (context) => sessionResponse(context.req.raw, context.env));
 
 app.post('/api/resolve', (context) => resolvePublicMedia(context.req.raw, context.env));
+
+app.post('/api/download-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
+
+app.get('/api/download/:downloadId', (context) => publicDownloadApi(context.req.raw, context.env));
+
+app.get('/api/download-status/:downloadId', (context) =>
+  publicDownloadApi(context.req.raw, context.env),
+);
 
 app.all('/api', () => notFoundApi(requestId()));
 app.all('/api/*', () => notFoundApi(requestId()));

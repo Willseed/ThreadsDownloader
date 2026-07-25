@@ -52,10 +52,11 @@ function createSessionNamespace(requests: unknown[] = [], responseStatus = 200):
 function createEnv(
   assetResponse = new Response('<app-root></app-root>', { status: 200 }),
   sessions = createSessionNamespace(),
+  downloadSessions = {} as Env['DOWNLOAD_SESSIONS'],
 ): Env {
   return {
     DOWNLOAD_ENCRYPTION_KEY: downloadEncryptionKey,
-    DOWNLOAD_SESSIONS: {} as Env['DOWNLOAD_SESSIONS'],
+    DOWNLOAD_SESSIONS: downloadSessions,
     EXPECTED_HOST: expectedHost,
     EXPECTED_ORIGIN: `https://${expectedHost}`,
     IP_RATE_LIMITS: {} as Env['IP_RATE_LIMITS'],
@@ -69,6 +70,19 @@ function createEnv(
   };
 }
 
+function createDownloadSessionNamespace(
+  handler: (request: Request) => Promise<Response>,
+): Env['DOWNLOAD_SESSIONS'] {
+  return {
+    idFromName(name) {
+      return { name } as unknown as DurableObjectId;
+    },
+    get() {
+      return { fetch: handler };
+    },
+  };
+}
+
 async function fetchWorker(path: string, env = createEnv()): Promise<Response> {
   return worker.fetch(new Request(`https://${expectedHost}${path}`), env, {} as ExecutionContext);
 }
@@ -78,6 +92,7 @@ describe('worker entry policy', () => {
     const response = await fetchWorker('/api/health');
 
     expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     await expect(response.json()).resolves.toMatchObject({ status: 'ok' });
   });
 
@@ -192,9 +207,120 @@ describe('worker entry policy', () => {
     const response = await fetchWorker('/api/missing');
 
     expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'NOT_FOUND', message: '找不到請求的 API 路徑。' },
     });
+  });
+
+  it('routes Hono HEAD through inspect only and preserves metadata with a null body', async () => {
+    const inspectRequests: Request[] = [];
+    const sessions = createSessionNamespace();
+    const env = createEnv(
+      undefined,
+      sessions,
+      createDownloadSessionNamespace(async (request) => {
+        inspectRequests.push(request.clone() as unknown as Request);
+        return new Response(null, {
+          status: 200,
+          headers: {
+            'access-control-allow-origin': '*',
+            'content-length': '100',
+            'content-type': 'video/mp4',
+            etag: '"strong-v1"',
+            'last-modified': 'Mon, 01 Jan 2024 00:00:00 GMT',
+            'x-download-filename': 'threads_Abcde_1.mp4',
+            'x-download-range-capability': 'bytes',
+          },
+        });
+      }),
+    );
+    const session = await fetchWorker('/api/session', env);
+    const cookie = session.headers.get('set-cookie')!.split(';', 1)[0]!;
+    const downloadId = 'A'.repeat(32);
+    const response = await worker.fetch(
+      new Request(`https://${expectedHost}/api/download/${downloadId}`, {
+        method: 'HEAD',
+        headers: { cookie, range: 'bytes=10-19', 'if-range': '"strong-v1"' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toBeNull();
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('content-length')).toBe('100');
+    expect(response.headers.get('content-type')).toBe('video/mp4');
+    expect(response.headers.get('content-disposition')).toBe(
+      'attachment; filename="threads_Abcde_1.mp4"',
+    );
+    expect(response.headers.get('accept-ranges')).toBe('bytes');
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    expect(inspectRequests).toHaveLength(1);
+    expect(inspectRequests[0]?.method).toBe('HEAD');
+    expect(new URL(inspectRequests[0]!.url).pathname).toBe('/inspect');
+    expect(inspectRequests[0]?.headers.get('range')).toBeNull();
+    expect(inspectRequests[0]?.headers.get('if-range')).toBeNull();
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it('keeps Hono HEAD failures bodyless without touching download state', async () => {
+    const downloadFetch = vi.fn(async () => Response.json({ ok: true }));
+    const env = createEnv(
+      undefined,
+      createSessionNamespace(),
+      createDownloadSessionNamespace(downloadFetch),
+    );
+    const response = await worker.fetch(
+      new Request(`https://${expectedHost}/api/download/${'A'.repeat(32)}`, {
+        method: 'HEAD',
+        headers: { cookie: '__Host-td_session=tampered.signature' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.body).toBeNull();
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(downloadFetch).not.toHaveBeenCalled();
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    `/api/download/${'A'.repeat(32)}?debug=1`,
+    `/api/download/${'A'.repeat(32)}/`,
+    `/api/download/${'A'.repeat(32)}/extra`,
+    `/api/download/%41${'A'.repeat(31)}`,
+    `/api/download/A%2F${'A'.repeat(30)}`,
+    `/api/download-status/${'A'.repeat(32)}?debug=1`,
+  ])('keeps a non-canonical download path inside the API 404: %s', async (path) => {
+    const env = createEnv();
+    const response = await fetchWorker(path, env);
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it('routes canonical download GET before catch-all while wrong methods remain API 404', async () => {
+    const env = createEnv();
+    const path = `/api/download/${'A'.repeat(32)}`;
+    const getResponse = await fetchWorker(path, env);
+    expect(getResponse.status).toBe(401);
+    await expect(getResponse.json()).resolves.toMatchObject({
+      error: { code: 'SESSION_INVALID' },
+    });
+
+    const wrongMethod = await worker.fetch(
+      new Request(`https://${expectedHost}${path}`, { method: 'DELETE' }),
+      env,
+      {} as ExecutionContext,
+    );
+    expect(wrongMethod.status).toBe(404);
+    expect(wrongMethod.headers.get('cache-control')).toBe('no-store');
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
   it('routes resolve mutations before the API catch-all without touching assets', async () => {

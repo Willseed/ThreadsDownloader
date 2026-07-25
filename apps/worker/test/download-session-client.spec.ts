@@ -699,6 +699,32 @@ describe('download session namespace client', () => {
     }
   });
 
+  it.each(['inspect', 'status', 'status-body'] as const)(
+    'bounds a never-settling read-only %s operation',
+    async (operation) => {
+      vi.useFakeTimers();
+      try {
+        const sessions = namespace(async () => {
+          if (operation === 'status-body') {
+            return hangingJsonResponse(200);
+          }
+          return never();
+        });
+        const outcome = expectClientError(
+          operation === 'inspect'
+            ? inspectDownloadSession(sessions, identity)
+            : readDownloadSessionStatus(sessions, identity),
+          'DOWNLOAD_SESSION_UNAVAILABLE',
+          503,
+        );
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS);
+        await outcome;
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('compensates a 500 initialize failure without reading or leaking its body', async () => {
     const requests: Request[] = [];
     const failure = Response.json({ detail: PRIVATE_URL, sessionHash }, { status: 500 });

@@ -998,33 +998,35 @@ export async function inspectDownloadSession(
   namespace: DownloadSessionNamespace,
   input: DownloadSessionIdentityRequest,
 ): Promise<DownloadSessionMetadataSnapshot> {
-  const identity = encodeDownloadSessionIdentityRequest(input);
-  const stub = getStub(namespace, identity.downloadId);
-  let response: Response;
-  try {
-    response = await stub.fetch(
-      new Request(`${INTERNAL_ORIGIN}/inspect`, {
-        method: 'HEAD',
-        headers: {
-          'x-download-id': identity.downloadId,
-          'x-session-hash': identity.sessionHash,
-        },
-      }),
-    );
-  } catch {
-    throw unavailable();
-  }
-  if (response.status !== 200) {
-    throw responseError(response);
-  }
-  if (response.body !== null) {
-    throw unavailable();
-  }
-  const metadata = decodeDownloadSessionMetadataHeaders(response.headers);
-  if (metadata === null) {
-    throw unavailable();
-  }
-  return metadata;
+  return boundedClientOperation(async () => {
+    const identity = encodeDownloadSessionIdentityRequest(input);
+    const stub = getStub(namespace, identity.downloadId);
+    let response: Response;
+    try {
+      response = await stub.fetch(
+        new Request(`${INTERNAL_ORIGIN}/inspect`, {
+          method: 'HEAD',
+          headers: {
+            'x-download-id': identity.downloadId,
+            'x-session-hash': identity.sessionHash,
+          },
+        }),
+      );
+    } catch {
+      throw unavailable();
+    }
+    if (response.status !== 200) {
+      throw responseError(response);
+    }
+    if (response.body !== null) {
+      throw unavailable();
+    }
+    const metadata = decodeDownloadSessionMetadataHeaders(response.headers);
+    if (metadata === null) {
+      throw unavailable();
+    }
+    return metadata;
+  });
 }
 
 export async function readDownloadSessionStatus(
@@ -1038,6 +1040,7 @@ export async function readDownloadSessionStatus(
     identity,
     200,
     decodeDownloadSessionStatusResponse,
+    true,
   );
   return {
     status: response.status,

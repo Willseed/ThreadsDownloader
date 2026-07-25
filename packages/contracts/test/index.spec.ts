@@ -108,6 +108,9 @@ describe('contracts', () => {
     };
 
     expect(decodeDownloadSessionRequest(request)).toEqual(request);
+    expect(
+      decodeDownloadSessionRequest({ ...request, csrfToken: `${'c'.repeat(42)}I` }),
+    ).not.toBeNull();
     for (const invalid of [
       { ...request, extra: true },
       { ...request, resolveId: 'A'.repeat(31) },
