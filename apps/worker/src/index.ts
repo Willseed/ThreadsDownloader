@@ -76,17 +76,22 @@ const resolvePublicMedia = createResolvePublicMediaHandler({
 });
 
 function applyResponsePolicy(response: Response): Response {
-  for (const name of [...response.headers.keys()]) {
+  const headers = new Headers(response.headers);
+  for (const name of [...headers.keys()]) {
     if (name.startsWith('access-control-')) {
-      response.headers.delete(name);
+      headers.delete(name);
     }
   }
 
   for (const [name, value] of Object.entries(securityHeaders)) {
-    response.headers.set(name, value);
+    headers.set(name, value);
   }
 
-  return response;
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
 
 function notFoundApi(id: string): Response {

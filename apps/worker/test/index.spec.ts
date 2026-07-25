@@ -92,6 +92,7 @@ describe('worker entry policy', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('set-cookie')).toContain('__Host-td_session=');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(text).toContain('csrfToken');
     expect(text).toContain('expiresAt');
     expect(text).toContain(turnstileSiteKey);
@@ -239,6 +240,43 @@ describe('worker entry policy', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('copies immutable-like asset headers without buffering or losing response metadata', async () => {
+    const assetResponse = new Response('immutable asset', {
+      headers: {
+        'access-control-allow-headers': '*',
+        'access-control-allow-origin': '*',
+        'content-type': 'text/plain',
+        'x-asset-version': 'v7',
+      },
+      status: 206,
+      statusText: 'Partial Content',
+    });
+    const originalBody = assetResponse.body;
+    Object.defineProperties(assetResponse.headers, {
+      delete: {
+        value: () => {
+          throw new TypeError('immutable headers');
+        },
+      },
+      set: {
+        value: () => {
+          throw new TypeError('immutable headers');
+        },
+      },
+    });
+
+    const response = await fetchWorker('/', createEnv(assetResponse));
+
+    expect(response.status).toBe(206);
+    expect(response.statusText).toBe('Partial Content');
+    expect(response.body).toBe(originalBody);
+    expect(response.headers.get('x-asset-version')).toBe('v7');
+    expect(response.headers.get('access-control-allow-headers')).toBeNull();
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    await expect(response.text()).resolves.toBe('immutable asset');
   });
 
   it('returns a safe JSON envelope when an unexpected failure occurs', async () => {
