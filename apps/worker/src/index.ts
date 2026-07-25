@@ -57,8 +57,15 @@ export interface Env {
 }
 
 const securityHeaders = {
-  'content-security-policy':
-    "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+  'content-security-policy': [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "script-src 'self' https://challenges.cloudflare.com",
+    'frame-src https://challenges.cloudflare.com',
+    "connect-src 'self'",
+  ].join('; '),
   'cross-origin-resource-policy': 'same-origin',
   'permissions-policy': 'camera=(), geolocation=(), microphone=()',
   'referrer-policy': 'no-referrer',

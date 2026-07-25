@@ -361,8 +361,16 @@ describe('worker entry policy', () => {
       }),
     );
     const response = await fetchWorker('/', env);
+    const contentSecurityPolicy = response.headers.get('content-security-policy');
 
-    expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(contentSecurityPolicy).toBe(
+      "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; " +
+        "script-src 'self' https://challenges.cloudflare.com; " +
+        "frame-src https://challenges.cloudflare.com; connect-src 'self'",
+    );
+    expect(contentSecurityPolicy).not.toContain("'unsafe-inline'");
+    expect(contentSecurityPolicy).not.toContain("'unsafe-eval'");
+    expect(contentSecurityPolicy).not.toContain('connect-src https://challenges.cloudflare.com');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
