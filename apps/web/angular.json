@@ -56,6 +56,13 @@
           "options": {
             "tsConfig": "tsconfig.spec.json",
             "runner": "vitest"
+          },
+          "configurations": {
+            "coverage": {
+              "coverage": true,
+              "coverageInclude": ["src/**/*.ts"],
+              "runnerConfig": "vitest.coverage.config.ts"
+            }
           }
         }
       }

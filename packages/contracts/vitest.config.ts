@@ -1,23 +1,17 @@
-import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
+
+import { defineConfig } from 'vitest/config';
 
 const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      'cloudflare:workers': fileURLToPath(
-        new URL('./test/support/cloudflare-workers.ts', import.meta.url),
-      ),
-    },
-  },
   test: {
     environment: 'node',
     include: ['test/**/*.spec.ts'],
     coverage: {
       include: ['src/**/*.ts'],
       provider: 'v8',
-      reportsDirectory: fileURLToPath(new URL('../../coverage/worker', import.meta.url)),
+      reportsDirectory: fileURLToPath(new URL('../../coverage/contracts', import.meta.url)),
       reporter: ['text-summary', ['lcovonly', { projectRoot: repositoryRoot }]],
     },
   },

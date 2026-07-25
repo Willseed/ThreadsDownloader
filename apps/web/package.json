@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "ng build",
+    "coverage": "ng test --watch=false --configuration coverage",
     "test": "ng test --watch=false",
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
