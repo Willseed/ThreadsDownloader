@@ -16,7 +16,7 @@ import {
   acquireSessionResolvePermit,
   releaseSessionResolvePermit,
   type SessionNamespace,
-} from '../src/index.js';
+} from '../src/security/session-client.js';
 import { decodeBase64Url } from '../src/utils/base64url.js';
 
 const permitIds = Array.from({ length: 8 }, (_, index) =>
@@ -121,6 +121,10 @@ describe('session resolve permit helpers', () => {
             const body: unknown = await request.json();
             requests.push(body);
             const release = new URL(request.url).pathname.endsWith('/release');
+            expect(request.method).toBe('POST');
+            expect(new URL(request.url).pathname).toBe(
+              release ? '/resolve-permits/release' : '/resolve-permits/acquire',
+            );
             return release
               ? Response.json({ ok: releaseStatus === 200 }, { status: releaseStatus })
               : Response.json(
@@ -158,9 +162,14 @@ describe('session resolve permit helpers', () => {
     await expect(
       acquireSessionResolvePermit(namespace([], 429), identity, 'B'.repeat(43), 100),
     ).rejects.toMatchObject({ code: 'RESOLVE_PERMIT_DENIED' });
+    const releaseRequests: unknown[] = [];
     await expect(
-      releaseSessionResolvePermit(namespace([]), identity, permitIds[0]!, 100),
+      releaseSessionResolvePermit(namespace(releaseRequests), identity, permitIds[0]!, 100),
     ).resolves.toBe(true);
+    expect(releaseRequests).toEqual([
+      { sessionHash: identity.sessionHash, permitId: permitIds[0], now: 100 },
+    ]);
+    expect(JSON.stringify(releaseRequests)).not.toContain(identity.rawId);
     await expect(
       releaseSessionResolvePermit(namespace([], 201, 500), identity, permitIds[0]!, 100),
     ).resolves.toBe(false);

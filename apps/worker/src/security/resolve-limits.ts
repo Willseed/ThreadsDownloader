@@ -4,7 +4,7 @@ import {
   SessionResolvePermitError,
   type BrowserSessionIdentity,
   type SessionNamespace,
-} from '../index.js';
+} from './session-client.js';
 import { createKeyedIdentifierHasher } from './cryptography.js';
 import { ClientIpError, hashClientIp } from './client-ip.js';
 import type { HeaderSource } from './browser-session.js';

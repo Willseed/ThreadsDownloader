@@ -26,12 +26,15 @@ function createSessionNamespace(requests: unknown[] = [], responseStatus = 200):
       const name = ids.get(id)!;
       return {
         async fetch(request) {
+          const pathname = new URL(request.url).pathname;
+          expect(request.method).toBe('POST');
+          expect(['/authorize', '/bootstrap']).toContain(pathname);
           const body: unknown = await request.json();
           requests.push(body);
           if (responseStatus !== 200) {
             return Response.json({ ok: false }, { status: responseStatus });
           }
-          if (new URL(request.url).pathname === '/authorize') {
+          if (pathname === '/authorize') {
             return Response.json({ ok: true });
           }
           const input = body as FakeSessionRecord;
