@@ -201,6 +201,37 @@ describe('readBoundedJson', () => {
     await expect(readBoundedJson(stream)).resolves.toEqual({ value: 42 });
   });
 
+  it('requires declared content length to match the actual bytes when supplied', async () => {
+    const body = encoder.encode('{"value":42}');
+
+    await expect(readBoundedJson(new Blob([body]).stream(), body.byteLength)).resolves.toEqual({
+      value: 42,
+    });
+    await expectSafeAsyncError(
+      () => readBoundedJson(new Blob([body]).stream(), body.byteLength - 1),
+      'CONTENT_LENGTH_INVALID',
+    );
+    await expectSafeAsyncError(
+      () => readBoundedJson(new Blob([body]).stream(), body.byteLength + 1),
+      'CONTENT_LENGTH_INVALID',
+    );
+  });
+
+  it('rejects declared and actual bodies over the shared limit as too large', async () => {
+    await expectSafeAsyncError(
+      () => readBoundedJson(new Blob(['{}']).stream(), MAX_JSON_BODY_BYTES + 1),
+      'BODY_TOO_LARGE',
+    );
+    await expectSafeAsyncError(
+      () =>
+        readBoundedJson(
+          new Blob([new Uint8Array(MAX_JSON_BODY_BYTES + 1)]).stream(),
+          MAX_JSON_BODY_BYTES + 1,
+        ),
+      'BODY_TOO_LARGE',
+    );
+  });
+
   it('cancels a stream once actual bytes exceed the limit', async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({

@@ -21,6 +21,7 @@ import { bootstrapSession, type SessionNamespace } from './security/session-clie
 import { IpRateLimiter } from './ip-rate-limiter.js';
 import { SessionCoordinator } from './session-coordinator.js';
 import { TurnstileReplay } from './turnstile-replay.js';
+import { createResolvePublicMediaHandler } from './workflows/resolve-public-media.js';
 
 export {
   acquireSessionResolvePermit,
@@ -62,6 +63,12 @@ const securityHeaders = {
 function requestId(): string {
   return createOpaqueId();
 }
+
+const resolvePublicMedia = createResolvePublicMediaHandler({
+  fetcher: fetch,
+  now: Date.now,
+  requestId,
+});
 
 function applyResponsePolicy(response: Response): Response {
   for (const name of [...response.headers.keys()]) {
@@ -143,6 +150,8 @@ app.get('/api/health', (context) => {
 });
 
 app.get('/api/session', (context) => sessionResponse(context.req.raw, context.env));
+
+app.post('/api/resolve', (context) => resolvePublicMedia(context.req.raw, context.env));
 
 app.all('/api', () => notFoundApi(requestId()));
 app.all('/api/*', () => notFoundApi(requestId()));

@@ -193,6 +193,29 @@ describe('worker entry policy', () => {
     });
   });
 
+  it('routes resolve mutations before the API catch-all without touching assets', async () => {
+    const env = createEnv();
+    const response = await worker.fetch(
+      new Request(`https://${expectedHost}/api/resolve`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: `https://${expectedHost}`,
+        },
+        body: '{}',
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'REQUEST_INVALID', message: '請求格式不正確。' },
+    });
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
   it('uses the asset binding for non-API paths without a recursive fetch', async () => {
     const env = createEnv();
     const response = await fetchWorker('/about', env);

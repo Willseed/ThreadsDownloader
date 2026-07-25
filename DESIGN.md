@@ -162,6 +162,28 @@ was not retried. Official npm, Angular, and Cloudflare sources were used for
 recorded versions and platform facts. No Web Search was used. This record does
 not establish any undocumented upstream Threads API semantics.
 
+### Worker subrequest budget for public resolution (2026-07-25)
+
+- Question: how many candidate probes can one public resolve safely issue on
+  Cloudflare Workers Free while retaining capacity for redirects and internal
+  bindings?
+- Research order: ask-bridge was attempted first; the platform limits were then
+  verified against Cloudflare's official
+  [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+  and
+  [2026-02-11 subrequest-limit changelog](https://developers.cloudflare.com/changelog/post/2026-02-11-subrequests-limit/).
+- Evidence: a Free invocation permits 50 external subrequests and 1,000
+  internal subrequests; every redirect hop counts as another subrequest; at
+  most six outgoing connections may wait on response headers simultaneously.
+- Scope and decision: this applies to the Worker public resolve path. Probe only
+  the first eight ordered candidates concurrently. The conservative worst case
+  is one Turnstile request, four Threads requests including redirects, and five
+  requests for each of eight media probes, totalling 45 external subrequests
+  and retaining a five-request buffer. Redirect-converged final CDN URLs are
+  deduplicated canonically before vault storage.
+- Unconfirmed: whether an ASSETS binding request consumes the internal
+  subrequest bucket remains unconfirmed and is not relied upon by this decision.
+
 ## Deployment inventory and decisions
 
 GitHub is public with default branch `main`, zero open pull requests, no rules,

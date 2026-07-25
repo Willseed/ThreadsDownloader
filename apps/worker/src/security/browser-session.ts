@@ -231,7 +231,51 @@ export function validateMutationHeaders(
   return { contentLength: parseContentLength(headers.get('content-length')) };
 }
 
-export async function readBoundedJson(stream: ReadableStream<Uint8Array> | null): Promise<unknown> {
+function validateDeclaredJsonLength(declaredLength: number | null | undefined): void {
+  if (
+    declaredLength !== undefined &&
+    declaredLength !== null &&
+    (!Number.isSafeInteger(declaredLength) || declaredLength < 0)
+  ) {
+    fail('CONTENT_LENGTH_INVALID');
+  }
+  if (
+    declaredLength !== undefined &&
+    declaredLength !== null &&
+    declaredLength > MAX_JSON_BODY_BYTES
+  ) {
+    fail('BODY_TOO_LARGE');
+  }
+}
+
+async function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // The public error must remain independent of stream cancellation failures.
+  }
+}
+
+async function assertJsonChunkBounds(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  totalBytes: number,
+  declaredLength: number | null | undefined,
+): Promise<void> {
+  if (totalBytes > MAX_JSON_BODY_BYTES) {
+    await cancelReader(reader);
+    fail('BODY_TOO_LARGE');
+  }
+  if (declaredLength !== undefined && declaredLength !== null && totalBytes > declaredLength) {
+    await cancelReader(reader);
+    fail('CONTENT_LENGTH_INVALID');
+  }
+}
+
+export async function readBoundedJson(
+  stream: ReadableStream<Uint8Array> | null,
+  declaredLength?: number | null,
+): Promise<unknown> {
+  validateDeclaredJsonLength(declaredLength);
   if (stream === null) {
     return fail('BODY_INVALID');
   }
@@ -248,18 +292,15 @@ export async function readBoundedJson(stream: ReadableStream<Uint8Array> | null)
         return fail('BODY_INVALID');
       }
       totalBytes += result.value.byteLength;
-      if (totalBytes > MAX_JSON_BODY_BYTES) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The public error must remain independent of stream cancellation failures.
-        }
-        return fail('BODY_TOO_LARGE');
-      }
+      await assertJsonChunkBounds(reader, totalBytes, declaredLength);
       chunks.push(result.value);
     }
   } finally {
     reader.releaseLock();
+  }
+
+  if (declaredLength !== undefined && declaredLength !== null && totalBytes !== declaredLength) {
+    return fail('CONTENT_LENGTH_INVALID');
   }
 
   const body = new Uint8Array(totalBytes);
