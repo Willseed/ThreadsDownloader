@@ -10,6 +10,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           SESSION_SIGNING_KEY: randomBytes(32).toString('base64'),
+          TURNSTILE_SECRET: randomBytes(32).toString('base64'),
         },
       },
     }),

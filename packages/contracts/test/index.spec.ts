@@ -25,6 +25,7 @@ describe('contracts', () => {
     expectTypeOf<SessionResponse>().toEqualTypeOf<{
       readonly csrfToken: string;
       readonly expiresAt: string;
+      readonly turnstileSiteKey: string;
     }>();
   });
 });

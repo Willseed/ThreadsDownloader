@@ -25,6 +25,7 @@ export interface HealthResponse {
 export interface SessionResponse {
   readonly csrfToken: string;
   readonly expiresAt: string;
+  readonly turnstileSiteKey: string;
 }
 
 export function createApiError(code: ApiErrorCode, message: string, requestId: string): ApiError {

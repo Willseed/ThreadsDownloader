@@ -8,6 +8,7 @@
   "vars": {
     "EXPECTED_HOST": "session.test",
     "EXPECTED_ORIGIN": "https://session.test",
+    "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
   },
   "durable_objects": {
     "bindings": [
@@ -15,10 +16,18 @@
         "name": "SESSIONS",
         "class_name": "SessionCoordinator",
       },
+      {
+        "name": "TURNSTILE_REPLAYS",
+        "class_name": "TurnstileReplay",
+      },
     ],
   },
   "exports": {
     "SessionCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+    "TurnstileReplay": {
       "type": "durable-object",
       "storage": "sqlite",
     },

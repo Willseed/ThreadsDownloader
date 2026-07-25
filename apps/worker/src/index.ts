@@ -18,6 +18,7 @@ import {
   importSigningKey,
 } from './security/cryptography.js';
 import { SessionCoordinator } from './session-coordinator.js';
+import { TurnstileReplay } from './turnstile-replay.js';
 
 interface SessionStub {
   fetch(request: Request): Promise<Response>;
@@ -36,6 +37,9 @@ export interface Env {
   readonly EXPECTED_ORIGIN: string;
   readonly SESSION_SIGNING_KEY: string;
   readonly SESSIONS: SessionNamespace;
+  readonly TURNSTILE_REPLAYS: DurableObjectNamespace<TurnstileReplay>;
+  readonly TURNSTILE_SECRET: string;
+  readonly TURNSTILE_SITE_KEY: string;
 }
 
 const securityHeaders = {
@@ -176,7 +180,11 @@ async function sessionResponse(request: Request, env: Env): Promise<Response> {
     issuedAt: now,
     expiresAt: now + SESSION_TTL_SECONDS * 1000,
   });
-  const body: SessionResponse = { csrfToken, expiresAt: new Date(expiresAt).toISOString() };
+  const body: SessionResponse = {
+    csrfToken,
+    expiresAt: new Date(expiresAt).toISOString(),
+    turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+  };
   const headers = new Headers({ 'cache-control': 'no-store' });
   if (setCookie !== null) {
     headers.set('set-cookie', setCookie);
@@ -211,4 +219,4 @@ const worker = {
 };
 
 export default worker;
-export { SessionCoordinator };
+export { SessionCoordinator, TurnstileReplay };

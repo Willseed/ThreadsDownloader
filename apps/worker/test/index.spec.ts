@@ -4,6 +4,7 @@ import worker, { authorizeSession, type Env, type SessionNamespace } from '../sr
 
 const expectedHost = 'threads.example.test';
 const signingKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+const turnstileSiteKey = 'test-site-key';
 
 interface FakeSessionRecord {
   readonly sessionHash: string;
@@ -53,6 +54,9 @@ function createEnv(
     EXPECTED_ORIGIN: `https://${expectedHost}`,
     SESSION_SIGNING_KEY: signingKey,
     SESSIONS: sessions,
+    TURNSTILE_REPLAYS: {} as Env['TURNSTILE_REPLAYS'],
+    TURNSTILE_SECRET: crypto.randomUUID(),
+    TURNSTILE_SITE_KEY: turnstileSiteKey,
     ASSETS: { fetch: vi.fn(async () => assetResponse) },
   };
 }
@@ -82,6 +86,7 @@ describe('worker entry policy', () => {
     expect(response.headers.get('set-cookie')).toContain('__Host-td_session=');
     expect(text).toContain('csrfToken');
     expect(text).toContain('expiresAt');
+    expect(text).toContain(turnstileSiteKey);
     expect(text).not.toContain('sessionHash');
     expect(text).not.toContain('rawId');
     expect(requests).toHaveLength(1);
