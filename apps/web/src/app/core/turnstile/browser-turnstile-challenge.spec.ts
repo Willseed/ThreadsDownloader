@@ -20,6 +20,7 @@ interface CapturedRenderOptions {
   readonly 'response-field': boolean;
   readonly retry: string;
   readonly 'refresh-expired': string;
+  readonly size: string;
 }
 
 function turnstileScripts(): HTMLScriptElement[] {
@@ -171,6 +172,7 @@ describe('BrowserTurnstileChallenge', () => {
       'response-field': false,
       retry: 'auto',
       'refresh-expired': 'auto',
+      size: 'compact',
     });
     expect(TURNSTILE_ACTION).toBe('resolve');
     expect(handle.status()).toBe('ready');

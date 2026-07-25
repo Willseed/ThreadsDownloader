@@ -1,6 +1,6 @@
 # Turnstile Angular SPA 與 CSP 研究紀錄
 
-- 查證日期：2026-07-25
+- 查證日期：2026-07-25；窄版 reflow 追加查證：2026-07-25
 - 狀態：完成
 - 適用專案：Threads Downloader 的 Angular SPA、同源 Worker API 與回應 CSP
 
@@ -34,6 +34,43 @@ site secret、token 或其他敏感資料。ask-bridge 回覆只作為待驗證�
 | [Widget configurations](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/widget-configurations/) | Rendering methods、Callback configuration、Retry behavior、Refresh behavior、Custom data、Form integration、Complete configuration reference | success/error/expired/timeout callbacks；expired callback 不會自行 reset；`response-field` 可關閉；retry 與 refresh-expired 預設為 `auto`；action 長度與字元限制 |
 | [Validate the token](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/)                         | Mandatory server-side validation、Token characteristics、Enhanced validation with custom checks、Best practices                              | Siteverify 必須由伺服器執行；token 有效 300 秒且只能使用一次；應驗證指定的 action 與 hostname                                                                    |
 | [Content Security Policy](https://developers.cloudflare.com/turnstile/reference/content-security-policy/)                     | Content Security Policy、Pre-clearance support                                                                                               | allowlist 模式需允許 Turnstile 的 `script-src` 與 `frame-src`；只有 pre-clearance 額外明列 `connect-src 'self'`                                                  |
+
+## 2026-07-25 窄版 reflow 追加查證
+
+本次先依研究原則使用 ask-bridge，實際 CLI 參數為：
+
+```text
+ask-bridge --provider chatgpt --model high --timeout 1500 \
+  --headless=true --new \
+  --output /private/tmp/td-turnstile-responsive.md <focused-responsive-prompt>
+```
+
+第一次 sandbox 呼叫因
+`Failed to write mcp_servers.json: Operation not permitted (os error 1)` 權限錯誤而失敗，
+該次呼叫沒有產生可採信的研究回覆。隨後使用使用者既有核准的 escalated
+ask-bridge，以相同參數重跑成功並產生完整回覆檔。ask-bridge 回覆只作為待驗證
+建議，採用結論仍以 Cloudflare 官方文件為證據。接著直接開啟
+[Widget configurations](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/widget-configurations/)
+交叉驗證，沒有執行 Web Search query。
+
+官方 configuration reference 確認 explicit render 的 `size` 可使用 `normal`、
+`flexible` 與 `compact`。其中 `compact` 是固定 `150px × 140px`，適用於 mobile
+interfaces、sidebars 與水平空間受限的布局；`flexible` 雖為容器寬度 100%，仍有
+300px 最小寬度。由於本頁在 320 CSS px viewport 扣除頁面與 challenge padding 後
+可能低於 300px，本專案固定採用：
+
+```text
+size = compact
+```
+
+此決策適用於目前的 Managed widget、單欄窄版布局與 explicit rendering。容器保留
+至少 150px 的 inline space、允許 `max-inline-size: 100%`，且不使用 transform、
+scale 或 `overflow: hidden` 裁切 widget。沒有採用或推測不存在官方保證的自動尺寸
+切換。
+
+Cloudflare 官方文件沒有保證 widget 在所有互動狀態均符合 WCAG 400% zoom／
+320 CSS px reflow，也未保證小於尺寸下限時會自動切換。正式可及性驗收仍需使用
+320 CSS px viewport 對實際 Turnstile widget 狀態執行 E2E；此項目前尚未確認。
 
 ## 結論與專案決策
 

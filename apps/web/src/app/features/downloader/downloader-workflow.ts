@@ -103,7 +103,7 @@ function downloadableCandidates(
   return state.kind === 'error' ? (state.candidates ?? null) : null;
 }
 
-@Injectable({ providedIn: 'root' })
+@Injectable()
 export class DownloaderWorkflow {
   private readonly api = inject(DownloaderApi);
   private readonly handoff = inject(BrowserDownloadHandoff);

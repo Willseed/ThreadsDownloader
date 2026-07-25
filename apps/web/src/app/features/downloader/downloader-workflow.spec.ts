@@ -75,6 +75,7 @@ describe('DownloaderWorkflow', () => {
     handoff = vi.fn(() => DOWNLOAD_HANDOFF_MESSAGE);
     TestBed.configureTestingModule({
       providers: [
+        DownloaderWorkflow,
         { provide: DownloaderApi, useValue: { getSession, resolve, createDownloadSession } },
         { provide: BrowserDownloadHandoff, useValue: { handoff } },
       ],
@@ -207,6 +208,19 @@ describe('DownloaderWorkflow', () => {
     await Promise.all([first, repeated]);
 
     expect(workflow.state()).toEqual({ kind: 'ready', siteKey: SITE_KEY });
+  });
+
+  it('ignores a late session response after route-owned workflow destruction', async () => {
+    const response = new Subject<SessionResponse>();
+    getSession.mockReturnValueOnce(response.asObservable());
+    const pending = workflow.bootstrap();
+
+    workflow.destroy();
+    response.next(sessionResponse);
+    response.complete();
+    await pending;
+
+    expect(workflow.state()).toEqual({ kind: 'idle' });
   });
 
   it('creates a session before handoff and exposes only the fixed browser message', async () => {

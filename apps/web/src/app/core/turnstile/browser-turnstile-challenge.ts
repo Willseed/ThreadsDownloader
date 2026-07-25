@@ -38,6 +38,7 @@ interface TurnstileRenderOptions {
   readonly 'response-field': false;
   readonly retry: 'auto';
   readonly 'refresh-expired': 'auto';
+  readonly size: 'compact';
 }
 
 interface TurnstileBrowserApi {
@@ -278,6 +279,7 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
         'response-field': false,
         retry: 'auto',
         'refresh-expired': 'auto',
+        size: 'compact',
       });
       if (typeof widgetId !== 'string' || widgetId.length === 0) {
         this.failClosed();
