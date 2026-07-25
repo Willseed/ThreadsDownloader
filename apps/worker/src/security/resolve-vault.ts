@@ -102,6 +102,7 @@ export interface StoreResolvedMediaBatchInput {
   readonly shortcode: string;
   readonly candidates: readonly ProbedMedia[];
   readonly now?: number;
+  readonly clock?: () => number;
 }
 
 export interface ClaimResolvedMediaCandidateInput {
@@ -111,6 +112,7 @@ export interface ClaimResolvedMediaCandidateInput {
   readonly resolveId: string;
   readonly candidateId: string;
   readonly now?: number;
+  readonly clock?: () => number;
 }
 
 export interface SettleResolvedMediaClaimInput extends ClaimResolvedMediaCandidateInput {
@@ -165,14 +167,30 @@ function isSafeTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isBoundedDeadline(value: unknown, now: number, lifetime: number): value is number {
+function isBoundedServerDeadline(
+  anchor: unknown,
+  deadline: unknown,
+  receivedAt: number,
+  lifetime: number,
+): deadline is number {
   return (
-    isSafeTimestamp(now) &&
-    now <= Number.MAX_SAFE_INTEGER - lifetime &&
-    isSafeTimestamp(value) &&
-    value > now &&
-    value <= now + lifetime
+    isSafeTimestamp(anchor) &&
+    isSafeTimestamp(deadline) &&
+    isSafeTimestamp(receivedAt) &&
+    anchor <= receivedAt &&
+    deadline > receivedAt &&
+    deadline > anchor &&
+    deadline - anchor <= lifetime
   );
+}
+
+function responseTime(clock: () => number): number {
+  try {
+    const value = clock();
+    return isSafeTimestamp(value) ? value : fail('RESOLVE_VAULT_UNAVAILABLE');
+  } catch {
+    return fail('RESOLVE_VAULT_UNAVAILABLE');
+  }
 }
 
 function isContentLength(value: unknown): value is number | null {
@@ -409,7 +427,8 @@ async function readJson(response: Response): Promise<unknown> {
 export async function storeResolvedMediaBatch(
   input: StoreResolvedMediaBatchInput,
 ): Promise<StoredResolvedMediaBatch> {
-  const now = input.now ?? Date.now();
+  const clock = input.clock ?? Date.now;
+  const now = input.now ?? responseTime(clock);
   if (!isSafeTimestamp(now) || now > Number.MAX_SAFE_INTEGER - RESOLVE_VAULT_TTL_MS) {
     return fail('RESOLVE_VAULT_INVALID');
   }
@@ -431,12 +450,18 @@ export async function storeResolvedMediaBatch(
     return mapStatus(response.status);
   }
   const body = await readJson(response);
+  const receivedAt = responseTime(clock);
   if (
     !isPlainObject(body) ||
-    !hasExactKeys(body, ['candidates', 'expiresAt', 'ok', 'resolveId']) ||
+    !hasExactKeys(body, ['candidates', 'expiresAt', 'issuedAt', 'ok', 'resolveId']) ||
     body['ok'] !== true ||
     !isOpaqueId(body['resolveId']) ||
-    !isBoundedDeadline(body['expiresAt'], now, RESOLVE_VAULT_TTL_MS) ||
+    !isBoundedServerDeadline(
+      body['issuedAt'],
+      body['expiresAt'],
+      receivedAt,
+      RESOLVE_VAULT_TTL_MS,
+    ) ||
     !Array.isArray(body['candidates']) ||
     body['candidates'].length !== candidates.length
   ) {
@@ -458,7 +483,8 @@ export async function storeResolvedMediaBatch(
 export async function claimResolvedMediaCandidate(
   input: ClaimResolvedMediaCandidateInput,
 ): Promise<ResolvedMediaClaim> {
-  const now = input.now ?? Date.now();
+  const clock = input.clock ?? Date.now;
+  const now = input.now ?? responseTime(clock);
   if (!isSafeTimestamp(now) || now > Number.MAX_SAFE_INTEGER - RESOLVE_VAULT_RESERVATION_MS) {
     return fail('RESOLVE_VAULT_INVALID');
   }
@@ -505,12 +531,24 @@ export async function claimResolvedMediaCandidate(
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
+  let receivedAt: number;
+  try {
+    receivedAt = responseTime(clock);
+  } catch {
+    await bestEffortRelease(input, reservationId);
+    return fail('RESOLVE_VAULT_UNAVAILABLE');
+  }
   if (
     !isPlainObject(body) ||
-    !hasExactKeys(body, ['grant', 'ok', 'reservationExpiresAt', 'reservationId']) ||
+    !hasExactKeys(body, ['grant', 'ok', 'reservationExpiresAt', 'reservationId', 'reservedAt']) ||
     body['ok'] !== true ||
     body['reservationId'] !== reservationId ||
-    !isBoundedDeadline(body['reservationExpiresAt'], now, RESOLVE_VAULT_RESERVATION_MS)
+    !isBoundedServerDeadline(
+      body['reservedAt'],
+      body['reservationExpiresAt'],
+      receivedAt,
+      RESOLVE_VAULT_RESERVATION_MS,
+    )
   ) {
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');

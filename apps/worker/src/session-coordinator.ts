@@ -684,6 +684,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     return safeJson(201, {
       ok: true,
       resolveId,
+      issuedAt: reservation.issuedAt,
       expiresAt: reservation.expiresAt,
       candidates: this.safeVaultCandidates(candidates),
     });
@@ -715,6 +716,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
         readonly status: 200;
         readonly record: SessionRecord;
         readonly row: VaultCandidateRow;
+        readonly reservedAt: number;
         readonly reservationExpiresAt: number;
       }
     | { readonly status: 400 | 401 | 404 | 409 | 500 } {
@@ -765,6 +767,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
           reservation_id: input.reservationId,
           reservation_expires_at: reservationExpiresAt,
         },
+        reservedAt,
         reservationExpiresAt,
       } as const;
     });
@@ -880,6 +883,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
 
   private vaultClaimResponse(
     input: ResolveVaultClaimRequest,
+    reservedAt: number,
     reservationExpiresAt: number,
     media: PreparedVaultCandidate['media'],
   ): Response {
@@ -887,6 +891,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       return safeJson(200, {
         ok: true,
         reservationId: input.reservationId,
+        reservedAt,
         reservationExpiresAt,
         grant: encodeProbedMediaWire(media),
       });
@@ -973,7 +978,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       this.tryReleaseVaultReservation(input);
       return safeJson(confirmation, { ok: false });
     }
-    return this.vaultClaimResponse(input, claim.reservationExpiresAt, media);
+    return this.vaultClaimResponse(input, claim.reservedAt, claim.reservationExpiresAt, media);
   }
 
   private settleVaultState(

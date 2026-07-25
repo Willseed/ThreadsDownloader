@@ -335,6 +335,7 @@ async function resolveWithLease(
     shortcode: prepared.post.shortcode,
     candidates,
     now: runtime.now(),
+    clock: runtime.now,
   });
   return {
     resolveId: stored.resolveId,

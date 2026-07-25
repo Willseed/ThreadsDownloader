@@ -34,12 +34,14 @@ interface StoredVaultCandidate {
 
 interface StoredVaultBatch {
   readonly resolveId: string;
+  readonly issuedAt: number;
   readonly expiresAt: number;
   readonly candidates: readonly StoredVaultCandidate[];
 }
 
 interface ClaimedVaultCandidate {
   readonly reservationId: string;
+  readonly reservedAt: number;
   readonly reservationExpiresAt: number;
   readonly grant: Record<string, unknown>;
 }
@@ -464,6 +466,8 @@ describe('SessionCoordinator in workerd', () => {
     const stored = (await storeResponse.json()) as StoredVaultBatch & { readonly ok: true };
 
     expect(decodeBase64Url(stored.resolveId)).toHaveLength(24);
+    expect(stored.expiresAt).toBeGreaterThan(stored.issuedAt);
+    expect(stored.expiresAt - stored.issuedAt).toBeLessThanOrEqual(300_000);
     expect(stored.candidates).toHaveLength(2);
     expect(decodeBase64Url(stored.candidates[0]!.candidateId)).toHaveLength(24);
     expect(stored.candidates).toEqual([
@@ -484,6 +488,7 @@ describe('SessionCoordinator in workerd', () => {
     expect(rows.every((row) => row.state === 'ready')).toBe(true);
     expect(rows.every((row) => row.store_token === null)).toBe(true);
     expect(rows.every((row) => row.staging_expires_at === null)).toBe(true);
+    expect(rows.every((row) => row.issued_at === stored.issuedAt)).toBe(true);
     expect(rows.every((row) => row.sealed_grant?.startsWith('v1.'))).toBe(true);
     expect(JSON.stringify(rows)).not.toContain(privateMediaUrl);
     expect(JSON.stringify(rows)).not.toContain('must-stay-in-the-vault');
@@ -513,7 +518,11 @@ describe('SessionCoordinator in workerd', () => {
     expect(firstClaim.status).toBe(200);
     const firstClaimBody = (await firstClaim.json()) as ClaimedVaultCandidate;
     expect(firstClaimBody.reservationId).toBe(firstReservation);
-    expect(firstClaimBody.reservationExpiresAt).toBeGreaterThan(now + 1);
+    expect(firstClaimBody.reservedAt).toBeGreaterThan(0);
+    expect(firstClaimBody.reservationExpiresAt).toBeGreaterThan(firstClaimBody.reservedAt);
+    expect(firstClaimBody.reservationExpiresAt - firstClaimBody.reservedAt).toBeLessThanOrEqual(
+      30_000,
+    );
     expect(firstClaimBody.grant['finalUrl']).toBe(privateMediaUrl);
 
     expect(
@@ -657,6 +666,7 @@ describe('SessionCoordinator in workerd', () => {
     const stored = (await response.json()) as StoredVaultBatch;
     expect(stored.expiresAt).toBe(sessionExpiresAt);
     const [row] = await readVaultRows(stub);
+    expect(stored.issuedAt).toBe(row!.issued_at);
     expect(row!.expires_at).toBe(sessionExpiresAt);
     expect(row!.issued_at).toBeLessThanOrEqual(Date.now());
 

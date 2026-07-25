@@ -122,7 +122,8 @@ function sessionNamespace(options: HarnessOptions, controls: HarnessControls): S
               {
                 ok: true,
                 resolveId: RESOLVE_ID,
-                expiresAt: (body['now'] as number) + 300_000,
+                issuedAt: (body['now'] as number) + 50,
+                expiresAt: (body['now'] as number) + 50 + 300_000,
                 candidates: candidates.map((candidate, index) => ({
                   candidateId: candidateId(index),
                   filename: `threads_Abcde_${String(index + 1)}.mp4`,
@@ -491,7 +492,7 @@ describe('resolve public media workflow', () => {
     expect(response.headers.has('access-control-allow-origin')).toBe(false);
     expect(decoded).toEqual({
       resolveId: RESOLVE_ID,
-      expiresAt: new Date(NOW + 300 + 300_000).toISOString(),
+      expiresAt: new Date(NOW + 350 + 300_000).toISOString(),
       candidates: [
         { candidateId: candidateId(0), filename: 'threads_Abcde_1.mp4', contentLength: 42 },
         { candidateId: candidateId(1), filename: 'threads_Abcde_2.mp4', contentLength: 43 },
@@ -518,7 +519,7 @@ describe('resolve public media workflow', () => {
     expect(turnstileForm.get('idempotency_key')).toBe(REQUEST_ID);
     expect(turnstileForm.get('response')).toBe(TURNSTILE_TOKEN);
     expect(harness.controls.vaultBodies[0]!['now']).toBe(NOW + 300);
-    expect(harness.controls.clockValues).toEqual([NOW, NOW + 100, NOW + 200, NOW + 300]);
+    expect(harness.controls.clockValues).toEqual([NOW, NOW + 100, NOW + 200, NOW + 300, NOW + 400]);
     const permitId = harness.controls.sessionBodies[0]!['permitId'] as string;
     expectPublicBodySafe(body, [permitId, await signedCookie()]);
     expect(body).not.toContain('width');

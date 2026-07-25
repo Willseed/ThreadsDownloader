@@ -9,6 +9,8 @@ import {
   decodeResolveVaultStoreRequest,
   deriveResolvedMediaFilename,
   encodeProbedMediaWire,
+  RESOLVE_VAULT_RESERVATION_MS,
+  RESOLVE_VAULT_TTL_MS,
   ResolveVaultError,
   settleResolvedMediaClaim,
   storeResolvedMediaBatch,
@@ -181,6 +183,7 @@ describe('resolve vault session client', () => {
         {
           ok: true,
           resolveId,
+          issuedAt: NOW,
           expiresAt: NOW + 300_000,
           candidates: [
             { candidateId, filename: 'threads_Abcde_1_1.mp4', contentLength: 42 },
@@ -205,6 +208,7 @@ describe('resolve vault session client', () => {
         media({ contentType: 'video/webm', contentLength: null, completionReliable: false }),
       ],
       now: NOW,
+      clock: () => NOW,
     });
 
     expect(result.candidates).toEqual([
@@ -234,6 +238,7 @@ describe('resolve vault session client', () => {
       return Response.json({
         ok: true,
         reservationId: requestBody['reservationId'],
+        reservedAt: NOW,
         reservationExpiresAt: NOW + 30_000,
         grant: encodeProbedMediaWire(media()),
       });
@@ -246,6 +251,7 @@ describe('resolve vault session client', () => {
       resolveId,
       candidateId,
       now: NOW,
+      clock: () => NOW,
     });
 
     expect(decodeBase64Url(claim.reservationId)).toHaveLength(24);
@@ -267,6 +273,7 @@ describe('resolve vault session client', () => {
       return Response.json({
         ok: true,
         reservationId: body['reservationId'],
+        reservedAt: NOW,
         reservationExpiresAt: NOW + 30_000,
         grant: encodeProbedMediaWire(media()),
       });
@@ -280,10 +287,65 @@ describe('resolve vault session client', () => {
         resolveId,
         candidateId,
         now: NOW,
+        clock: () => NOW,
       }),
     ).resolves.toMatchObject({ media: media() });
     expect(reservationIds).toHaveLength(2);
     expect(reservationIds[0]).toBe(reservationIds[1]);
+  });
+
+  it('accepts exact server-relative TTLs when the object clock advances after the request', async () => {
+    const serverNow = NOW + 10;
+    const receivedAt = NOW + 20;
+    const storeSessions = namespace(async () =>
+      Response.json(
+        {
+          ok: true,
+          resolveId,
+          issuedAt: serverNow,
+          expiresAt: serverNow + RESOLVE_VAULT_TTL_MS,
+          candidates: [{ candidateId, filename: 'threads_Abcde_1_1.mp4', contentLength: 42 }],
+        },
+        { status: 201 },
+      ),
+    );
+
+    await expect(
+      storeResolvedMediaBatch({
+        sessions: storeSessions,
+        identity,
+        csrfHash,
+        permitId,
+        shortcode: 'Abcde_1',
+        candidates: [media()],
+        now: NOW,
+        clock: () => receivedAt,
+      }),
+    ).resolves.toMatchObject({ expiresAt: serverNow + RESOLVE_VAULT_TTL_MS });
+
+    const claimSessions = namespace(async (request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      return Response.json({
+        ok: true,
+        reservationId: body['reservationId'],
+        reservedAt: serverNow,
+        reservationExpiresAt: serverNow + RESOLVE_VAULT_RESERVATION_MS,
+        grant: encodeProbedMediaWire(media()),
+      });
+    });
+    await expect(
+      claimResolvedMediaCandidate({
+        sessions: claimSessions,
+        identity,
+        csrfHash,
+        resolveId,
+        candidateId,
+        now: NOW,
+        clock: () => receivedAt,
+      }),
+    ).resolves.toMatchObject({
+      reservationExpiresAt: serverNow + RESOLVE_VAULT_RESERVATION_MS,
+    });
   });
 
   it('best-effort releases malformed claim success and enforces response TTL bounds', async () => {
@@ -295,7 +357,8 @@ describe('resolve vault session client', () => {
         return Response.json({
           ok: true,
           reservationId: body['reservationId'],
-          reservationExpiresAt: NOW + 30_001,
+          reservedAt: NOW,
+          reservationExpiresAt: NOW + RESOLVE_VAULT_RESERVATION_MS + 1,
           grant: encodeProbedMediaWire(media()),
         });
       }
@@ -309,6 +372,7 @@ describe('resolve vault session client', () => {
         resolveId,
         candidateId,
         now: NOW,
+        clock: () => NOW,
       }),
       'RESOLVE_VAULT_UNAVAILABLE',
     );
@@ -326,7 +390,8 @@ describe('resolve vault session client', () => {
         {
           ok: true,
           resolveId,
-          expiresAt: NOW + 300_001,
+          issuedAt: NOW,
+          expiresAt: NOW + RESOLVE_VAULT_TTL_MS + 1,
           candidates: [{ candidateId, filename: 'threads_Abcde_1_1.mp4' }],
         },
         { status: 201 },
@@ -341,6 +406,7 @@ describe('resolve vault session client', () => {
         shortcode: 'Abcde',
         candidates: [media()],
         now: NOW,
+        clock: () => NOW,
       }),
       'RESOLVE_VAULT_UNAVAILABLE',
     );
