@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createKeyedIdentifierHasher,
   createAesGcmSealer,
   createOpaqueId,
   createOpaqueValueSigner,
@@ -109,6 +110,32 @@ describe('opaque value signatures', () => {
       await expect(signer.verify(value)).resolves.toBeNull();
     },
   );
+});
+
+describe('keyed identifier hashes', () => {
+  it('is deterministic, domain-separated, and never contains raw identifiers', async () => {
+    const hasher = createKeyedIdentifierHasher(await importSigningKey(firstKey));
+    const raw = '203.0.113.42';
+    const first = await hasher.hash('resolve-ip', raw);
+
+    await expect(hasher.hash('resolve-ip', raw)).resolves.toBe(first);
+    await expect(hasher.hash('other-context', raw)).resolves.not.toBe(first);
+    await expect(hasher.hash('resolve-ip', '203.0.113.43')).resolves.not.toBe(first);
+    await expect(hasher.hash('ab', 'c')).resolves.not.toBe(await hasher.hash('a', 'bc'));
+    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(first).not.toContain(raw);
+  });
+
+  it('maps signing failures to an input-independent safe error', async () => {
+    const hasher = createKeyedIdentifierHasher({} as CryptoKey);
+    const raw = 'private-client-address';
+    await expect(hasher.hash('resolve-ip', raw)).rejects.toThrow('Identifier could not be keyed.');
+    try {
+      await hasher.hash('resolve-ip', raw);
+    } catch (error) {
+      expect((error as Error).message).not.toContain(raw);
+    }
+  });
 });
 
 describe('AES-256-GCM sealed UTF-8 values', () => {

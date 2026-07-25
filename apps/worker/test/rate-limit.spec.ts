@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  acquireRateLimitPermit,
   acquireResolvePermit,
+  IP_RESOLVE_POLICY,
+  nextRateLimitDeadline,
   nextResolvePermitDeadline,
   pruneResolveRateLimit,
+  releaseRateLimitPermit,
   releaseResolvePermit,
   ResolveRateLimitError,
   type ResolveRateLimitState,
@@ -80,6 +84,24 @@ describe('resolve rate-limit state', () => {
     [() => pruneResolveRateLimit({ events: [-1], permits: [] }, 1)],
   ])('rejects unsafe times, IDs, and stored state', (action) => {
     expectRateError(action, 'RESOLVE_RATE_INVALID');
+  });
+});
+
+describe('IP resolve rate-limit policy', () => {
+  it('tracks the earliest lease or sliding-window expiry across three concurrent permits', () => {
+    let state: ResolveRateLimitState = empty;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      state = acquireRateLimitPermit(state, 100 + attempt, permitIds[attempt]!, IP_RESOLVE_POLICY);
+    }
+    expect(nextRateLimitDeadline(state, IP_RESOLVE_POLICY)).toBe(30_100);
+    expectRateError(
+      () => acquireRateLimitPermit(state, 104, permitIds[3]!, IP_RESOLVE_POLICY),
+      'RESOLVE_CONCURRENT_LIMIT',
+    );
+    state = releaseRateLimitPermit(state, 105, permitIds[0]!, IP_RESOLVE_POLICY);
+    expect(
+      acquireRateLimitPermit(state, 106, permitIds[3]!, IP_RESOLVE_POLICY).permits,
+    ).toHaveLength(3);
   });
 });
 

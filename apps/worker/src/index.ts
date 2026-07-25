@@ -17,6 +17,7 @@ import {
   createOpaqueValueSigner,
   importSigningKey,
 } from './security/cryptography.js';
+import { IpRateLimiter } from './ip-rate-limiter.js';
 import { SessionCoordinator } from './session-coordinator.js';
 import { TurnstileReplay } from './turnstile-replay.js';
 
@@ -52,6 +53,7 @@ export interface Env {
   };
   readonly EXPECTED_HOST: string;
   readonly EXPECTED_ORIGIN: string;
+  readonly IP_RATE_LIMITS: DurableObjectNamespace<IpRateLimiter>;
   readonly SESSION_SIGNING_KEY: string;
   readonly SESSIONS: SessionNamespace;
   readonly TURNSTILE_REPLAYS: DurableObjectNamespace<TurnstileReplay>;
@@ -313,4 +315,4 @@ const worker = {
 };
 
 export default worker;
-export { SessionCoordinator, TurnstileReplay };
+export { IpRateLimiter, SessionCoordinator, TurnstileReplay };

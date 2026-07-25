@@ -22,12 +22,34 @@ export interface AesGcmSealer {
   open(sealedValue: string, additionalAuthenticatedData: string): Promise<string>;
 }
 
+export interface KeyedIdentifierHasher {
+  hash(context: string, value: string): Promise<string>;
+}
+
 function invalidKeyMaterial(): Error {
   return new Error('Key material must be canonical base64 encoding of exactly 32 bytes.');
 }
 
 function operationFailed(message: string): Error {
   return new Error(message);
+}
+
+function domainSeparatedIdentifier(context: string, value: string): Uint8Array<ArrayBuffer> {
+  const contextBytes = encoder.encode(context);
+  const valueBytes = encoder.encode(value);
+  if (contextBytes.byteLength > 0xffff_ffff || valueBytes.byteLength > 0xffff_ffff) {
+    throw operationFailed('Identifier could not be keyed.');
+  }
+  const message = new Uint8Array(9 + contextBytes.byteLength + valueBytes.byteLength);
+  const lengths = new DataView(message.buffer);
+  message[0] = 1;
+  lengths.setUint32(1, contextBytes.byteLength);
+  message.set(contextBytes, 5);
+  lengths.setUint32(5 + contextBytes.byteLength, valueBytes.byteLength);
+  message.set(valueBytes, 9 + contextBytes.byteLength);
+  contextBytes.fill(0);
+  valueBytes.fill(0);
+  return message;
 }
 
 function decodeKeyMaterial(encodedKey: string): Uint8Array<ArrayBuffer> {
@@ -174,6 +196,22 @@ export function createOpaqueValueSigner(key: CryptoKey): OpaqueValueSigner {
         return verified ? value : null;
       } catch {
         return null;
+      }
+    },
+  };
+}
+
+export function createKeyedIdentifierHasher(key: CryptoKey): KeyedIdentifierHasher {
+  return {
+    async hash(context: string, value: string): Promise<string> {
+      let message: Uint8Array<ArrayBuffer> | null = null;
+      try {
+        message = domainSeparatedIdentifier(context, value);
+        return encodeBase64Url(await crypto.subtle.sign('HMAC', key, message));
+      } catch {
+        throw operationFailed('Identifier could not be keyed.');
+      } finally {
+        message?.fill(0);
       }
     },
   };

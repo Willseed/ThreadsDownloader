@@ -22,6 +22,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "IP_RATE_LIMITS",
+        "class_name": "IpRateLimiter",
+      },
+      {
         "name": "SESSIONS",
         "class_name": "SessionCoordinator",
       },
@@ -32,6 +36,10 @@
     ],
   },
   "exports": {
+    "IpRateLimiter": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
     "SessionCoordinator": {
       "type": "durable-object",
       "storage": "sqlite",
