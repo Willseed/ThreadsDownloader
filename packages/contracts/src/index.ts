@@ -57,6 +57,9 @@ export interface ResolveCandidate {
   readonly candidateId: string;
   readonly filename: string;
   readonly contentLength?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly duration?: number;
 }
 
 export interface ResolveResponse {
@@ -177,16 +180,52 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+type ResolveCandidateMetadata = Pick<
+  ResolveCandidate,
+  'contentLength' | 'duration' | 'height' | 'width'
+>;
+
+function decodeResolveCandidateMetadata(
+  value: Record<string, unknown>,
+): ResolveCandidateMetadata | null {
+  const metadata: {
+    contentLength?: number;
+    duration?: number;
+    height?: number;
+    width?: number;
+  } = {};
+  for (const field of ['contentLength', 'height', 'width'] as const) {
+    if (!Object.hasOwn(value, field)) {
+      continue;
+    }
+    const fieldValue = value[field];
+    if (!isPositiveSafeInteger(fieldValue)) {
+      return null;
+    }
+    metadata[field] = fieldValue;
+  }
+  if (Object.hasOwn(value, 'duration')) {
+    const duration = value['duration'];
+    if (!isPositiveFiniteNumber(duration)) {
+      return null;
+    }
+    metadata.duration = duration;
+  }
+  return metadata;
+}
+
 function decodeResolveCandidate(value: unknown): ResolveCandidate | null {
   if (!isPlainObject(value)) {
     return null;
   }
-  const hasContentLength = Object.hasOwn(value, 'contentLength');
+  const metadata = decodeResolveCandidateMetadata(value);
   if (
-    !hasExactKeys(
-      value,
-      hasContentLength ? ['candidateId', 'contentLength', 'filename'] : ['candidateId', 'filename'],
-    ) ||
+    metadata === null ||
+    !hasExactKeys(value, ['candidateId', 'filename', ...Object.keys(metadata)]) ||
     !isOpaqueId(value['candidateId']) ||
     typeof value['filename'] !== 'string' ||
     value['filename'].length > 128 ||
@@ -194,14 +233,7 @@ function decodeResolveCandidate(value: unknown): ResolveCandidate | null {
   ) {
     return null;
   }
-  if (!hasContentLength) {
-    return { candidateId: value['candidateId'], filename: value['filename'] };
-  }
-  const contentLength = value['contentLength'];
-  if (!isPositiveSafeInteger(contentLength)) {
-    return null;
-  }
-  return { candidateId: value['candidateId'], filename: value['filename'], contentLength };
+  return { candidateId: value['candidateId'], filename: value['filename'], ...metadata };
 }
 
 function isDownloadStatus(value: unknown): value is DownloadStatus {

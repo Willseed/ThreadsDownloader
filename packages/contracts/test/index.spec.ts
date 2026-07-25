@@ -85,6 +85,9 @@ describe('contracts', () => {
       readonly candidateId: string;
       readonly filename: string;
       readonly contentLength?: number;
+      readonly width?: number;
+      readonly height?: number;
+      readonly duration?: number;
     }>();
     expectTypeOf<ResolveResponse>().toEqualTypeOf<{
       readonly resolveId: string;
@@ -193,7 +196,6 @@ describe('contracts', () => {
           },
         ],
       },
-      { ...response, candidates: [{ ...response.candidates[0], width: 1920 }] },
       { ...response, candidates: [{ ...response.candidates[0], contentLength: 0 }] },
       { ...response, candidates: [{ ...response.candidates[0], filename: '../private.mp4' }] },
       { ...response, candidates: [response.candidates[0], response.candidates[0]] },
@@ -205,6 +207,83 @@ describe('contracts', () => {
     ]) {
       expect(decodeResolveResponse(invalid)).toBeNull();
     }
+  });
+
+  it('decodes every valid combination of optional candidate metadata', () => {
+    const metadata = [
+      ['contentLength', 10_000],
+      ['width', 1920],
+      ['height', 1080],
+      ['duration', 231.125],
+    ] as const;
+
+    for (let mask = 0; mask < 1 << metadata.length; mask += 1) {
+      const candidate: Record<string, unknown> = {
+        candidateId: 'C'.repeat(32),
+        filename: 'threads_Abcde_1.mp4',
+      };
+      for (const [index, [key, value]] of metadata.entries()) {
+        if ((mask & (1 << index)) !== 0) {
+          candidate[key] = value;
+        }
+      }
+      const response = {
+        resolveId: 'R'.repeat(32),
+        expiresAt: '2026-07-25T08:35:00.000Z',
+        candidates: [candidate],
+      };
+
+      expect(decodeResolveResponse(response)).toEqual(response);
+    }
+  });
+
+  it.each([
+    ['contentLength', 0],
+    ['contentLength', 1.5],
+    ['contentLength', Number.MAX_SAFE_INTEGER + 1],
+    ['width', 0],
+    ['width', 1920.5],
+    ['width', Number.POSITIVE_INFINITY],
+    ['height', -1],
+    ['height', 1080.5],
+    ['height', Number.NaN],
+    ['duration', 0],
+    ['duration', -0.1],
+    ['duration', Number.POSITIVE_INFINITY],
+    ['duration', Number.NaN],
+    ['duration', null],
+    ['width', undefined],
+  ] as const)('rejects invalid optional candidate metadata %s=%s', (key, value) => {
+    const response = {
+      resolveId: 'R'.repeat(32),
+      expiresAt: '2026-07-25T08:35:00.000Z',
+      candidates: [
+        {
+          candidateId: 'C'.repeat(32),
+          filename: 'threads_Abcde_1.mp4',
+          [key]: value,
+        },
+      ],
+    };
+
+    expect(decodeResolveResponse(response)).toBeNull();
+  });
+
+  it('rejects unknown candidate metadata even when known optional metadata is valid', () => {
+    const response = {
+      resolveId: 'R'.repeat(32),
+      expiresAt: '2026-07-25T08:35:00.000Z',
+      candidates: [
+        {
+          candidateId: 'C'.repeat(32),
+          filename: 'threads_Abcde_1.mp4',
+          width: 1920,
+          finalUrl: 'https://video.cdninstagram.com/private.mp4',
+        },
+      ],
+    };
+
+    expect(decodeResolveResponse(response)).toBeNull();
   });
 
   it('keeps the download session request and response exact', () => {
