@@ -11,7 +11,7 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
       <header class="legal-hero">
         <p class="eyebrow">LEGAL / TERMS</p>
         <h1 id="page-title">使用條款</h1>
-        <p>使用本服務前，請閱讀本服務的技術範圍、權利要求與未完成的法務狀態。</p>
+        <p>使用本服務前，請閱讀本服務的技術範圍、權利要求與法律界線。</p>
       </header>
 
       <app-research-purpose-notice />
@@ -54,9 +54,10 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
         </section>
 
         <section aria-labelledby="terms-review-title">
-          <h2 id="terms-review-title">正式上線前狀態</h2>
+          <h2 id="terms-review-title">營運者與定期審閱</h2>
           <p>
-            本頁未填寫營運者名稱、準據法、管轄法院、責任上限或爭議程序，亦不對特定下載作合法性判定。正式上線前，仍須由服務擁有者提供真實營運資料，並由合格法律專業人士依實際營運地、資料流與服務情況審閱。
+            本服務營運者顯示名稱為
+            Pony。本頁不構成法律意見，亦不對特定下載作合法性判定；營運者應依實際所在地、資料流、服務情況與適用法律定期審閱本條款，並在營運條件或法律變動時更新。
           </p>
         </section>
       </article>

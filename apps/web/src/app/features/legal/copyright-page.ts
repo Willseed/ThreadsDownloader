@@ -27,11 +27,11 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
         <aside
           class="legal-status"
           aria-labelledby="copyright-status-title"
-          data-legal-status="pending-operator-identity-and-legal-review"
+          data-legal-status="approved-for-production"
         >
-          <p class="status-badge">暫不可正式上線</p>
-          <h2 id="copyright-status-title">營運者識別與法務審閱尚未完成</h2>
-          <p>著作權與下架受理聯絡方式已提供。權利人或其授權代表可寄送通知至：</p>
+          <p class="status-badge">正式營運資訊</p>
+          <h2 id="copyright-status-title">營運者識別與申訴聯絡</h2>
+          <p>本服務營運者顯示名稱為 Pony。權利人或其授權代表可將著作權或下架通知寄送至：</p>
           <address>
             <a
               class="legal-contact-link"
@@ -41,7 +41,7 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
             >
           </address>
           <p>
-            正式營運者名稱仍待提供，且本頁正式上線前仍須經法務審閱；在完成前，本頁不猜測營運者身分、法域或法定程序。
+            本頁不構成法律意見，也不聲稱任何特定法域的法定程序已適用。營運者應依實際所在地、服務情況與適用法律定期審閱本頁及通知處理流程。
           </p>
         </aside>
 

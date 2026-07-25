@@ -61,7 +61,7 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
           </ul>
           <p>
             因此，本服務不宣稱沒有第三方處理。Cloudflare
-            基礎設施的邊緣安全紀錄、備份與其各自保存政策不由此應用程式程式碼決定，目前尚未確認，正式上線前須另行審閱。
+            基礎設施的邊緣安全紀錄、備份與其各自保存政策不由此應用程式程式碼決定，應依其當時有效的政策與實際服務設定定期審閱。
           </p>
         </section>
 
@@ -116,7 +116,7 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
 
         <section aria-labelledby="privacy-contact-title">
           <h2 id="privacy-contact-title">隱私與資料處理聯絡</h2>
-          <p>如對本服務的隱私或資料處理有疑問，可寄送電子郵件至：</p>
+          <p>本服務營運者顯示名稱為 Pony。如對本服務的隱私或資料處理有疑問，可寄送電子郵件至：</p>
           <address>
             <a
               class="legal-contact-link"
@@ -128,10 +128,10 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
         </section>
 
         <section aria-labelledby="privacy-review-title">
-          <h2 id="privacy-review-title">正式上線前狀態</h2>
+          <h2 id="privacy-review-title">定期審閱提醒</h2>
           <p>
-            隱私與資料處理聯絡方式已提供；正式營運者名稱、營運地及 Cloudflare
-            的實際設定與保存政策仍待確認。本頁須在正式上線前依實際外部設定更新並經法務審閱。
+            本頁不構成法律意見。營運者應依實際所在地、資料流、Cloudflare
+            的實際設定與當時有效的保存政策定期審閱本頁，並在相關條件變動時更新。
           </p>
         </section>
       </article>

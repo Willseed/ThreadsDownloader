@@ -9,6 +9,17 @@ const RESEARCH_PURPOSE =
   '本服務之設置與營運目的僅為技術及學術研究，營運者不藉提供本服務獲取任何商業或經濟利益。';
 const RESEARCH_BOUNDARY =
   '上述目的與非商業聲明不代表營運者或使用者已取得任何內容授權，不表示特定下載、保存或其他使用必然合法或符合著作權限制或例外，也不免除任何人依適用法律應負的責任。';
+const OUTDATED_PENDING_COPY = [
+  '暫不可正式上線',
+  '營運者名稱仍待提供',
+  '待營運者確認',
+  '營運者識別與法務審閱尚未完成',
+  '未完成的法務狀態',
+  '未填寫營運者名稱',
+  '正式上線前狀態',
+  '正式上線前仍須經法務審閱',
+  'pending-operator-identity-and-legal-review',
+] as const;
 
 function normalizedText(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
@@ -26,6 +37,21 @@ describe('legal pages', () => {
     fixture.detectChanges();
     return fixture;
   }
+
+  it.each([TermsPageComponent, PrivacyPageComponent, CopyrightPageComponent])(
+    'identifies Pony without retaining pending production copy',
+    (component) => {
+      const fixture = render(component);
+      const root = fixture.nativeElement as HTMLElement;
+      const text = normalizedText(root);
+
+      expect(text).toContain('營運者顯示名稱為 Pony');
+      expect(text).toContain('本頁不構成法律意見');
+      for (const outdatedCopy of OUTDATED_PENDING_COPY) {
+        expect(root.outerHTML).not.toContain(outdatedCopy);
+      }
+    },
+  );
 
   it.each([TermsPageComponent, CopyrightPageComponent])(
     'places the exact research statement immediately before its legal boundary',
@@ -51,8 +77,7 @@ describe('legal pages', () => {
     expect(root.querySelector('main#main-content')).not.toBeNull();
     expect(text).toContain('不接受 Threads 或 Instagram 的 Cookie、帳號憑證或登入 token');
     expect(text).toContain('本服務不授予任何第三方內容權利');
-    expect(text).toContain('正式上線前');
-    expect(text).toContain('未填寫營運者名稱、準據法、管轄法院、責任上限或爭議程序');
+    expect(text).toContain('依實際所在地、資料流、服務情況與適用法律定期審閱');
     expect(text).toContain('未獲其背書、授權、委託或合作');
   });
 
@@ -88,20 +113,20 @@ describe('legal pages', () => {
     const contact = root.querySelector<HTMLAnchorElement>('a[href="mailto:pony@pylot.dev"]');
     expect(contact?.textContent?.trim()).toBe('pony@pylot.dev');
     expect(contact?.getAttribute('aria-label')).toContain('隱私與資料處理詢問');
-    expect(text).toContain('隱私與資料處理聯絡方式已提供');
+    expect(text).toContain('依其當時有效的政策與實際服務設定定期審閱');
   });
 
-  it('exposes the copyright contact while keeping pending identity and review detectable', () => {
+  it('exposes the approved production marker and copyright contact', () => {
     const fixture = render(CopyrightPageComponent);
     const root = fixture.nativeElement as HTMLElement;
     const text = normalizedText(root);
     const status = root.querySelector<HTMLElement>('[data-legal-status]');
     const contact = status?.querySelector<HTMLAnchorElement>('a[href="mailto:pony@pylot.dev"]');
 
-    expect(status?.dataset['legalStatus']).toBe('pending-operator-identity-and-legal-review');
-    expect(normalizedText(status)).toContain('著作權與下架受理聯絡方式已提供');
-    expect(normalizedText(status)).toContain('正式營運者名稱仍待提供');
-    expect(normalizedText(status)).toContain('正式上線前仍須經法務審閱');
+    expect(root.querySelectorAll('[data-legal-status]')).toHaveLength(1);
+    expect(status?.dataset['legalStatus']).toBe('approved-for-production');
+    expect(normalizedText(status)).toContain('本服務營運者顯示名稱為 Pony');
+    expect(normalizedText(status)).toContain('依實際所在地、服務情況與適用法律定期審閱');
     expect(contact?.textContent?.trim()).toBe('pony@pylot.dev');
     expect(contact?.getAttribute('aria-label')).toContain('著作權或下架通知');
     expect(text).toContain('不聲稱適用任何特定國家或地區的通知與下架、安全港或反通知制度');
