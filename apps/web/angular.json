@@ -39,6 +39,18 @@
           },
           "defaultConfiguration": "production"
         },
+        "serve": {
+          "builder": "@angular/build:dev-server",
+          "configurations": {
+            "development": {
+              "buildTarget": "web:build:development"
+            },
+            "production": {
+              "buildTarget": "web:build:production"
+            }
+          },
+          "defaultConfiguration": "development"
+        },
         "test": {
           "builder": "@angular/build:unit-test",
           "options": {
