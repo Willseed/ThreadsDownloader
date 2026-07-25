@@ -16,6 +16,11 @@ export const API_ERROR_CODES = [
   'THREADS_JAVASCRIPT_REQUIRED',
   'MEDIA_NOT_FOUND',
   'RESOLVE_UNAVAILABLE',
+  'DOWNLOAD_EXPIRED',
+  'DOWNLOAD_CONCURRENT_LIMIT',
+  'DOWNLOAD_RANGE_UNAVAILABLE',
+  'DOWNLOAD_UPSTREAM_UNAVAILABLE',
+  'DOWNLOAD_UNAVAILABLE',
   'NOT_FOUND',
   'INTERNAL_ERROR',
 ] as const;
@@ -61,6 +66,226 @@ export interface ResolveResponse {
   readonly resolveId: string;
   readonly expiresAt: string;
   readonly candidates: readonly ResolveCandidate[];
+}
+
+export interface DownloadSessionRequest {
+  readonly resolveId: string;
+  readonly candidateId: string;
+  readonly csrfToken: string;
+}
+
+export interface DownloadSessionResponse {
+  readonly downloadId: string;
+  readonly downloadUrl: string;
+  readonly startExpiresAt: string;
+}
+
+export type DownloadStatus = 'ISSUED' | 'ACTIVE' | 'INTERRUPTED' | 'COMPLETE_PENDING';
+
+export type DownloadRangeCapability = 'bytes' | 'none' | 'unknown';
+
+export interface DownloadStatusMetadata {
+  readonly filename: string;
+  readonly contentType: string;
+  readonly contentLength: number | null;
+  readonly rangeCapability: DownloadRangeCapability;
+}
+
+export interface DownloadStatusResponse {
+  readonly available: true;
+  readonly status: DownloadStatus;
+  readonly startExpiresAt: string;
+  readonly idleExpiresAt: string | null;
+  readonly absoluteExpiresAt: string;
+  readonly completionExpiresAt: string | null;
+  readonly activeStreams: number;
+  readonly metadata: DownloadStatusMetadata;
+}
+
+const OPAQUE_ID = /^[A-Za-z0-9_-]{32}$/u;
+const CANONICAL_CSRF_TOKEN = /^[A-Za-z0-9_-]{42}[AQgw]$/u;
+const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
+const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
+const CANONICAL_ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const MAX_CONCURRENT_DOWNLOAD_STREAMS = 4;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  return (
+    actual.length === sortedExpected.length &&
+    actual.every((key, index) => key === sortedExpected[index])
+  );
+}
+
+function isOpaqueId(value: unknown): value is string {
+  return typeof value === 'string' && OPAQUE_ID.test(value);
+}
+
+function isCanonicalCsrfToken(value: unknown): value is string {
+  return typeof value === 'string' && CANONICAL_CSRF_TOKEN.test(value);
+}
+
+function isCanonicalIsoDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !CANONICAL_ISO_DATE.test(value)) {
+    return false;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function isoTimestamp(value: string): number {
+  return Date.parse(value);
+}
+
+function isNullableCanonicalIsoDate(value: unknown): value is string | null {
+  return value === null || isCanonicalIsoDate(value);
+}
+
+function isDownloadStatus(value: unknown): value is DownloadStatus {
+  return (
+    value === 'ISSUED' ||
+    value === 'ACTIVE' ||
+    value === 'INTERRUPTED' ||
+    value === 'COMPLETE_PENDING'
+  );
+}
+
+function isDownloadRangeCapability(value: unknown): value is DownloadRangeCapability {
+  return value === 'bytes' || value === 'none' || value === 'unknown';
+}
+
+function isDownloadStatusMetadata(value: unknown): value is DownloadStatusMetadata {
+  return (
+    isPlainObject(value) &&
+    hasExactKeys(value, ['contentLength', 'contentType', 'filename', 'rangeCapability']) &&
+    typeof value['filename'] === 'string' &&
+    value['filename'].length <= 128 &&
+    SAFE_FILENAME.test(value['filename']) &&
+    typeof value['contentType'] === 'string' &&
+    VIDEO_MEDIA_TYPE.test(value['contentType']) &&
+    (value['contentLength'] === null ||
+      (typeof value['contentLength'] === 'number' &&
+        Number.isSafeInteger(value['contentLength']) &&
+        value['contentLength'] > 0)) &&
+    isDownloadRangeCapability(value['rangeCapability'])
+  );
+}
+
+function hasValidDownloadStatusShape(value: Record<string, unknown>): boolean {
+  return (
+    (value['status'] === 'ISSUED' &&
+      value['idleExpiresAt'] === null &&
+      value['completionExpiresAt'] === null &&
+      value['activeStreams'] === 0) ||
+    (value['status'] === 'ACTIVE' &&
+      value['idleExpiresAt'] !== null &&
+      value['completionExpiresAt'] === null &&
+      typeof value['activeStreams'] === 'number' &&
+      value['activeStreams'] >= 1) ||
+    (value['status'] === 'INTERRUPTED' &&
+      value['idleExpiresAt'] !== null &&
+      value['completionExpiresAt'] === null &&
+      value['activeStreams'] === 0) ||
+    (value['status'] === 'COMPLETE_PENDING' &&
+      value['idleExpiresAt'] !== null &&
+      value['completionExpiresAt'] !== null &&
+      value['activeStreams'] === 0)
+  );
+}
+
+export function decodeDownloadSessionRequest(value: unknown): DownloadSessionRequest | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['candidateId', 'csrfToken', 'resolveId']) ||
+    !isOpaqueId(value['resolveId']) ||
+    !isOpaqueId(value['candidateId']) ||
+    !isCanonicalCsrfToken(value['csrfToken'])
+  ) {
+    return null;
+  }
+  return {
+    resolveId: value['resolveId'],
+    candidateId: value['candidateId'],
+    csrfToken: value['csrfToken'],
+  };
+}
+
+export function decodeDownloadSessionResponse(value: unknown): DownloadSessionResponse | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['downloadId', 'downloadUrl', 'startExpiresAt']) ||
+    !isOpaqueId(value['downloadId']) ||
+    value['downloadUrl'] !== `/api/download/${value['downloadId']}` ||
+    !isCanonicalIsoDate(value['startExpiresAt'])
+  ) {
+    return null;
+  }
+  return {
+    downloadId: value['downloadId'],
+    downloadUrl: value['downloadUrl'],
+    startExpiresAt: value['startExpiresAt'],
+  };
+}
+
+export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResponse | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, [
+      'absoluteExpiresAt',
+      'activeStreams',
+      'available',
+      'completionExpiresAt',
+      'idleExpiresAt',
+      'metadata',
+      'startExpiresAt',
+      'status',
+    ]) ||
+    value['available'] !== true ||
+    !isDownloadStatus(value['status']) ||
+    !isCanonicalIsoDate(value['startExpiresAt']) ||
+    !isNullableCanonicalIsoDate(value['idleExpiresAt']) ||
+    !isCanonicalIsoDate(value['absoluteExpiresAt']) ||
+    !isNullableCanonicalIsoDate(value['completionExpiresAt']) ||
+    typeof value['activeStreams'] !== 'number' ||
+    !Number.isSafeInteger(value['activeStreams']) ||
+    value['activeStreams'] < 0 ||
+    value['activeStreams'] > MAX_CONCURRENT_DOWNLOAD_STREAMS ||
+    !isDownloadStatusMetadata(value['metadata']) ||
+    !hasValidDownloadStatusShape(value)
+  ) {
+    return null;
+  }
+
+  const startExpiresAt = isoTimestamp(value['startExpiresAt']);
+  const absoluteExpiresAt = isoTimestamp(value['absoluteExpiresAt']);
+  const idleExpiresAt =
+    value['idleExpiresAt'] === null ? null : isoTimestamp(value['idleExpiresAt']);
+  const completionExpiresAt =
+    value['completionExpiresAt'] === null ? null : isoTimestamp(value['completionExpiresAt']);
+  if (
+    startExpiresAt >= absoluteExpiresAt ||
+    (idleExpiresAt !== null && idleExpiresAt > absoluteExpiresAt) ||
+    (completionExpiresAt !== null &&
+      (idleExpiresAt === null || completionExpiresAt > idleExpiresAt))
+  ) {
+    return null;
+  }
+
+  return {
+    available: true,
+    status: value['status'],
+    startExpiresAt: value['startExpiresAt'],
+    idleExpiresAt: value['idleExpiresAt'],
+    absoluteExpiresAt: value['absoluteExpiresAt'],
+    completionExpiresAt: value['completionExpiresAt'],
+    activeStreams: value['activeStreams'],
+    metadata: value['metadata'],
+  };
 }
 
 export function createApiError(code: ApiErrorCode, message: string, requestId: string): ApiError {
