@@ -9,6 +9,7 @@ export default defineConfig({
       wrangler: { configPath: '../../wrangler.test.jsonc' },
       miniflare: {
         bindings: {
+          DOWNLOAD_ENCRYPTION_KEY: randomBytes(32).toString('base64url'),
           RESOLVED_MEDIA_GRANT_KEY: randomBytes(32).toString('base64'),
           SESSION_SIGNING_KEY: randomBytes(32).toString('base64'),
           TURNSTILE_SECRET: randomBytes(32).toString('base64'),

@@ -17,7 +17,9 @@ import {
   createOpaqueValueSigner,
   importSigningKey,
 } from './security/cryptography.js';
+import type { DownloadSessionNamespace } from './security/download-session-client.js';
 import { bootstrapSession, type SessionNamespace } from './security/session-client.js';
+import { DownloadSession } from './download-session.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
 import { SessionCoordinator } from './session-coordinator.js';
 import { TurnstileReplay } from './turnstile-replay.js';
@@ -34,11 +36,14 @@ export type {
   SessionNamespace,
   SessionResolvePermit,
 } from './security/session-client.js';
+export type { DownloadSessionNamespace } from './security/download-session-client.js';
 
 export interface Env {
   readonly ASSETS: {
     fetch(request: Request): Promise<Response>;
   };
+  readonly DOWNLOAD_ENCRYPTION_KEY: string;
+  readonly DOWNLOAD_SESSIONS: DownloadSessionNamespace;
   readonly EXPECTED_HOST: string;
   readonly EXPECTED_ORIGIN: string;
   readonly IP_RATE_LIMITS: DurableObjectNamespace<IpRateLimiter>;
@@ -169,4 +174,4 @@ const worker = {
 };
 
 export default worker;
-export { IpRateLimiter, SessionCoordinator, TurnstileReplay };
+export { DownloadSession, IpRateLimiter, SessionCoordinator, TurnstileReplay };

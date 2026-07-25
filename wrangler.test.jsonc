@@ -13,6 +13,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "DOWNLOAD_SESSIONS",
+        "class_name": "DownloadSession",
+      },
+      {
         "name": "IP_RATE_LIMITS",
         "class_name": "IpRateLimiter",
       },
@@ -27,6 +31,10 @@
     ],
   },
   "exports": {
+    "DownloadSession": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
     "IpRateLimiter": {
       "type": "durable-object",
       "storage": "sqlite",

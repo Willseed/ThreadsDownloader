@@ -61,7 +61,7 @@ error messages. CDN URLs likewise never enter the frontend or logs.
 
 ## Durable Object lifecycle model
 
-SQLite Durable Object exports are: `Session`, `IpRateLimit`,
+SQLite Durable Object exports are: `SessionCoordinator`, `IpRateLimiter`,
 `TurnstileReplay`, and `DownloadSession`. These names describe fixed storage
 records, not public HTTP resources. The initial lifecycle uses SQLite exports
 and fixed storage; automatic rollback across lifecycle transitions is not
@@ -183,6 +183,34 @@ not establish any undocumented upstream Threads API semantics.
   deduplicated canonically before vault storage.
 - Unconfirmed: whether an ASSETS binding request consumes the internal
   subrequest bucket remains unconfirmed and is not relied upon by this decision.
+
+### SQLite Durable Object declarative exports (2026-07-25)
+
+- Question: how should the initial `DownloadSession` SQLite Durable Object be
+  declared in Wrangler 4.114.0 without introducing a legacy migration path?
+- Research order and evidence: ask-bridge first completed the research with the
+  required ChatGPT provider, high model, 1,500-second timeout, and headless
+  execution. The result was then checked against Cloudflare's official
+  [Durable Object migrations reference](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/),
+  [Wrangler configuration reference](https://developers.cloudflare.com/workers/wrangler/configuration/),
+  [declarative class exports changelog](https://developers.cloudflare.com/changelog/post/2026-06-30-declarative-do-class-exports/),
+  and [legacy class migrations reference](https://developers.cloudflare.com/durable-objects/reference/durable-object-class-migrations-legacy/).
+  The ask-bridge thread link is not recorded because it is sensitive and not
+  needed to reproduce the decision. No Web Search was used.
+- Evidence and decision: Wrangler 4.107.0 and later support declarative class
+  exports. This repository uses Wrangler 4.114.0. An export declared as
+  `{ type: "durable-object", storage: "sqlite" }` replaces the legacy migration
+  declaration for the class and must not be combined with `migrations` in the
+  same configuration. Production, development, and test configurations bind
+  `DOWNLOAD_SESSIONS` to the `DownloadSession` SQLite export.
+- Scope: on first deployment, the declaration provisions a persistent Durable
+  Object namespace. A normal Worker version rollback cannot cross that lifecycle
+  change. Removing the class requires an explicit `deleted` tombstone and is a
+  destructive lifecycle operation; this task does not perform that operation.
+- Unconfirmed: documentation consistency for `wrangler versions upload` remains
+  unconfirmed and this implementation does not depend on that command. Real
+  `DOWNLOAD_ENCRYPTION_KEY` secret provisioning is also unconfirmed and remains
+  a deployment item; tests inject an ephemeral key through Miniflare.
 
 ## Deployment inventory and decisions
 

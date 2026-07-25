@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import worker, { authorizeSession, type Env, type SessionNamespace } from '../src/index.js';
 
 const expectedHost = 'threads.example.test';
+const downloadEncryptionKey = 'A'.repeat(43);
 const signingKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 const turnstileSiteKey = 'test-site-key';
 
@@ -53,6 +54,8 @@ function createEnv(
   sessions = createSessionNamespace(),
 ): Env {
   return {
+    DOWNLOAD_ENCRYPTION_KEY: downloadEncryptionKey,
+    DOWNLOAD_SESSIONS: {} as Env['DOWNLOAD_SESSIONS'],
     EXPECTED_HOST: expectedHost,
     EXPECTED_ORIGIN: `https://${expectedHost}`,
     IP_RATE_LIMITS: {} as Env['IP_RATE_LIMITS'],

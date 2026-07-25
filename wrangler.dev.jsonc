@@ -6,7 +6,12 @@
   "workers_dev": false,
   "preview_urls": false,
   "secrets": {
-    "required": ["RESOLVED_MEDIA_GRANT_KEY", "SESSION_SIGNING_KEY", "TURNSTILE_SECRET"],
+    "required": [
+      "DOWNLOAD_ENCRYPTION_KEY",
+      "RESOLVED_MEDIA_GRANT_KEY",
+      "SESSION_SIGNING_KEY",
+      "TURNSTILE_SECRET",
+    ],
   },
   "vars": {
     "EXPECTED_HOST": "localhost",
@@ -22,6 +27,10 @@
   "durable_objects": {
     "bindings": [
       {
+        "name": "DOWNLOAD_SESSIONS",
+        "class_name": "DownloadSession",
+      },
+      {
         "name": "IP_RATE_LIMITS",
         "class_name": "IpRateLimiter",
       },
@@ -36,6 +45,10 @@
     ],
   },
   "exports": {
+    "DownloadSession": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
     "IpRateLimiter": {
       "type": "durable-object",
       "storage": "sqlite",
