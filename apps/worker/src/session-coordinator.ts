@@ -89,6 +89,7 @@ const resolveVaultBatchesTableSql = `CREATE TABLE IF NOT EXISTS resolved_media_b
   resolve_id TEXT PRIMARY KEY,
   session_hash TEXT NOT NULL,
   permit_id TEXT NOT NULL UNIQUE,
+  shortcode TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('staging', 'ready')),
   store_token TEXT,
   issued_at INTEGER NOT NULL,
@@ -109,10 +110,20 @@ const resolveVaultCandidatesTableSql = `CREATE TABLE IF NOT EXISTS resolved_medi
   UNIQUE (resolve_id, ordinal),
   CHECK ((reservation_id IS NULL) = (reservation_expires_at IS NULL))
 )`;
+const resolveVaultConsumptionsTableSql = `CREATE TABLE IF NOT EXISTS resolved_media_consumptions (
+  resolve_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  session_hash TEXT NOT NULL,
+  reservation_id TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (resolve_id, candidate_id)
+)`;
 const resolveVaultExpiryIndexSql = `CREATE INDEX IF NOT EXISTS resolved_media_batches_expiry
   ON resolved_media_batches (expires_at)`;
 const resolveVaultReservationIndexSql = `CREATE INDEX IF NOT EXISTS resolved_media_candidates_reservation
   ON resolved_media_candidates (reservation_expires_at)`;
+const resolveVaultConsumptionExpiryIndexSql = `CREATE INDEX IF NOT EXISTS resolved_media_consumptions_expiry
+  ON resolved_media_consumptions (expires_at)`;
 
 interface AcquirePermitInput extends AuthorizeSessionInput {
   readonly now: number;
@@ -157,6 +168,7 @@ interface VaultCandidateRow {
   readonly state: string;
   readonly issued_at: number;
   readonly expires_at: number;
+  readonly shortcode: string;
   readonly candidate_id: string;
   readonly ordinal: number;
   readonly filename: string;
@@ -318,8 +330,10 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     this.ctx.storage.sql.exec(sessionDownloadPermitsExpiryIndexSql);
     this.ctx.storage.sql.exec(resolveVaultBatchesTableSql);
     this.ctx.storage.sql.exec(resolveVaultCandidatesTableSql);
+    this.ctx.storage.sql.exec(resolveVaultConsumptionsTableSql);
     this.ctx.storage.sql.exec(resolveVaultExpiryIndexSql);
     this.ctx.storage.sql.exec(resolveVaultReservationIndexSql);
+    this.ctx.storage.sql.exec(resolveVaultConsumptionExpiryIndexSql);
   }
 
   private grantCodec(): Promise<ResolvedMediaGrantCodec> {
@@ -376,6 +390,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       now - RESOLVE_WINDOW_MS,
     );
     this.ctx.storage.sql.exec('DELETE FROM resolve_permits WHERE expires_at <= ?', now);
+    this.ctx.storage.sql.exec('DELETE FROM resolved_media_consumptions WHERE expires_at <= ?', now);
     this.ctx.storage.sql.exec(
       `UPDATE resolved_media_candidates
        SET reservation_id = NULL, reservation_expires_at = NULL
@@ -480,7 +495,12 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
         'SELECT MIN(reservation_expires_at) AS deadline FROM resolved_media_candidates',
       )
       .toArray()[0]?.['deadline'];
-    const deadlines = [batchDeadline, reservationDeadline].filter(
+    const consumptionDeadline = this.ctx.storage.sql
+      .exec<{ deadline: number | null }>(
+        'SELECT MIN(expires_at) AS deadline FROM resolved_media_consumptions',
+      )
+      .toArray()[0]?.['deadline'];
+    const deadlines = [batchDeadline, reservationDeadline, consumptionDeadline].filter(
       (value): value is number => typeof value === 'number',
     );
     return deadlines.length === 0 ? null : Math.min(...deadlines);
@@ -551,6 +571,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     input: {
       readonly sessionHash: string;
       readonly resolveId: string;
+      readonly shortcode: string;
       readonly issuedAt: number;
       readonly expiresAt: number;
     },
@@ -565,6 +586,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       candidateId: candidate.candidateId,
       ordinal: candidate.ordinal,
       filename: candidate.filename,
+      shortcode: input.shortcode,
       contentLength: candidate.contentLength,
       issuedAt: input.issuedAt,
       expiresAt: input.expiresAt,
@@ -645,12 +667,13 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       const stagingExpiresAt = Math.min(expiresAt, admittedAt + RESOLVE_VAULT_STAGING_MS);
       this.ctx.storage.sql.exec(
         `INSERT INTO resolved_media_batches
-          (resolve_id, session_hash, permit_id, state, store_token, issued_at, expires_at,
+          (resolve_id, session_hash, permit_id, shortcode, state, store_token, issued_at, expires_at,
            staging_expires_at, candidate_count)
-         VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'staging', ?, ?, ?, ?, ?)`,
         resolveId,
         input.sessionHash,
         input.permitId,
+        input.shortcode,
         storeToken,
         admittedAt,
         expiresAt,
@@ -807,6 +830,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       const batchBinding = {
         sessionHash: input.sessionHash,
         resolveId,
+        shortcode: input.shortcode,
         issuedAt: reservation.issuedAt,
         expiresAt: reservation.expiresAt,
       };
@@ -845,7 +869,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
   ): VaultCandidateRow | undefined {
     return this.ctx.storage.sql
       .exec<VaultCandidateRow>(
-        `SELECT b.session_hash, b.state, b.issued_at, b.expires_at,
+        `SELECT b.session_hash, b.state, b.issued_at, b.expires_at, b.shortcode,
                 c.candidate_id, c.ordinal, c.filename, c.content_length,
                 c.sealed_grant, c.reservation_id, c.reservation_expires_at
          FROM resolved_media_batches b
@@ -978,6 +1002,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       candidateId: input.candidateId,
       ordinal: row['ordinal'],
       filename: row['filename'],
+      shortcode: row['shortcode'],
       contentLength: row['content_length'],
       issuedAt: row['issued_at'],
       expiresAt: row['expires_at'],
@@ -1019,6 +1044,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
         current['candidate_id'] !== expected['candidate_id'] ||
         current['ordinal'] !== expected['ordinal'] ||
         current['filename'] !== expected['filename'] ||
+        current['shortcode'] !== expected['shortcode'] ||
         current['content_length'] !== expected['content_length'] ||
         current['sealed_grant'] !== expected['sealed_grant'] ||
         current['reservation_expires_at'] !== expected['reservation_expires_at']
@@ -1034,6 +1060,8 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     input: ResolveVaultClaimRequest,
     reservedAt: number,
     reservationExpiresAt: number,
+    filename: string,
+    shortcode: string,
     media: PreparedVaultCandidate['media'],
   ): Response {
     try {
@@ -1042,6 +1070,8 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
         reservationId: input.reservationId,
         reservedAt,
         reservationExpiresAt,
+        filename,
+        shortcode,
         grant: encodeProbedMediaWire(media),
       });
     } catch {
@@ -1127,7 +1157,39 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       this.tryReleaseVaultReservation(input);
       return safeJson(confirmation, { ok: false });
     }
-    return this.vaultClaimResponse(input, claim.reservedAt, claim.reservationExpiresAt, media);
+    return this.vaultClaimResponse(
+      input,
+      claim.reservedAt,
+      claim.reservationExpiresAt,
+      claim.row['filename'],
+      claim.row['shortcode'],
+      media,
+    );
+  }
+
+  private settleMissingVaultCandidate(
+    input: ResolveVaultSettleRequest,
+    settledAt: number,
+    record: SessionRecord,
+  ): { readonly status: 200; readonly record: SessionRecord } | { readonly status: 401 | 409 } {
+    const consumed = this.ctx.storage.sql
+      .exec<{ session_hash: string; reservation_id: string }>(
+        `SELECT session_hash, reservation_id FROM resolved_media_consumptions
+         WHERE resolve_id = ? AND candidate_id = ? AND expires_at > ?`,
+        input.resolveId,
+        input.candidateId,
+        settledAt,
+      )
+      .toArray()[0];
+    if (consumed === undefined) {
+      return { status: 409 };
+    }
+    if (consumed['session_hash'] !== input.sessionHash) {
+      return { status: 401 };
+    }
+    return consumed['reservation_id'] === input.reservationId && input.outcome === 'consume'
+      ? { status: 200, record }
+      : { status: 409 };
   }
 
   private settleVaultState(
@@ -1142,7 +1204,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       this.pruneResolveStorage(settledAt);
       const row = this.readVaultCandidate(input.resolveId, input.candidateId);
       if (row === undefined) {
-        return { status: 200, record } as const;
+        return this.settleMissingVaultCandidate(input, settledAt, record);
       }
       if (row['session_hash'] !== input.sessionHash) {
         return { status: 401 } as const;
@@ -1153,6 +1215,16 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
           : ({ status: 409 } as const);
       }
       if (input.outcome === 'consume') {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO resolved_media_consumptions
+            (resolve_id, candidate_id, session_hash, reservation_id, expires_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          input.resolveId,
+          input.candidateId,
+          input.sessionHash,
+          input.reservationId,
+          row['expires_at'],
+        );
         this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
       } else {
         this.ctx.storage.sql.exec(

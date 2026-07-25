@@ -10,6 +10,7 @@ import {
   deriveResolvedMediaFilename,
   encodeProbedMediaWire,
   RESOLVE_VAULT_RESERVATION_MS,
+  RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
   RESOLVE_VAULT_TTL_MS,
   ResolveVaultError,
   settleResolvedMediaClaim,
@@ -26,6 +27,17 @@ const LAST_MODIFIED = 'Mon, 01 Jan 2024 00:00:00 GMT';
 
 function bytes(length: number, offset = 0): Uint8Array {
   return Uint8Array.from({ length }, (_, index) => (index + offset) % 256);
+}
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
+
+function hangingJsonResponse(status: number): Response {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 const sessionHash = encodeBase64Url(bytes(32, 1));
@@ -240,6 +252,8 @@ describe('resolve vault session client', () => {
         reservationId: requestBody['reservationId'],
         reservedAt: NOW,
         reservationExpiresAt: NOW + 30_000,
+        filename: 'threads_Abcde_1_1.mp4',
+        shortcode: 'Abcde_1',
         grant: encodeProbedMediaWire(media()),
       });
     });
@@ -255,6 +269,8 @@ describe('resolve vault session client', () => {
     });
 
     expect(decodeBase64Url(claim.reservationId)).toHaveLength(24);
+    expect(claim.filename).toBe('threads_Abcde_1_1.mp4');
+    expect(claim.shortcode).toBe('Abcde_1');
     expect(claim.media).toEqual(media());
     expect(requestBody).toMatchObject({ sessionHash, csrfHash, resolveId, candidateId, now: NOW });
     expect(JSON.stringify(claim)).toContain(PRIVATE_URL);
@@ -275,6 +291,8 @@ describe('resolve vault session client', () => {
         reservationId: body['reservationId'],
         reservedAt: NOW,
         reservationExpiresAt: NOW + 30_000,
+        filename: 'threads_Abcde_1_1.mp4',
+        shortcode: 'Abcde_1',
         grant: encodeProbedMediaWire(media()),
       });
     });
@@ -330,6 +348,8 @@ describe('resolve vault session client', () => {
         reservationId: body['reservationId'],
         reservedAt: serverNow,
         reservationExpiresAt: serverNow + RESOLVE_VAULT_RESERVATION_MS,
+        filename: 'threads_Abcde_1_1.mp4',
+        shortcode: 'Abcde_1',
         grant: encodeProbedMediaWire(media()),
       });
     });
@@ -358,8 +378,11 @@ describe('resolve vault session client', () => {
           ok: true,
           reservationId: body['reservationId'],
           reservedAt: NOW,
-          reservationExpiresAt: NOW + RESOLVE_VAULT_RESERVATION_MS + 1,
+          reservationExpiresAt: NOW + RESOLVE_VAULT_RESERVATION_MS,
+          filename: 'threads_Abcde_1_1.mp4',
+          shortcode: 'Abcde_1',
           grant: encodeProbedMediaWire(media()),
+          privateExtra: true,
         });
       }
       return Response.json({ ok: true });
@@ -519,4 +542,93 @@ describe('resolve vault session client', () => {
       'RESOLVE_VAULT_UNAVAILABLE',
     );
   });
+
+  it('bounds ambiguous claim retries and their exact reservation release', async () => {
+    vi.useFakeTimers();
+    try {
+      const paths: string[] = [];
+      const stalled = namespace((request) => {
+        paths.push(new URL(request.url).pathname);
+        return never();
+      });
+      const outcome = expectVaultError(
+        claimResolvedMediaCandidate({
+          sessions: stalled,
+          identity,
+          csrfHash,
+          resolveId,
+          candidateId,
+          now: NOW,
+          clock: () => NOW,
+        }),
+        'RESOLVE_VAULT_UNAVAILABLE',
+      );
+
+      await vi.advanceTimersByTimeAsync(RESOLVE_VAULT_REQUEST_TIMEOUT_MS * 3);
+      await outcome;
+      expect(paths).toEqual([
+        '/resolve-vault/claim',
+        '/resolve-vault/claim',
+        '/resolve-vault/settle',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds a never-settling claim response body before releasing its reservation', async () => {
+    vi.useFakeTimers();
+    try {
+      const paths: string[] = [];
+      const sessions = namespace(async (request) => {
+        paths.push(new URL(request.url).pathname);
+        return paths.length === 1 ? hangingJsonResponse(200) : Response.json({ ok: true });
+      });
+      const outcome = expectVaultError(
+        claimResolvedMediaCandidate({
+          sessions,
+          identity,
+          csrfHash,
+          resolveId,
+          candidateId,
+          now: NOW,
+          clock: () => NOW,
+        }),
+        'RESOLVE_VAULT_UNAVAILABLE',
+      );
+      await vi.advanceTimersByTimeAsync(RESOLVE_VAULT_REQUEST_TIMEOUT_MS);
+      await outcome;
+      expect(paths).toEqual(['/resolve-vault/claim', '/resolve-vault/settle']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['request', 'response body'] as const)(
+    'bounds a never-settling settlement %s',
+    async (stalled) => {
+      vi.useFakeTimers();
+      try {
+        const outcome = expectVaultError(
+          settleResolvedMediaClaim({
+            sessions: namespace(() =>
+              stalled === 'request' ? never() : Promise.resolve(hangingJsonResponse(200)),
+            ),
+            identity,
+            csrfHash,
+            resolveId,
+            candidateId,
+            reservationId,
+            outcome: 'consume',
+            now: NOW,
+          }),
+          'RESOLVE_VAULT_UNAVAILABLE',
+        );
+        await vi.advanceTimersByTimeAsync(RESOLVE_VAULT_REQUEST_TIMEOUT_MS);
+        await outcome;
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

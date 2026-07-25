@@ -25,6 +25,7 @@ const SESSION_HASH_BYTES = 32;
 const MAX_FILENAME_CHARACTERS = 128;
 const MAX_FORWARDED_HEADER_CHARACTERS = 512;
 const INTERNAL_ORIGIN = 'https://download-session.internal';
+export const DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS = 8_000;
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
 const SAFE_SHORTCODE = /^[A-Za-z0-9_-]{5,64}$/u;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
@@ -831,37 +832,59 @@ function jsonRequest(path: string, body: object): Request {
   });
 }
 
+async function boundedClientOperation<T>(operation: () => Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(unavailable()), DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([Promise.resolve().then(operation), expired]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function boundedStubFetch(stub: DownloadSessionStub, request: Request): Promise<Response> {
+  return boundedClientOperation(() => stub.fetch(request));
+}
+
 async function fetchJson<T>(
   stub: DownloadSessionStub,
   path: string,
   body: object,
   expectedStatus: number,
   decode: (value: unknown) => T | null,
+  bounded = false,
 ): Promise<T> {
-  let response: Response;
-  try {
-    response = await stub.fetch(jsonRequest(path, body));
-  } catch {
-    throw unavailable();
-  }
-  if (response.status !== expectedStatus) {
-    throw responseError(response);
-  }
-  if (response.headers.get('content-type') !== 'application/json') {
-    throw unavailable();
-  }
-  try {
-    const decoded = decode(await response.json());
-    if (decoded === null) {
+  const operation = async (): Promise<T> => {
+    let response: Response;
+    try {
+      response = await stub.fetch(jsonRequest(path, body));
+    } catch {
       throw unavailable();
     }
-    return decoded;
-  } catch (error: unknown) {
-    if (error instanceof DownloadSessionClientError) {
-      throw error;
+    if (response.status !== expectedStatus) {
+      throw responseError(response);
     }
-    throw unavailable();
-  }
+    if (response.headers.get('content-type') !== 'application/json') {
+      throw unavailable();
+    }
+    try {
+      const decoded = decode(await response.json());
+      if (decoded === null) {
+        throw unavailable();
+      }
+      return decoded;
+    } catch (error: unknown) {
+      if (error instanceof DownloadSessionClientError) {
+        throw error;
+      }
+      throw unavailable();
+    }
+  };
+  return bounded ? boundedClientOperation(operation) : operation();
 }
 
 async function bestEffortDestroy(
@@ -869,7 +892,7 @@ async function bestEffortDestroy(
   identity: DownloadSessionIdentityRequest,
 ): Promise<void> {
   try {
-    await stub.fetch(jsonRequest('/destroy', identity));
+    await boundedStubFetch(stub, jsonRequest('/destroy', identity));
   } catch {
     // Initialization compensation is best-effort and cannot expose transport details.
   }
@@ -928,34 +951,40 @@ export async function initializeDownloadSession(
   }
   const request = encodeDownloadSessionInitializeRequest({ ...input, downloadId });
   const stub = getStub(namespace, downloadId);
-  let response: Response;
+  let decoded: DownloadSessionInitializeResponse;
   try {
-    response = await stub.fetch(jsonRequest('/initialize', request));
-  } catch {
+    decoded = await boundedClientOperation(async () => {
+      let response: Response;
+      try {
+        response = await stub.fetch(jsonRequest('/initialize', request));
+      } catch {
+        throw unavailable();
+      }
+      if (response.status !== 201) {
+        throw responseError(response);
+      }
+      if (response.headers.get('content-type') !== 'application/json') {
+        throw unavailable();
+      }
+      try {
+        const result = decodeDownloadSessionInitializeResponse(await response.json());
+        if (result === null) {
+          throw unavailable();
+        }
+        return result;
+      } catch (error: unknown) {
+        if (error instanceof DownloadSessionClientError) {
+          throw error;
+        }
+        throw unavailable();
+      }
+    });
+  } catch (error: unknown) {
+    if (error instanceof DownloadSessionClientError && error.code === 'DOWNLOAD_SESSION_CONFLICT') {
+      throw error;
+    }
     await bestEffortDestroy(stub, { downloadId, sessionHash: request.sessionHash });
-    throw unavailable();
-  }
-  if (response.status === 409) {
-    throw responseError(response);
-  }
-  if (response.status !== 201) {
-    await bestEffortDestroy(stub, { downloadId, sessionHash: request.sessionHash });
-    throw responseError(response);
-  }
-  if (response.headers.get('content-type') !== 'application/json') {
-    await bestEffortDestroy(stub, { downloadId, sessionHash: request.sessionHash });
-    throw unavailable();
-  }
-
-  let decoded: DownloadSessionInitializeResponse | null;
-  try {
-    decoded = decodeDownloadSessionInitializeResponse(await response.json());
-  } catch {
-    decoded = null;
-  }
-  if (decoded === null) {
-    await bestEffortDestroy(stub, { downloadId, sessionHash: request.sessionHash });
-    throw unavailable();
+    throw error instanceof DownloadSessionClientError ? error : unavailable();
   }
   return {
     downloadId,
@@ -1137,5 +1166,6 @@ export async function destroyDownloadSession(
     identity,
     200,
     decodeDownloadSessionAckResponse,
+    true,
   );
 }

@@ -9,6 +9,7 @@ const MAX_SEALED_GRANT_CHARACTERS = 8_192;
 const MAX_FILENAME_CHARACTERS = 128;
 const AAD_DOMAIN = 'threads-downloader:resolved-media-grant:v1';
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
+const SAFE_SHORTCODE = /^[A-Za-z0-9_-]{5,64}$/u;
 const PAYLOAD_FIELDS = [
   'completionReliable',
   'contentLength',
@@ -37,6 +38,7 @@ export interface ResolvedMediaGrantBinding {
   readonly candidateId: string;
   readonly ordinal: number;
   readonly filename: string;
+  readonly shortcode: string;
   readonly contentLength: number | null;
   readonly issuedAt: number;
   readonly expiresAt: number;
@@ -97,6 +99,7 @@ function normalizeBinding(value: unknown): NormalizedBinding {
       'ordinal',
       'resolveId',
       'sessionHash',
+      'shortcode',
     ]) ||
     !hasCanonicalBytes(value['sessionHash'], 43, 32) ||
     !hasCanonicalBytes(value['resolveId'], 32, 24) ||
@@ -108,6 +111,8 @@ function normalizeBinding(value: unknown): NormalizedBinding {
     typeof value['filename'] !== 'string' ||
     value['filename'].length > MAX_FILENAME_CHARACTERS ||
     !SAFE_FILENAME.test(value['filename']) ||
+    typeof value['shortcode'] !== 'string' ||
+    !SAFE_SHORTCODE.test(value['shortcode']) ||
     !isContentLength(value['contentLength']) ||
     !isSafeTimestamp(value['issuedAt']) ||
     !isSafeTimestamp(value['expiresAt']) ||
@@ -122,6 +127,7 @@ function normalizeBinding(value: unknown): NormalizedBinding {
     candidateId: value['candidateId'],
     ordinal: value['ordinal'],
     filename: value['filename'],
+    shortcode: value['shortcode'],
     contentLength: value['contentLength'],
     issuedAt: value['issuedAt'],
     expiresAt: value['expiresAt'],
@@ -148,6 +154,7 @@ function additionalAuthenticatedData(binding: NormalizedBinding): string {
     binding.candidateId,
     String(binding.ordinal),
     binding.filename,
+    binding.shortcode,
     binding.contentLength === null ? 'null' : String(binding.contentLength),
     String(binding.issuedAt),
     String(binding.expiresAt),

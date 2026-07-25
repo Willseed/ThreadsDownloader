@@ -14,6 +14,7 @@ import {
   decodeDownloadSessionRenewResponse,
   decodeDownloadSessionStatusResponse,
   destroyDownloadSession,
+  DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS,
   downloadHeaderEvidenceSource,
   DownloadSessionClientError,
   encodeDownloadHeaderEvidence,
@@ -36,6 +37,17 @@ const LAST_MODIFIED = 'Mon, 01 Jan 2024 00:00:00 GMT';
 
 function bytes(length: number, offset = 0): Uint8Array {
   return Uint8Array.from({ length }, (_, index) => (index + offset) % 256);
+}
+
+function never<T>(): Promise<T> {
+  return new Promise<T>(() => undefined);
+}
+
+function hangingJsonResponse(status: number): Response {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 const downloadId = encodeBase64Url(bytes(24, 1));
@@ -625,6 +637,67 @@ describe('download session namespace client', () => {
       });
     },
   );
+
+  it.each(['initialize', 'initialize-body', 'compensation'] as const)(
+    'bounds a never-settling %s request during uncertain initialization',
+    async (stalledRequest) => {
+      vi.useFakeTimers();
+      try {
+        const requests: Request[] = [];
+        const sessions = namespace(async (request) => {
+          requests.push(request.clone() as unknown as Request);
+          if (requests.length === 1) {
+            if (stalledRequest === 'initialize') {
+              return never();
+            }
+            if (stalledRequest === 'initialize-body') {
+              return hangingJsonResponse(201);
+            }
+            return Promise.reject(new Error('ambiguous initialize transport'));
+          }
+          return stalledRequest === 'compensation' ? never() : Response.json({ ok: true });
+        });
+        const outcome = expectClientError(
+          initializeDownloadSession(sessions, {
+            sessionHash,
+            filename: 'threads_Abcde_1.mp4',
+            shortcode: 'Abcde_1',
+            media: media(),
+          }),
+          'DOWNLOAD_SESSION_UNAVAILABLE',
+          503,
+          [PRIVATE_URL, sessionHash],
+        );
+
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS);
+        await outcome;
+        expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+          '/initialize',
+          '/destroy',
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('bounds a never-settling destroy acknowledgement body', async () => {
+    vi.useFakeTimers();
+    try {
+      const outcome = expectClientError(
+        destroyDownloadSession(
+          namespace(async () => hangingJsonResponse(200)),
+          identity,
+        ),
+        'DOWNLOAD_SESSION_UNAVAILABLE',
+        503,
+      );
+      await vi.advanceTimersByTimeAsync(DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('compensates a 500 initialize failure without reading or leaking its body', async () => {
     const requests: Request[] = [];

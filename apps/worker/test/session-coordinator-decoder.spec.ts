@@ -267,7 +267,7 @@ describe('SessionCoordinator request error contract', () => {
         reservationId: vaultReservationId,
         outcome: 'release',
       },
-      200,
+      409,
     ],
   ])('uses safe missing-state semantics for %s', async (path, body, expectedStatus) => {
     const now = Date.now();

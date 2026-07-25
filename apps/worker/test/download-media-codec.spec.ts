@@ -177,6 +177,7 @@ function legacyBinding(): ResolvedMediaGrantBinding {
     candidateId: encodeBase64Url(bytes(24, 41)),
     ordinal: 1,
     filename: 'threads_Abcde_1.mp4',
+    shortcode: 'Abcde_1',
     contentLength: 42,
     issuedAt: NOW,
     expiresAt: NOW + 300_000,

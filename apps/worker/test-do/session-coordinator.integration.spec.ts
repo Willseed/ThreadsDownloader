@@ -55,6 +55,8 @@ interface ClaimedVaultCandidate {
   readonly reservationId: string;
   readonly reservedAt: number;
   readonly reservationExpiresAt: number;
+  readonly filename: string;
+  readonly shortcode: string;
   readonly grant: Record<string, unknown>;
 }
 
@@ -67,6 +69,7 @@ interface VaultRow {
   readonly issued_at: number;
   readonly expires_at: number;
   readonly staging_expires_at: number | null;
+  readonly shortcode: string;
   readonly candidate_id: string;
   readonly filename: string;
   readonly content_length: number | null;
@@ -349,7 +352,7 @@ async function readVaultRows(stub: DurableObjectStub<SessionCoordinator>): Promi
     state.storage.sql
       .exec<VaultRow>(
         `SELECT b.resolve_id, b.permit_id, b.state, b.store_token, b.issued_at, b.expires_at,
-                b.staging_expires_at,
+                b.staging_expires_at, b.shortcode,
                 c.candidate_id, c.filename, c.content_length, c.sealed_grant,
                 c.reservation_id, c.reservation_expires_at
          FROM resolved_media_batches b
@@ -854,6 +857,7 @@ describe('SessionCoordinator in workerd', () => {
     expect(rows.every((row) => row.state === 'ready')).toBe(true);
     expect(rows.every((row) => row.store_token === null)).toBe(true);
     expect(rows.every((row) => row.staging_expires_at === null)).toBe(true);
+    expect(rows.every((row) => row.shortcode === 'Abcde_1')).toBe(true);
     expect(rows.every((row) => row.issued_at === stored.issuedAt)).toBe(true);
     expect(rows.every((row) => row.sealed_grant?.startsWith('v1.'))).toBe(true);
     expect(JSON.stringify(rows)).not.toContain(privateMediaUrl);
@@ -889,6 +893,8 @@ describe('SessionCoordinator in workerd', () => {
     expect(firstClaimBody.reservationExpiresAt - firstClaimBody.reservedAt).toBeLessThanOrEqual(
       30_000,
     );
+    expect(firstClaimBody.filename).toBe('threads_Abcde_1_1.mp4');
+    expect(firstClaimBody.shortcode).toBe('Abcde_1');
     expect(firstClaimBody.grant['finalUrl']).toBe(privateMediaUrl);
 
     expect(
@@ -985,6 +991,86 @@ describe('SessionCoordinator in workerd', () => {
         })
       ).status,
     ).toBe(200);
+  });
+
+  it('accepts a consumed retry only for the reservation recorded in its tombstone', async () => {
+    const context = await prepareVaultSession('vault-consume-tombstone-session');
+    const storedResponse = await storeVault(context.stub, context);
+    const stored = (await storedResponse.json()) as StoredVaultBatch;
+    const candidateId = stored.candidates[0]!.candidateId;
+    const expiredReservation = createOpaqueId();
+    expect(
+      (
+        await claimVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: context.now,
+          resolveId: stored.resolveId,
+          candidateId,
+          reservationId: expiredReservation,
+        })
+      ).status,
+    ).toBe(200);
+    await runInDurableObject(context.stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE resolved_media_candidates SET reservation_expires_at = ? WHERE resolve_id = ?',
+        Date.now() - 1,
+        stored.resolveId,
+      );
+    });
+
+    const consumingReservation = createOpaqueId();
+    expect(
+      (
+        await claimVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: context.now,
+          resolveId: stored.resolveId,
+          candidateId,
+          reservationId: consumingReservation,
+        })
+      ).status,
+    ).toBe(200);
+    const settlement = {
+      sessionHash: context.sessionHash,
+      csrfHash: context.csrfHash,
+      now: context.now + 1,
+      resolveId: stored.resolveId,
+      candidateId,
+      outcome: 'consume' as const,
+    };
+    expect(
+      (
+        await settleVault(context.stub, {
+          ...settlement,
+          reservationId: consumingReservation,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await settleVault(context.stub, {
+          ...settlement,
+          reservationId: expiredReservation,
+        })
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await settleVault(context.stub, {
+          ...settlement,
+          reservationId: consumingReservation,
+        })
+      ).status,
+    ).toBe(200);
+
+    const tombstones = await runInDurableObject(context.stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ reservation_id: string }>('SELECT reservation_id FROM resolved_media_consumptions')
+        .toArray(),
+    );
+    expect(tombstones).toEqual([{ reservation_id: consumingReservation }]);
   });
 
   it('uses the fresh object clock and caps batch expiry at the session or five minutes', async () => {
@@ -1273,6 +1359,35 @@ describe('SessionCoordinator in workerd', () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  it('rejects a stored shortcode that no longer matches the authenticated media grant', async () => {
+    const context = await prepareVaultSession('vault-shortcode-authority-session');
+    const storedResponse = await storeVault(context.stub, {
+      ...context,
+      shortcode: 'Original_1',
+    });
+    const stored = (await storedResponse.json()) as StoredVaultBatch;
+
+    await runInDurableObject(context.stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE resolved_media_batches SET shortcode = ? WHERE resolve_id = ?',
+        'Forged_2',
+        stored.resolveId,
+      );
+    });
+
+    const response = await claimVault(context.stub, {
+      sessionHash: context.sessionHash,
+      csrfHash: context.csrfHash,
+      now: context.now + 1,
+      resolveId: stored.resolveId,
+      candidateId: stored.candidates[0]!.candidateId,
+      reservationId: createOpaqueId(),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ ok: false });
+    expect(await readVaultRows(context.stub)).toEqual([]);
   });
 
   it('compensates staging rows after seal or CAS failure', async () => {

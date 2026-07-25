@@ -9,6 +9,7 @@ export const RESOLVE_VAULT_MAX_BATCH_CANDIDATES = 10;
 export const RESOLVE_VAULT_TTL_MS = 300_000;
 export const RESOLVE_VAULT_STAGING_MS = 30_000;
 export const RESOLVE_VAULT_RESERVATION_MS = 30_000;
+export const RESOLVE_VAULT_REQUEST_TIMEOUT_MS = 8_000;
 
 const SESSION_HASH_CHARACTERS = 43;
 const SESSION_HASH_BYTES = 32;
@@ -76,6 +77,8 @@ export interface StoredResolvedMediaBatch {
 export interface ResolvedMediaClaim {
   readonly reservationId: string;
   readonly reservationExpiresAt: number;
+  readonly filename: string;
+  readonly shortcode: string;
   readonly media: ProbedMedia;
 }
 
@@ -375,17 +378,27 @@ async function internalPost(
   path: string,
   body: Record<string, unknown>,
 ): Promise<Response> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const stub = sessions.get(sessions.idFromName(identity.rawId));
-    return await stub.fetch(
-      new Request(`https://session.internal${path}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      }),
-    );
+    const request = new Request(`https://session.internal${path}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const expired = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new ResolveVaultError('RESOLVE_VAULT_UNAVAILABLE')),
+        RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
+      );
+    });
+    return await Promise.race([stub.fetch(request), expired]);
   } catch {
     return fail('RESOLVE_VAULT_UNAVAILABLE');
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -417,10 +430,21 @@ function decodeSafeCandidate(value: unknown): SafeResolvedMediaCandidate | null 
 }
 
 async function readJson(response: Response): Promise<unknown> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await response.json();
+    const expired = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new ResolveVaultError('RESOLVE_VAULT_UNAVAILABLE')),
+        RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
+      );
+    });
+    return await Promise.race([response.json(), expired]);
   } catch {
     return fail('RESOLVE_VAULT_UNAVAILABLE');
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -514,12 +538,17 @@ export async function claimResolvedMediaCandidate(
     if (!(error instanceof ResolveVaultError) || error.code !== 'RESOLVE_VAULT_UNAVAILABLE') {
       throw error;
     }
-    response = await internalPost(
-      input.sessions,
-      input.identity,
-      '/resolve-vault/claim',
-      requestBody,
-    );
+    try {
+      response = await internalPost(
+        input.sessions,
+        input.identity,
+        '/resolve-vault/claim',
+        requestBody,
+      );
+    } catch {
+      await bestEffortRelease(input, reservationId);
+      return fail('RESOLVE_VAULT_UNAVAILABLE');
+    }
   }
   if (response.status !== 200) {
     return mapStatus(response.status);
@@ -540,9 +569,21 @@ export async function claimResolvedMediaCandidate(
   }
   if (
     !isPlainObject(body) ||
-    !hasExactKeys(body, ['grant', 'ok', 'reservationExpiresAt', 'reservationId', 'reservedAt']) ||
+    !hasExactKeys(body, [
+      'filename',
+      'grant',
+      'ok',
+      'reservationExpiresAt',
+      'reservationId',
+      'reservedAt',
+      'shortcode',
+    ]) ||
     body['ok'] !== true ||
     body['reservationId'] !== reservationId ||
+    typeof body['filename'] !== 'string' ||
+    !SAFE_FILENAME.test(body['filename']) ||
+    typeof body['shortcode'] !== 'string' ||
+    !SHORTCODE.test(body['shortcode']) ||
     !isBoundedServerDeadline(
       body['reservedAt'],
       body['reservationExpiresAt'],
@@ -558,7 +599,13 @@ export async function claimResolvedMediaCandidate(
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
-  return { reservationId, reservationExpiresAt: body['reservationExpiresAt'], media };
+  return {
+    reservationId,
+    reservationExpiresAt: body['reservationExpiresAt'],
+    filename: body['filename'],
+    shortcode: body['shortcode'],
+    media,
+  };
 }
 
 async function bestEffortRelease(
