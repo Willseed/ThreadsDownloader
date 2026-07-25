@@ -3,6 +3,11 @@
   "name": "threads-downloader-dev",
   "main": "apps/worker/src/index.ts",
   "compatibility_date": "2026-07-25",
+  "workers_dev": false,
+  "preview_urls": false,
+  "secrets": {
+    "required": ["SESSION_SIGNING_KEY"],
+  },
   "vars": {
     "EXPECTED_HOST": "localhost",
     "EXPECTED_ORIGIN": "http://localhost:8787",
@@ -12,5 +17,19 @@
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
     "run_worker_first": true,
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSIONS",
+        "class_name": "SessionCoordinator",
+      },
+    ],
+  },
+  "exports": {
+    "SessionCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
   },
 }

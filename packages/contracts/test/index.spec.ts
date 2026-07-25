@@ -5,6 +5,7 @@ import {
   type ApiError,
   type ApiErrorCode,
   type HealthResponse,
+  type SessionResponse,
 } from '../src/index.js';
 
 describe('contracts', () => {
@@ -21,5 +22,9 @@ describe('contracts', () => {
   it('keeps response discriminants type-safe', () => {
     expectTypeOf<ApiError['error']['code']>().toEqualTypeOf<ApiErrorCode>();
     expectTypeOf<HealthResponse['status']>().toEqualTypeOf<'ok'>();
+    expectTypeOf<SessionResponse>().toEqualTypeOf<{
+      readonly csrfToken: string;
+      readonly expiresAt: string;
+    }>();
   });
 });

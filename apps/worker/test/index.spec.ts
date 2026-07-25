@@ -1,13 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import worker, { type Env } from '../src/index.js';
+import worker, { authorizeSession, type Env, type SessionNamespace } from '../src/index.js';
 
 const expectedHost = 'threads.example.test';
+const signingKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
-function createEnv(assetResponse = new Response('<app-root></app-root>', { status: 200 })): Env {
+interface FakeSessionRecord {
+  readonly sessionHash: string;
+  readonly csrfHash: string;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+function createSessionNamespace(requests: unknown[] = [], responseStatus = 200): SessionNamespace {
+  const ids = new Map<DurableObjectId, string>();
+  const records = new Map<string, FakeSessionRecord>();
+  return {
+    idFromName(name) {
+      const id = {} as DurableObjectId;
+      ids.set(id, name);
+      return id;
+    },
+    get(id) {
+      const name = ids.get(id)!;
+      return {
+        async fetch(request) {
+          const body: unknown = await request.json();
+          requests.push(body);
+          if (responseStatus !== 200) {
+            return Response.json({ ok: false }, { status: responseStatus });
+          }
+          if (new URL(request.url).pathname === '/authorize') {
+            return Response.json({ ok: true });
+          }
+          const input = body as FakeSessionRecord;
+          const current = records.get(name);
+          const stored = current ?? input;
+          records.set(name, { ...stored, csrfHash: input.csrfHash });
+          return Response.json({ ok: true, expiresAt: stored.expiresAt });
+        },
+      };
+    },
+  };
+}
+
+function createEnv(
+  assetResponse = new Response('<app-root></app-root>', { status: 200 }),
+  sessions = createSessionNamespace(),
+): Env {
   return {
     EXPECTED_HOST: expectedHost,
     EXPECTED_ORIGIN: `https://${expectedHost}`,
+    SESSION_SIGNING_KEY: signingKey,
+    SESSIONS: sessions,
     ASSETS: { fetch: vi.fn(async () => assetResponse) },
   };
 }
@@ -22,6 +67,95 @@ describe('worker entry policy', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('creates an anonymous session without exposing internal identifiers', async () => {
+    const requests: unknown[] = [];
+    const response = await fetchWorker(
+      '/api/session',
+      createEnv(undefined, createSessionNamespace(requests)),
+    );
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('set-cookie')).toContain('__Host-td_session=');
+    expect(text).toContain('csrfToken');
+    expect(text).toContain('expiresAt');
+    expect(text).not.toContain('sessionHash');
+    expect(text).not.toContain('rawId');
+    expect(requests).toHaveLength(1);
+    expect(Object.keys(requests[0] as Record<string, unknown>).sort()).toEqual([
+      'csrfHash',
+      'expiresAt',
+      'issuedAt',
+      'sessionHash',
+    ]);
+  });
+
+  it('reuses a valid cookie while rotating CSRF without resetting the cookie', async () => {
+    const sessions = createSessionNamespace();
+    const env = createEnv(undefined, sessions);
+    const first = await fetchWorker('/api/session', env);
+    const firstBody = (await first.json()) as { csrfToken: string; expiresAt: string };
+    const cookie = first.headers.get('set-cookie')!.split(';', 1)[0]!;
+
+    const next = await worker.fetch(
+      new Request(`https://${expectedHost}/api/session`, { headers: { cookie } }),
+      env,
+      {} as ExecutionContext,
+    );
+    const nextBody = (await next.json()) as { csrfToken: string; expiresAt: string };
+    expect(next.headers.get('set-cookie')).toBeNull();
+    expect(nextBody.csrfToken).not.toBe(firstBody.csrfToken);
+    expect(nextBody.expiresAt).toBe(firstBody.expiresAt);
+  });
+
+  it('replaces a tampered cookie and returns a safe internal denial', async () => {
+    const replacement = await worker.fetch(
+      new Request(`https://${expectedHost}/api/session`, {
+        headers: { cookie: '__Host-td_session=tampered.secret' },
+      }),
+      createEnv(),
+      {} as ExecutionContext,
+    );
+    expect(replacement.status).toBe(200);
+    expect(replacement.headers.get('set-cookie')).toContain('__Host-td_session=');
+
+    const denied = await fetchWorker(
+      '/api/session',
+      createEnv(undefined, createSessionNamespace([], 401)),
+    );
+    const body = await denied.text();
+    expect(denied.status).toBe(500);
+    expect(body).toContain('INTERNAL_ERROR');
+    expect(body).not.toContain('sessionHash');
+  });
+
+  it('authorizes through a hash-only internal request and safely handles failures', async () => {
+    const requests: unknown[] = [];
+    await expect(
+      authorizeSession(
+        createSessionNamespace(requests),
+        'internal-id',
+        'A'.repeat(43),
+        'B'.repeat(43),
+        100,
+      ),
+    ).resolves.toBe(true);
+    expect(Object.keys(requests[0] as Record<string, unknown>).sort()).toEqual([
+      'csrfHash',
+      'now',
+      'sessionHash',
+    ]);
+    await expect(
+      authorizeSession(
+        createSessionNamespace([], 500),
+        'internal-id',
+        'A'.repeat(43),
+        'B'.repeat(43),
+      ),
+    ).resolves.toBe(false);
   });
 
   it.each([
