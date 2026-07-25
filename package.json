@@ -29,6 +29,7 @@
     "security:wrangler": "node scripts/check-wrangler-exposure.mjs",
     "security:bundle": "node scripts/check-bundle-secrets.mjs",
     "e2e": "playwright test",
+    "test:accessibility": "playwright test e2e/accessibility.e2e.spec.ts",
     "worker:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc"
   },
   "devDependencies": {
@@ -38,12 +39,15 @@
     "@angular/build": "22.0.8",
     "@angular/cli": "22.0.8",
     "@angular/compiler-cli": "22.0.8",
+    "@axe-core/playwright": "4.12.1",
     "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@cloudflare/workers-types": "5.20260724.1",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.61.1",
     "@types/node": "24.13.3",
     "@typescript-eslint/eslint-plugin": "8.65.0",
     "@typescript-eslint/parser": "8.65.0",
+    "@vitest/coverage-v8": "4.1.10",
     "eslint": "10.7.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-sonarjs": "4.2.0",
@@ -53,8 +57,6 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.65.0",
     "vitest": "4.1.10",
-    "@vitest/coverage-v8": "4.1.10",
-    "@cloudflare/workers-types": "5.20260724.1",
     "wrangler": "4.114.0"
   }
 }
