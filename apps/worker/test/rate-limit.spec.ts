@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  acquireResolvePermit,
+  nextResolvePermitDeadline,
+  pruneResolveRateLimit,
+  releaseResolvePermit,
+  ResolveRateLimitError,
+  type ResolveRateLimitState,
+} from '../src/security/rate-limit.js';
+import {
+  acquireSessionResolvePermit,
+  releaseSessionResolvePermit,
+  type SessionNamespace,
+} from '../src/index.js';
+import { decodeBase64Url } from '../src/utils/base64url.js';
+
+const permitIds = Array.from({ length: 8 }, (_, index) =>
+  btoa(`permit-${index}`.padEnd(16, '-')).replaceAll('=', ''),
+);
+const empty: ResolveRateLimitState = { events: [], permits: [] };
+
+function expectRateError(action: () => unknown, code: string): void {
+  expect(action).toThrowError(ResolveRateLimitError);
+  try {
+    action();
+  } catch (error) {
+    expect((error as ResolveRateLimitError).code).toBe(code);
+  }
+}
+
+describe('resolve rate-limit state', () => {
+  it('admits five released attempts and denies the sixth without mutating state', () => {
+    let state = empty;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      state = acquireResolvePermit(state, attempt, permitIds[attempt]!);
+      state = releaseResolvePermit(state, attempt, permitIds[attempt]!);
+    }
+    const before = structuredClone(state);
+    expectRateError(() => acquireResolvePermit(state, 5, permitIds[5]!), 'RESOLVE_WINDOW_LIMIT');
+    expect(state).toEqual(before);
+  });
+
+  it('expires an event at exactly the sixty-second boundary', () => {
+    const state = { events: [1_000], permits: [] };
+    expect(pruneResolveRateLimit(state, 60_999).events).toEqual([1_000]);
+    expect(pruneResolveRateLimit(state, 61_000).events).toEqual([]);
+  });
+
+  it('denies a concurrent permit until release', () => {
+    const admitted = acquireResolvePermit(empty, 100, permitIds[0]!);
+    expectRateError(
+      () => acquireResolvePermit(admitted, 101, permitIds[1]!),
+      'RESOLVE_CONCURRENT_LIMIT',
+    );
+    expect(
+      acquireResolvePermit(releaseResolvePermit(admitted, 102, permitIds[0]!), 103, permitIds[1]!)
+        .permits,
+    ).toHaveLength(1);
+  });
+
+  it('cleans an expired lease and reports the earliest active deadline', () => {
+    const first = acquireResolvePermit(empty, 10, permitIds[0]!);
+    expect(nextResolvePermitDeadline(first)).toBe(30_010);
+    expect(pruneResolveRateLimit(first, 30_009).permits).toHaveLength(1);
+    expect(pruneResolveRateLimit(first, 30_010).permits).toEqual([]);
+  });
+
+  it('releasing a missing valid permit is idempotent and immutable', () => {
+    const state = { events: [10], permits: [] };
+    expect(releaseResolvePermit(state, 11, permitIds[0]!)).toEqual(state);
+    expect(state).toEqual({ events: [10], permits: [] });
+  });
+
+  it.each([
+    [() => acquireResolvePermit(empty, -1, permitIds[0]!)],
+    [() => acquireResolvePermit(empty, Number.MAX_SAFE_INTEGER + 1, permitIds[0]!)],
+    [() => acquireResolvePermit(empty, 1, 'short')],
+    [() => releaseResolvePermit(empty, 1, 'not!base64url')],
+    [() => pruneResolveRateLimit({ events: [-1], permits: [] }, 1)],
+  ])('rejects unsafe times, IDs, and stored state', (action) => {
+    expectRateError(action, 'RESOLVE_RATE_INVALID');
+  });
+});
+
+describe('session resolve permit helpers', () => {
+  function namespace(
+    requests: unknown[],
+    acquireStatus = 201,
+    releaseStatus = 200,
+  ): SessionNamespace {
+    return {
+      idFromName() {
+        return {} as DurableObjectId;
+      },
+      get() {
+        return {
+          async fetch(request) {
+            const body: unknown = await request.json();
+            requests.push(body);
+            const release = new URL(request.url).pathname.endsWith('/release');
+            return release
+              ? Response.json({ ok: releaseStatus === 200 }, { status: releaseStatus })
+              : Response.json(
+                  { ok: acquireStatus === 201, expiresAt: 30_100 },
+                  { status: acquireStatus },
+                );
+          },
+        };
+      },
+    };
+  }
+
+  it('creates an opaque permit and sends only hashes and timestamps internally', async () => {
+    const requests: unknown[] = [];
+    const identity = { rawId: 'raw-session-id', sessionHash: 'A'.repeat(43) };
+    const permit = await acquireSessionResolvePermit(
+      namespace(requests),
+      identity,
+      'B'.repeat(43),
+      100,
+    );
+    expect(decodeBase64Url(permit.permitId).byteLength).toBeGreaterThanOrEqual(16);
+    expect(permit.expiresAt).toBe(30_100);
+    expect(JSON.stringify(requests)).not.toContain(identity.rawId);
+    expect(Object.keys(requests[0] as Record<string, unknown>).sort()).toEqual([
+      'csrfHash',
+      'now',
+      'permitId',
+      'sessionHash',
+    ]);
+  });
+
+  it('returns a safe typed denial and releases idempotently', async () => {
+    const identity = { rawId: 'internal-only', sessionHash: 'A'.repeat(43) };
+    await expect(
+      acquireSessionResolvePermit(namespace([], 429), identity, 'B'.repeat(43), 100),
+    ).rejects.toMatchObject({ code: 'RESOLVE_PERMIT_DENIED' });
+    await expect(
+      releaseSessionResolvePermit(namespace([]), identity, permitIds[0]!, 100),
+    ).resolves.toBe(true);
+    await expect(
+      releaseSessionResolvePermit(namespace([], 201, 500), identity, permitIds[0]!, 100),
+    ).resolves.toBe(false);
+  });
+});
