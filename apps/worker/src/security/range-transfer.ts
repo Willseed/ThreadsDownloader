@@ -61,6 +61,13 @@ export interface UpstreamTransferInput {
   readonly pin?: RepresentationPin;
 }
 
+export interface RepresentationHeaders {
+  readonly contentLength: number | null;
+  readonly strongEtag: StrongEtagValidator | null;
+  readonly lastModified: LastModifiedValidator | null;
+  readonly validator: ReliableValidator | null;
+}
+
 function fail(code: RangeTransferErrorCode, total?: number): never {
   throw new RangeTransferError(code, total === undefined ? undefined : `bytes */${total}`);
 }
@@ -135,6 +142,18 @@ function parseLastModified(value: string | null): LastModifiedValidator | null {
 
 function sameValidator(left: ReliableValidator, right: ReliableValidator): boolean {
   return left.kind === right.kind && left.value === right.value;
+}
+
+function inspectRepresentationValidators(
+  headers: HeaderSource,
+): Omit<RepresentationHeaders, 'contentLength'> {
+  const strongEtag = parseStrongEtag(headers.get('etag'));
+  const lastModified = parseLastModified(headers.get('last-modified'));
+  return {
+    strongEtag,
+    lastModified,
+    validator: strongEtag ?? lastModified,
+  };
 }
 
 function parseContentRange(value: string | null): ByteInterval {
@@ -221,8 +240,15 @@ export function decideIfRange(
   return parseLastModified(value)?.value === validator.value ? 'range' : 'full';
 }
 
+export function inspectRepresentationHeaders(headers: HeaderSource): RepresentationHeaders {
+  return {
+    contentLength: parseContentLength(headers),
+    ...inspectRepresentationValidators(headers),
+  };
+}
+
 export function extractRepresentationValidator(headers: HeaderSource): ReliableValidator | null {
-  return parseStrongEtag(headers.get('etag')) ?? parseLastModified(headers.get('last-modified'));
+  return inspectRepresentationValidators(headers).validator;
 }
 
 export function pinRepresentation(total: number, headers: HeaderSource): RepresentationPin | null {
@@ -321,6 +347,24 @@ export function createTransferPlan(input: UpstreamTransferInput): TransferPlan {
   return input.status === 206
     ? createPartialTransferPlan(input, validator, contentLength)
     : createFullTransferPlan(input, validator, contentLength);
+}
+
+export function createProbeTransferPlan(input: {
+  readonly status: 200 | 206;
+  readonly headers: HeaderSource;
+}): TransferPlan {
+  if (input.status === 200) {
+    if (input.headers.get('content-range') !== null) {
+      return fail('UPSTREAM_RANGE_INVALID');
+    }
+    return createTransferPlan(input);
+  }
+
+  const returned = parseContentRange(input.headers.get('content-range'));
+  if (returned.start !== 0 || returned.end !== 0) {
+    return fail('UPSTREAM_RANGE_INVALID');
+  }
+  return createTransferPlan({ ...input, requested: returned });
 }
 
 export function mergeCompletedIntervals(

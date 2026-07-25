@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   coversFullRepresentation,
+  createProbeTransferPlan,
   createTransferPlan,
   decideIfRange,
   extractRepresentationValidator,
+  inspectRepresentationHeaders,
   mergeCompletedIntervals,
   parseSingleByteRange,
   pinRepresentation,
@@ -121,6 +123,44 @@ describe('validators and If-Range', () => {
     expect(pinRepresentation(0, etagHeaders)).toBeNull();
     expect(pinRepresentation(10, headers({ etag: 'W/"v1"' }))).toBeNull();
   });
+
+  it('inspects length and preserves both reliable validator headers', () => {
+    expect(inspectRepresentationHeaders(etagHeaders)).toEqual({
+      contentLength: null,
+      strongEtag: { kind: 'etag', value: '"v1"' },
+      lastModified: {
+        kind: 'last-modified',
+        value: 'Mon, 01 Jan 2024 00:00:00 GMT',
+      },
+      validator: { kind: 'etag', value: '"v1"' },
+    });
+    expect(
+      inspectRepresentationHeaders(
+        headers({
+          'content-length': '10',
+          etag: 'W/"weak"',
+          'last-modified': 'Mon, 01 Jan 2024 00:00:00 GMT',
+        }),
+      ),
+    ).toEqual({
+      contentLength: 10,
+      strongEtag: null,
+      lastModified: {
+        kind: 'last-modified',
+        value: 'Mon, 01 Jan 2024 00:00:00 GMT',
+      },
+      validator: {
+        kind: 'last-modified',
+        value: 'Mon, 01 Jan 2024 00:00:00 GMT',
+      },
+    });
+  });
+
+  it('keeps validator extraction independent from unrelated invalid length metadata', () => {
+    const source = headers({ 'content-length': 'private-invalid', etag: '"v1"' });
+    expect(extractRepresentationValidator(source)).toEqual({ kind: 'etag', value: '"v1"' });
+    expectRangeError(() => inspectRepresentationHeaders(source), 'UPSTREAM_RANGE_INVALID');
+  });
 });
 
 describe('createTransferPlan', () => {
@@ -193,6 +233,69 @@ describe('createTransferPlan', () => {
           headers: headers({ 'content-range': 'bytes 2-5/10', etag: '"v2"' }),
         }),
       'VALIDATOR_MISMATCH',
+    );
+  });
+});
+
+describe('createProbeTransferPlan', () => {
+  it('derives the full representation length from an exact one-byte 206 probe', () => {
+    expect(
+      createProbeTransferPlan({
+        status: 206,
+        headers: headers({
+          'content-range': 'bytes 0-0/10',
+          'content-length': '1',
+          etag: '"v1"',
+        }),
+      }),
+    ).toEqual({
+      start: 0,
+      end: 0,
+      expectedBytes: 1,
+      total: 10,
+      validator: { kind: 'etag', value: '"v1"' },
+      completionReliable: true,
+    });
+    expect(
+      createProbeTransferPlan({
+        status: 206,
+        headers: headers({ 'content-range': 'bytes 0-0/10' }),
+      }),
+    ).toMatchObject({ expectedBytes: 1, total: 10, completionReliable: false });
+  });
+
+  it.each([
+    {},
+    { 'content-range': 'bytes 0-1/10' },
+    { 'content-range': 'bytes 1-1/10' },
+    { 'content-range': 'bytes 0-0/0' },
+    { 'content-range': 'bytes 0-0/*' },
+    { 'content-range': 'bytes 0-0/10', 'content-length': '0' },
+    { 'content-range': 'bytes 0-0/10', 'content-length': '2' },
+  ] as Record<string, string>[])(
+    'rejects 206 metadata that is not an exact one-byte probe',
+    (values) => {
+      expectRangeError(
+        () => createProbeTransferPlan({ status: 206, headers: headers(values) }),
+        'UPSTREAM_RANGE_INVALID',
+      );
+    },
+  );
+
+  it('accepts a full 200 plan only without Content-Range metadata', () => {
+    expect(
+      createProbeTransferPlan({
+        status: 200,
+        headers: headers({ 'content-length': '10', etag: '"v1"' }),
+      }),
+    ).toMatchObject({ total: 10, completionReliable: true });
+    expectRangeError(
+      () =>
+        createProbeTransferPlan({
+          status: 200,
+          headers: headers({ 'content-length': '10', 'content-range': 'bytes 0-9/10' }),
+        }),
+      'UPSTREAM_RANGE_INVALID',
     );
   });
 });
