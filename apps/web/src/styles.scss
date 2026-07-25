@@ -1,42 +1,215 @@
 :root {
-  color: #1d2433;
-  background: #f7f8fb;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color-scheme: dark;
+  --color-canvas: #000;
+  --color-ink: #fff;
+  --color-muted: #b8b8b8;
+  --color-hairline: #666;
+  --font-interface: ui-sans-serif, system-ui, -apple-system, blinkmacsystemfont, "Segoe UI",
+    sans-serif;
+  --font-industrial: "Arial Narrow", "Aptos Narrow", "Helvetica Neue", arial, sans-serif;
+  --hairline: 1px;
+  --focus-width: 3px;
+  --control-size: 2.75rem;
+  --content-width: 72rem;
+  --space-1: 0.5rem;
+  --space-2: 0.75rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2rem;
+  --space-6: 3rem;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  font-family: var(--font-interface);
+  font-synthesis: none;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 20rem;
+  background: var(--color-canvas);
 }
 
 body {
+  min-height: 100vh;
   margin: 0;
+  color: var(--color-ink);
+  background: var(--color-canvas);
 }
 
-button:focus-visible,
-input:focus-visible {
-  outline: 3px solid #005fcc;
-  outline-offset: 3px;
-}
-
-.downloader {
-  max-width: 42rem;
-  margin: 4rem auto;
-  padding: 0 1.5rem;
-}
-
+button,
 input {
-  display: block;
-  box-sizing: border-box;
-  width: 100%;
-  margin: 0.5rem 0;
-  padding: 0.75rem;
+  min-height: var(--control-size);
+  color: inherit;
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
 }
 
 button {
+  min-width: var(--control-size);
+  padding: 0.625rem 1.25rem;
+  color: var(--color-ink);
+  background: transparent;
+  border: var(--hairline) solid var(--color-ink);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  color: var(--color-canvas);
+  background: var(--color-ink);
+}
+
+button:disabled {
+  color: var(--color-muted);
+  border-color: var(--color-hairline);
+  cursor: not-allowed;
+}
+
+input:not([type="checkbox"]):not([type="radio"]) {
+  display: block;
+  width: 100%;
   padding: 0.75rem 1rem;
-  color: #fff;
-  background: #004b9b;
-  border: 0;
-  border-radius: 0.25rem;
+  color: var(--color-ink);
+  background: var(--color-canvas);
+  border: var(--hairline) solid var(--color-hairline);
+  border-radius: 0;
+  caret-color: var(--color-ink);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: var(--control-size);
+  margin: 0;
+  accent-color: var(--color-ink);
+}
+
+input:not([type="checkbox"]):not([type="radio"])::placeholder {
+  color: var(--color-muted);
+  opacity: 1;
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: var(--focus-width) solid var(--color-ink);
+  outline-offset: 4px;
+}
+
+a {
+  color: var(--color-ink);
+  text-decoration-thickness: var(--hairline);
+  text-underline-offset: 0.25em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+h1,
+h2,
+h3 {
+  margin-block: 0;
+  font-family: var(--font-industrial);
+  font-stretch: condensed;
+  font-weight: 700;
+  line-height: 0.94;
+  letter-spacing: -0.035em;
+  text-transform: uppercase;
+}
+
+p {
+  max-width: 68ch;
+}
+
+.downloader {
+  display: grid;
+  align-content: center;
+  width: min(100%, var(--content-width));
+  min-height: 100vh;
+  margin-inline: auto;
+  padding: clamp(var(--space-5), 7vw, 6rem) clamp(var(--space-4), 5vw, var(--space-6));
+}
+
+.downloader h1 {
+  max-width: 12ch;
+  font-size: clamp(3rem, 10vw, 8rem);
+}
+
+.downloader > p {
+  color: var(--color-muted);
+}
+
+.downloader form {
+  display: grid;
+  gap: var(--space-3);
+  width: min(100%, 48rem);
+  margin-block: var(--space-5);
+  padding: clamp(var(--space-4), 4vw, var(--space-5));
+  border: var(--hairline) solid var(--color-hairline);
+}
+
+.downloader label {
+  font-family: var(--font-industrial);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.downloader form p {
+  margin-block: 0;
+  color: var(--color-muted);
+}
+
+.downloader form button {
+  justify-self: start;
+  margin-top: var(--space-2);
+}
+
+.downloader a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-size);
 }
 
 .error {
-  color: #a10f25;
-  font-weight: 600;
+  padding-inline-start: var(--space-3);
+  color: var(--color-ink);
+  border-inline-start: var(--hairline) solid var(--color-ink);
+  font-weight: 700;
+}
+
+@media (max-width: 40rem) {
+  .downloader {
+    align-content: start;
+  }
+
+  .downloader h1 {
+    font-size: clamp(2.75rem, 16vw, 5rem);
+  }
+
+  .downloader form button {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }
