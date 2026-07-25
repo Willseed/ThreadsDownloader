@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createMediaProbe,
   MediaProbeError,
+  normalizeProbedMedia,
   type MediaProbeErrorCode,
   type MediaProbeFetch,
 } from '../src/resolver/media-probe.js';
@@ -141,6 +142,35 @@ function expectCancelledWithoutRead(tracked: TrackedResponse): void {
   expect(tracked.pullCalls()).toBe(0);
   expect(tracked.readCalls()).toBe(0);
 }
+
+describe('normalizeProbedMedia', () => {
+  it('rebuilds derived metadata and rejects an asserted validator mismatch', () => {
+    const input = {
+      finalUrl: PRIVATE_CANDIDATE,
+      contentType: 'video/mp4',
+      contentLength: 10,
+      rangeCapability: 'bytes',
+      strongEtag: '"strong-v1"',
+      lastModified: LAST_MODIFIED,
+      completionReliable: true,
+      probeMethod: 'head',
+    } as const;
+
+    expect(normalizeProbedMedia(input)).toEqual({
+      ...input,
+      finalUrl: candidate,
+      validator: { kind: 'etag', value: '"strong-v1"' },
+    });
+    expect(() =>
+      normalizeProbedMedia({
+        ...input,
+        validator: { kind: 'last-modified', value: LAST_MODIFIED },
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<MediaProbeError>>({ code: 'MEDIA_PROBE_METADATA_INVALID' }),
+    );
+  });
+});
 
 describe('MediaProbe HEAD', () => {
   it('uses one timeout and a fresh credential-free fixed HEAD request', async () => {

@@ -13,6 +13,16 @@ import {
 
 const MEDIA_PROBE_TIMEOUT_MS = 8_000;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
+const PROBED_MEDIA_FIELDS = [
+  'completionReliable',
+  'contentLength',
+  'contentType',
+  'finalUrl',
+  'lastModified',
+  'probeMethod',
+  'rangeCapability',
+  'strongEtag',
+] as const;
 
 export type MediaRangeCapability = 'bytes' | 'none' | 'unknown';
 
@@ -65,6 +75,22 @@ interface TerminalResponse {
 
 function fail(code: MediaProbeErrorCode): never {
   throw new MediaProbeError(code);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasProbedMediaFields(value: Record<string, unknown>): boolean {
+  const actual = Object.keys(value).sort();
+  const required = [...PROBED_MEDIA_FIELDS];
+  const withValidator = [...required, 'validator'].sort();
+  return (
+    (actual.length === required.length &&
+      actual.every((field, index) => field === required[index])) ||
+    (actual.length === withValidator.length &&
+      actual.every((field, index) => field === withValidator[index]))
+  );
 }
 
 function defaultTimeoutSignal(milliseconds: number): AbortSignal {
@@ -211,6 +237,159 @@ function parseVideoContentType(headers: Headers): string {
   return mediaType;
 }
 
+function normalizeFinalUrl(value: unknown): CdnUrl {
+  let href: string;
+  if (typeof value === 'string') {
+    href = value;
+  } else if (
+    isPlainObject(value) &&
+    Object.keys(value).length === 1 &&
+    value['url'] instanceof URL
+  ) {
+    href = value['url'].href;
+  } else {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+
+  try {
+    const parsed = parseCdnUrl(href);
+    return parsed.url.href === href ? parsed : fail('MEDIA_PROBE_METADATA_INVALID');
+  } catch {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+}
+
+function normalizeContentType(value: unknown): string {
+  if (typeof value !== 'string') {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  try {
+    const headers = new Headers({ 'content-type': value });
+    const normalized = parseVideoContentType(headers);
+    return normalized === value ? normalized : fail('MEDIA_PROBE_METADATA_INVALID');
+  } catch {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+}
+
+function validatorsMatch(left: ReliableValidator | null, right: unknown): boolean {
+  if (left === null) {
+    return right === null;
+  }
+  return (
+    isPlainObject(right) &&
+    Object.keys(right).sort().join(',') === 'kind,value' &&
+    right['kind'] === left.kind &&
+    right['value'] === left.value
+  );
+}
+
+function normalizeContentLength(value: unknown): number | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  return value;
+}
+
+function normalizeOptionalHeader(value: unknown): string | null {
+  if (value !== null && typeof value !== 'string') {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  return value;
+}
+
+function normalizeRepresentation(value: Record<string, unknown>): {
+  readonly contentLength: number | null;
+  readonly strongEtag: string | null;
+  readonly lastModified: string | null;
+  readonly validator: ReliableValidator | null;
+} {
+  const contentLength = normalizeContentLength(value['contentLength']);
+  const strongEtag = normalizeOptionalHeader(value['strongEtag']);
+  const lastModified = normalizeOptionalHeader(value['lastModified']);
+  const headers = new Headers();
+  if (contentLength !== null) {
+    headers.set('content-length', String(contentLength));
+  }
+  if (strongEtag !== null) {
+    headers.set('etag', strongEtag);
+  }
+  if (lastModified !== null) {
+    headers.set('last-modified', lastModified);
+  }
+  let representation;
+  try {
+    representation = inspectRepresentationHeaders(headers);
+  } catch {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  if (
+    (representation.strongEtag?.value ?? null) !== strongEtag ||
+    (representation.lastModified?.value ?? null) !== lastModified ||
+    ('validator' in value && !validatorsMatch(representation.validator, value['validator']))
+  ) {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  return { contentLength, strongEtag, lastModified, validator: representation.validator };
+}
+
+function normalizeRangeCapability(value: unknown): MediaRangeCapability {
+  if (value !== 'bytes' && value !== 'none' && value !== 'unknown') {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  return value;
+}
+
+function normalizeProbeMethod(
+  value: unknown,
+  rangeCapability: MediaRangeCapability,
+): ProbedMedia['probeMethod'] {
+  if (
+    (value !== 'head' && value !== 'range-get') ||
+    (value === 'range-get' && rangeCapability === 'unknown')
+  ) {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  return value;
+}
+
+function normalizeCompletionReliability(
+  value: unknown,
+  representation: {
+    readonly contentLength: number | null;
+    readonly validator: ReliableValidator | null;
+  },
+): boolean {
+  const expected = representation.contentLength !== null && representation.validator !== null;
+  return typeof value === 'boolean' && value === expected
+    ? value
+    : fail('MEDIA_PROBE_METADATA_INVALID');
+}
+
+export function normalizeProbedMedia(value: unknown): ProbedMedia {
+  if (!isPlainObject(value) || !hasProbedMediaFields(value)) {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
+  const representation = normalizeRepresentation(value);
+  const rangeCapability = normalizeRangeCapability(value['rangeCapability']);
+  const probeMethod = normalizeProbeMethod(value['probeMethod'], rangeCapability);
+
+  return {
+    finalUrl: normalizeFinalUrl(value['finalUrl']),
+    contentType: normalizeContentType(value['contentType']),
+    contentLength: representation.contentLength,
+    rangeCapability,
+    strongEtag: representation.strongEtag,
+    lastModified: representation.lastModified,
+    validator: representation.validator,
+    completionReliable: normalizeCompletionReliability(value['completionReliable'], representation),
+    probeMethod,
+  };
+}
+
 function assertIdentityEncoding(headers: Headers): void {
   const encoding = headers.get('content-encoding');
   if (encoding !== null && encoding.trim().toLowerCase() !== 'identity') {
@@ -254,17 +433,16 @@ function inspectSuccessfulResponse(
   } else {
     rangeCapability = terminal.response.status === 206 ? 'bytes' : 'none';
   }
-  return {
+  return normalizeProbedMedia({
     finalUrl: terminal.finalUrl,
     contentType,
     contentLength: plan.total,
     rangeCapability,
     strongEtag: representation.strongEtag?.value ?? null,
     lastModified: representation.lastModified?.value ?? null,
-    validator: representation.validator,
     completionReliable: plan.total !== null && plan.total > 0 && plan.validator !== null,
     probeMethod,
-  };
+  });
 }
 
 function createSignal(timeoutSignal: MediaProbeTimeoutSignalFactory): AbortSignal {
