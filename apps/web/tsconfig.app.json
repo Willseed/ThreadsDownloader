@@ -4,6 +4,9 @@
     "outDir": "../../dist/out-tsc/web",
     "types": []
   },
+  "angularCompilerOptions": {
+    "strictTemplates": true
+  },
   "files": ["src/main.ts"],
   "include": ["src/**/*.d.ts"]
 }
