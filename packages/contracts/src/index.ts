@@ -108,7 +108,15 @@ const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
 const CANONICAL_ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const SAFE_TURNSTILE_SITE_KEY = /^[A-Za-z0-9_-]{1,128}$/u;
-const UNSAFE_PUBLIC_MESSAGE = /https?:\/\/|cdninstagram\.com/iu;
+const UNSAFE_PUBLIC_SCHEME = /https?:\/\//iu;
+const DOMAIN_DOT_EQUIVALENT = /[\u3002\uFF0E\uFF61]/gu;
+const DOMAIN_CANDIDATE = /[\p{L}\p{M}\p{N}.-]+/gu;
+const IPV6_CANDIDATE = /[0-9A-Fa-f:.]+/gu;
+const ASCII_DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u;
+const ASCII_LETTER_TLD = /^[A-Za-z]{2,63}$/u;
+const ASCII_PUNYCODE_TLD_BODY = /^[A-Za-z0-9-]+$/u;
+const UNICODE_DOMAIN_CHARACTER = /^[\p{L}\p{M}\p{N}]$/u;
+const HEXADECIMAL_CHARACTER = /^[0-9A-Fa-f]$/u;
 const MAX_API_ERROR_MESSAGE_CHARACTERS = 256;
 const MAX_CONCURRENT_DOWNLOAD_STREAMS = 4;
 const MAX_RESOLVE_CANDIDATES = 8;
@@ -145,6 +153,151 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+function isAsciiTopLevelDomain(value: string): boolean {
+  if (ASCII_LETTER_TLD.test(value)) {
+    return true;
+  }
+  const lowercase = value.toLowerCase();
+  const punycodeBody = lowercase.slice(4);
+  return (
+    lowercase.startsWith('xn--') &&
+    lowercase.length <= 63 &&
+    punycodeBody.length > 0 &&
+    !punycodeBody.endsWith('-') &&
+    ASCII_PUNYCODE_TLD_BODY.test(punycodeBody)
+  );
+}
+
+function trimDomainDots(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (value[start] === '.') {
+    start += 1;
+  }
+  while (value[end - 1] === '.') {
+    end -= 1;
+  }
+  return value.slice(start, end);
+}
+
+function isDomainLabel(value: string): boolean {
+  if (value.length === 0 || value.length > 63 || value.startsWith('-') || value.endsWith('-')) {
+    return false;
+  }
+  for (const character of value) {
+    if (character !== '-' && !UNICODE_DOMAIN_CHARACTER.test(character)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function hasUnicodeCharacter(value: string): boolean {
+  for (const character of value) {
+    if (character.codePointAt(0)! > 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasDomain(value: string): boolean {
+  const normalized = value.replaceAll(DOMAIN_DOT_EQUIVALENT, '.');
+  const candidates = normalized.match(DOMAIN_CANDIDATE) ?? [];
+  return candidates.some((candidate) => {
+    const labels = trimDomainDots(candidate).split('.');
+    const topLevelDomain = labels.at(-1);
+    return (
+      labels.length >= 2 &&
+      topLevelDomain !== undefined &&
+      labels.every((label) =>
+        hasUnicodeCharacter(label) ? isDomainLabel(label) : ASCII_DOMAIN_LABEL.test(label),
+      ) &&
+      (isAsciiTopLevelDomain(topLevelDomain) ||
+        (hasUnicodeCharacter(topLevelDomain) && isDomainLabel(topLevelDomain)))
+    );
+  });
+}
+
+function isIpv4(value: string): boolean {
+  const parts = value.split('.');
+  return (
+    parts.length === 4 &&
+    parts.every(
+      (part) =>
+        part.length >= 1 &&
+        part.length <= 3 &&
+        [...part].every((character) => character >= '0' && character <= '9') &&
+        Number(part) <= 255,
+    )
+  );
+}
+
+function isHexadecimalSegment(value: string): boolean {
+  return (
+    value.length >= 1 &&
+    value.length <= 4 &&
+    [...value].every((character) => HEXADECIMAL_CHARACTER.test(character))
+  );
+}
+
+function ipv6SegmentCount(parts: readonly string[]): number | null {
+  let count = parts.length;
+  for (const [index, part] of parts.entries()) {
+    if (part.includes('.')) {
+      if (index !== parts.length - 1 || !isIpv4(part)) {
+        return null;
+      }
+      count += 1;
+    } else if (!isHexadecimalSegment(part)) {
+      return null;
+    }
+  }
+  return count;
+}
+
+function isIpv6(value: string): boolean {
+  if (!value.includes(':')) {
+    return false;
+  }
+  const compression = value.indexOf('::');
+  if (compression !== value.lastIndexOf('::')) {
+    return false;
+  }
+  const compressed = compression !== -1;
+  const left = compressed ? value.slice(0, compression) : value;
+  const right = compressed ? value.slice(compression + 2) : '';
+  const leftParts = left === '' ? [] : left.split(':');
+  const rightParts = right === '' ? [] : right.split(':');
+  const leftCount = ipv6SegmentCount(leftParts);
+  const rightCount = ipv6SegmentCount(rightParts);
+  if (leftCount === null || rightCount === null) {
+    return false;
+  }
+  const total = leftCount + rightCount;
+  return compressed ? total < 8 : total === 8;
+}
+
+function hasIpAddress(value: string): boolean {
+  const normalized = value.replaceAll(DOMAIN_DOT_EQUIVALENT, '.');
+  const domainCandidates = normalized.match(DOMAIN_CANDIDATE) ?? [];
+  if (domainCandidates.some((candidate) => isIpv4(trimDomainDots(candidate)))) {
+    return true;
+  }
+  return (normalized.match(IPV6_CANDIDATE) ?? []).some((candidate) =>
+    isIpv6(trimDomainDots(candidate)),
+  );
+}
+
+function hasReservedInternalHost(value: string): boolean {
+  const normalized = value.replaceAll(DOMAIN_DOT_EQUIVALENT, '.');
+  const candidates = normalized.match(DOMAIN_CANDIDATE) ?? [];
+  return candidates.some((candidate) => {
+    const lowercase = trimDomainDots(candidate).toLowerCase();
+    return lowercase === 'localhost' || lowercase === 'localhost.localdomain';
+  });
+}
+
 function isSafeApiErrorMessage(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -152,7 +305,10 @@ function isSafeApiErrorMessage(value: unknown): value is string {
     value.length <= MAX_API_ERROR_MESSAGE_CHARACTERS &&
     value.trim() === value &&
     !hasControlCharacter(value) &&
-    !UNSAFE_PUBLIC_MESSAGE.test(value)
+    !UNSAFE_PUBLIC_SCHEME.test(value) &&
+    !hasDomain(value) &&
+    !hasIpAddress(value) &&
+    !hasReservedInternalHost(value)
   );
 }
 

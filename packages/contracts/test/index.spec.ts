@@ -21,6 +21,18 @@ import {
   type SessionResponse,
 } from '../src/index.js';
 
+const unsafePublicEndpoints = [
+  'upstream.example',
+  'upstream\u3002example',
+  'upstream\uFF0Eexample',
+  'upstream\uFF61example',
+  '例子.測試',
+  '192.0.2.1',
+  '2001:db8::1',
+  'localhost',
+  'localhost.localdomain',
+] as const;
+
 describe('contracts', () => {
   it('creates the stable API error envelope', () => {
     const created = createApiError('NOT_FOUND', '找不到請求的 API 路徑。', 'A'.repeat(32));
@@ -41,6 +53,9 @@ describe('contracts', () => {
     ['INTERNAL_ERROR', ' 伺服器暫時無法處理請求。', 'A'.repeat(32)],
     ['INTERNAL_ERROR', '伺服器\n暫時無法處理請求。', 'A'.repeat(32)],
     ['INTERNAL_ERROR', 'https://private.example/error', 'A'.repeat(32)],
+    ...unsafePublicEndpoints.map(
+      (endpoint) => ['INTERNAL_ERROR', '上游來源 ' + endpoint + '.', 'A'.repeat(32)] as const,
+    ),
     ['INTERNAL_ERROR', 'cdninstagram.com', 'A'.repeat(32)],
     ['INTERNAL_ERROR', 'A'.repeat(257), 'A'.repeat(32)],
     ['INTERNAL_ERROR', '伺服器暫時無法處理請求。', 'request-1'],
@@ -62,6 +77,16 @@ describe('contracts', () => {
       expect((error as Error).message).toBe('API_ERROR_INVALID');
       expect((error as Error).message).not.toContain(unsafeMessage);
     }
+  });
+
+  it.each([
+    '伺服器暫時無法處理請求。',
+    '預計於 16:30:00 後重試。',
+    '預計於 2026-07-25T16:30:00.000Z 後重試。',
+  ])('keeps safe Traditional Chinese punctuation and time text public: %s', (message) => {
+    const created = createApiError('INTERNAL_ERROR', message, 'A'.repeat(32));
+
+    expect(decodeApiError(created)).toEqual(created);
   });
 
   it('keeps response discriminants type-safe', () => {
@@ -142,6 +167,8 @@ describe('contracts', () => {
           message: 'https://video.cdninstagram.com/video.mp4?token=private',
         },
       },
+      ...unsafePublicEndpoints.map((message) => ({ error: { ...response.error, message } })),
+      { error: { ...response.error, message: 'cdninstagram.com' } },
       { error: { ...response.error, message: '' } },
       { error: { ...response.error, requestId: 'A'.repeat(31) } },
       null,
