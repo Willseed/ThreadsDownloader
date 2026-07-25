@@ -23,6 +23,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:web": "npm run test --workspace=@threads-downloader/web",
     "test:worker": "npm run test --workspace=@threads-downloader/worker",
+    "test:do": "npm run test:do --workspace=@threads-downloader/worker",
     "coverage": "npm run coverage --workspace=@threads-downloader/worker",
     "e2e": "playwright test",
     "worker:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc"

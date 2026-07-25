@@ -174,6 +174,7 @@ export class SessionCoordinator extends DurableObject {
     if (decision.action === 'delete') {
       await this.ctx.storage.deleteAlarm();
       await this.ctx.storage.deleteAll();
+      this.ctx.storage.sql.exec(tableSql);
       return;
     }
     await this.ctx.storage.setAlarm(decision.expiresAt);

@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "wrangler deploy --dry-run --config ../../wrangler.jsonc",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage",
+    "test": "npm run test:unit && npm run test:do",
+    "test:unit": "vitest run --config vitest.config.ts",
+    "test:do": "vitest run --config vitest.do.config.ts",
+    "coverage": "vitest run --config vitest.config.ts --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
