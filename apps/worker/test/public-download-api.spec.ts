@@ -27,7 +27,7 @@ import {
 const NOW = Date.parse('2026-07-25T00:00:00.000Z');
 const EXPECTED_ORIGIN = 'https://threads.example';
 const SIGNING_KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
-const REQUEST_ID = 'public-request-id';
+const REQUEST_ID = 'A'.repeat(32);
 const RAW_SESSION_ID = encodeBase64Url(new Uint8Array(32).fill(1));
 const CSRF_TOKEN = encodeBase64Url(new Uint8Array(32).fill(2));
 const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));

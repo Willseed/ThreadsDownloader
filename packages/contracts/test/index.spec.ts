@@ -23,13 +23,45 @@ import {
 
 describe('contracts', () => {
   it('creates the stable API error envelope', () => {
-    expect(createApiError('NOT_FOUND', '找不到請求的 API 路徑。', 'request-1')).toEqual({
+    const created = createApiError('NOT_FOUND', '找不到請求的 API 路徑。', 'A'.repeat(32));
+
+    expect(created).toEqual({
       error: {
         code: 'NOT_FOUND',
         message: '找不到請求的 API 路徑。',
-        requestId: 'request-1',
+        requestId: 'A'.repeat(32),
       },
     });
+    expect(decodeApiError(created)).toEqual(created);
+  });
+
+  it.each([
+    ['PRIVATE_FAILURE' as ApiErrorCode, '伺服器暫時無法處理請求。', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', '', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', ' 伺服器暫時無法處理請求。', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', '伺服器\n暫時無法處理請求。', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', 'https://private.example/error', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', 'cdninstagram.com', 'A'.repeat(32)],
+    ['INTERNAL_ERROR', 'A'.repeat(257), 'A'.repeat(32)],
+    ['INTERNAL_ERROR', '伺服器暫時無法處理請求。', 'request-1'],
+  ] satisfies readonly (readonly [ApiErrorCode, string, string])[])(
+    'fails closed when API error input is outside the public contract: %s',
+    (code, message, requestId) => {
+      expect(() => createApiError(code, message, requestId)).toThrowError('API_ERROR_INVALID');
+    },
+  );
+
+  it('does not include rejected input in the fixed factory error', () => {
+    const unsafeMessage = 'https://private.example/secret';
+
+    try {
+      createApiError('INTERNAL_ERROR', unsafeMessage, 'invalid-request-id');
+      expect.unreachable('Expected invalid API error input to be rejected.');
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('API_ERROR_INVALID');
+      expect((error as Error).message).not.toContain(unsafeMessage);
+    }
   });
 
   it('keeps response discriminants type-safe', () => {

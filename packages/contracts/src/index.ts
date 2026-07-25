@@ -412,5 +412,8 @@ export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResp
 }
 
 export function createApiError(code: ApiErrorCode, message: string, requestId: string): ApiError {
+  if (!isApiErrorCode(code) || !isSafeApiErrorMessage(message) || !isOpaqueId(requestId)) {
+    throw new Error('API_ERROR_INVALID');
+  }
   return { error: { code, message, requestId } };
 }

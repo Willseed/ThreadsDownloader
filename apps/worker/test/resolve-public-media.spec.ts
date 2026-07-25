@@ -21,7 +21,7 @@ const CSRF_TOKEN = encodeBase64Url(new Uint8Array(32).fill(2));
 const TURNSTILE_TOKEN = 'private-turnstile-token';
 const POST_URL = 'https://threads.com/@alice/post/Abcde?private=query-token';
 const PRIVATE_CDN_QUERY = 'private-cdn-query';
-const REQUEST_ID = 'public-request-id';
+const REQUEST_ID = 'A'.repeat(32);
 const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));
 
 interface HarnessOptions {
