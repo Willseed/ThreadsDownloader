@@ -5,6 +5,7 @@ const MAX_REDIRECTS = 3;
 const THREADS_HOSTS = new Set(['threads.com', 'www.threads.com', 'threads.net', 'www.threads.net']);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const THREADS_PATH = /^\/@([A-Za-z0-9._]{1,30})\/post\/([A-Za-z0-9_-]{5,64})\/?$/;
+declare const normalizedThreadsPost: unique symbol;
 
 export type UpstreamPolicyErrorCode =
   'CDN_URL_INVALID' | 'REDIRECT_INVALID' | 'REDIRECT_LIMIT' | 'THREADS_URL_INVALID';
@@ -16,11 +17,14 @@ export class UpstreamPolicyError extends Error {
   }
 }
 
-export interface ThreadsPostUrl {
+export interface NormalizedThreadsPost {
+  readonly [normalizedThreadsPost]: true;
   readonly canonicalUrl: string;
   readonly username: string;
   readonly shortcode: string;
 }
+
+export type ThreadsPostUrl = NormalizedThreadsPost;
 
 export interface CdnUrl {
   readonly url: URL;
@@ -75,7 +79,7 @@ function usesLiteralHostname(value: string, url: URL): boolean {
   return hostname.toLowerCase() === url.hostname;
 }
 
-export function parseThreadsPostUrl(value: string): ThreadsPostUrl {
+export function parseThreadsPostUrl(value: string): NormalizedThreadsPost {
   const url = parseUrl(value, MAX_THREADS_URL_LENGTH, 'THREADS_URL_INVALID');
   if (
     url.protocol !== 'https:' ||
@@ -100,7 +104,7 @@ export function parseThreadsPostUrl(value: string): ThreadsPostUrl {
     canonicalUrl: `https://www.threads.com/@${username}/post/${shortcode}`,
     username,
     shortcode,
-  };
+  } as NormalizedThreadsPost;
 }
 
 export function parseCdnUrl(value: string): CdnUrl {
