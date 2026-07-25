@@ -1,6 +1,11 @@
 import { DurableObject } from 'cloudflare:workers';
 
 import {
+  createAesGcmSealer,
+  createOpaqueId,
+  importEncryptionKey,
+} from './security/cryptography.js';
+import {
   authorizeSessionRecord,
   bootstrapSessionRecord,
   isSessionRecord,
@@ -17,6 +22,28 @@ import {
   ResolveRateLimitError,
   type ResolveRateLimitState,
 } from './security/rate-limit.js';
+import {
+  decodeResolveVaultClaimRequest,
+  decodeResolveVaultSettleRequest,
+  decodeResolveVaultStoreRequest,
+  deriveResolvedMediaFilename,
+  encodeProbedMediaWire,
+  RESOLVE_VAULT_MAX_BATCHES,
+  RESOLVE_VAULT_MAX_CANDIDATES,
+  RESOLVE_VAULT_RESERVATION_MS,
+  RESOLVE_VAULT_STAGING_MS,
+  RESOLVE_VAULT_TTL_MS,
+  type ResolveVaultClaimRequest,
+  type ResolveVaultSettleRequest,
+  type ResolveVaultStoreRequest,
+  type SafeResolvedMediaCandidate,
+} from './security/resolve-vault.js';
+import {
+  createResolvedMediaGrantCodec,
+  type ResolvedMediaGrantBinding,
+  type ResolvedMediaGrantCodec,
+  ResolvedMediaGrantCodecError,
+} from './security/resolved-media-grant.js';
 
 const sessionTableSql = `CREATE TABLE IF NOT EXISTS session_record (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -33,6 +60,34 @@ const resolvePermitsTableSql = `CREATE TABLE IF NOT EXISTS resolve_permits (
   permit_id TEXT PRIMARY KEY,
   expires_at INTEGER NOT NULL
 )`;
+const resolveVaultBatchesTableSql = `CREATE TABLE IF NOT EXISTS resolved_media_batches (
+  resolve_id TEXT PRIMARY KEY,
+  session_hash TEXT NOT NULL,
+  permit_id TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK (state IN ('staging', 'ready')),
+  store_token TEXT,
+  issued_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  staging_expires_at INTEGER,
+  candidate_count INTEGER NOT NULL CHECK (candidate_count BETWEEN 1 AND 10)
+)`;
+const resolveVaultCandidatesTableSql = `CREATE TABLE IF NOT EXISTS resolved_media_candidates (
+  resolve_id TEXT NOT NULL,
+  candidate_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 1 AND 10),
+  filename TEXT NOT NULL,
+  content_length INTEGER,
+  sealed_grant TEXT,
+  reservation_id TEXT,
+  reservation_expires_at INTEGER,
+  PRIMARY KEY (resolve_id, candidate_id),
+  UNIQUE (resolve_id, ordinal),
+  CHECK ((reservation_id IS NULL) = (reservation_expires_at IS NULL))
+)`;
+const resolveVaultExpiryIndexSql = `CREATE INDEX IF NOT EXISTS resolved_media_batches_expiry
+  ON resolved_media_batches (expires_at)`;
+const resolveVaultReservationIndexSql = `CREATE INDEX IF NOT EXISTS resolved_media_candidates_reservation
+  ON resolved_media_candidates (reservation_expires_at)`;
 
 interface AcquirePermitInput extends AuthorizeSessionInput {
   readonly now: number;
@@ -43,6 +98,33 @@ interface ReleasePermitInput {
   readonly sessionHash: string;
   readonly permitId: string;
   readonly now: number;
+}
+
+export interface SessionCoordinatorEnv {
+  readonly RESOLVED_MEDIA_GRANT_KEY: string;
+}
+
+interface PreparedVaultCandidate {
+  readonly candidateId: string;
+  readonly ordinal: number;
+  readonly filename: string;
+  readonly contentLength: number | null;
+  readonly media: ResolveVaultStoreRequest['candidates'][number];
+}
+
+interface VaultCandidateRow {
+  readonly [key: string]: string | number | ArrayBuffer | null;
+  readonly session_hash: string;
+  readonly state: string;
+  readonly issued_at: number;
+  readonly expires_at: number;
+  readonly candidate_id: string;
+  readonly ordinal: number;
+  readonly filename: string;
+  readonly content_length: number | null;
+  readonly sealed_grant: string | null;
+  readonly reservation_id: string | null;
+  readonly reservation_expires_at: number | null;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -124,9 +206,13 @@ function safeJson(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, { status });
 }
 
-export class SessionCoordinator extends DurableObject {
-  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
+  private readonly grantKey: string;
+  private grantCodecPromise: Promise<ResolvedMediaGrantCodec> | null = null;
+
+  constructor(ctx: DurableObjectState, env: SessionCoordinatorEnv) {
     super(ctx, env);
+    this.grantKey = env.RESOLVED_MEDIA_GRANT_KEY;
     this.initializeTables();
   }
 
@@ -134,6 +220,17 @@ export class SessionCoordinator extends DurableObject {
     this.ctx.storage.sql.exec(sessionTableSql);
     this.ctx.storage.sql.exec(resolveEventsTableSql);
     this.ctx.storage.sql.exec(resolvePermitsTableSql);
+    this.ctx.storage.sql.exec(resolveVaultBatchesTableSql);
+    this.ctx.storage.sql.exec(resolveVaultCandidatesTableSql);
+    this.ctx.storage.sql.exec(resolveVaultExpiryIndexSql);
+    this.ctx.storage.sql.exec(resolveVaultReservationIndexSql);
+  }
+
+  private grantCodec(): Promise<ResolvedMediaGrantCodec> {
+    this.grantCodecPromise ??= importEncryptionKey(this.grantKey).then((key) =>
+      createResolvedMediaGrantCodec(createAesGcmSealer(key)),
+    );
+    return this.grantCodecPromise;
   }
 
   private readRecord(): SessionRecord | null {
@@ -183,6 +280,29 @@ export class SessionCoordinator extends DurableObject {
       now - RESOLVE_WINDOW_MS,
     );
     this.ctx.storage.sql.exec('DELETE FROM resolve_permits WHERE expires_at <= ?', now);
+    this.ctx.storage.sql.exec(
+      `UPDATE resolved_media_candidates
+       SET reservation_id = NULL, reservation_expires_at = NULL
+       WHERE reservation_expires_at <= ?`,
+      now,
+    );
+    this.ctx.storage.sql.exec(
+      `DELETE FROM resolved_media_candidates
+       WHERE resolve_id IN (
+         SELECT resolve_id FROM resolved_media_batches
+         WHERE expires_at <= ?
+            OR (state = 'staging' AND staging_expires_at <= ?)
+       )`,
+      now,
+      now,
+    );
+    this.ctx.storage.sql.exec(
+      `DELETE FROM resolved_media_batches
+       WHERE expires_at <= ?
+          OR (state = 'staging' AND staging_expires_at <= ?)`,
+      now,
+      now,
+    );
   }
 
   private readResolveState(): ResolveRateLimitState {
@@ -199,11 +319,727 @@ export class SessionCoordinator extends DurableObject {
     return { events, permits };
   }
 
+  private readVaultDeadline(): number | null {
+    const batchDeadline = this.ctx.storage.sql
+      .exec<{ deadline: number | null }>(
+        `SELECT MIN(
+           CASE
+             WHEN state = 'staging' AND staging_expires_at < expires_at
+               THEN staging_expires_at
+             ELSE expires_at
+           END
+         ) AS deadline
+         FROM resolved_media_batches`,
+      )
+      .toArray()[0]?.['deadline'];
+    const reservationDeadline = this.ctx.storage.sql
+      .exec<{ deadline: number | null }>(
+        'SELECT MIN(reservation_expires_at) AS deadline FROM resolved_media_candidates',
+      )
+      .toArray()[0]?.['deadline'];
+    const deadlines = [batchDeadline, reservationDeadline].filter(
+      (value): value is number => typeof value === 'number',
+    );
+    return deadlines.length === 0 ? null : Math.min(...deadlines);
+  }
+
   private async scheduleAlarm(record: SessionRecord): Promise<void> {
     const permitDeadline = nextResolvePermitDeadline(this.readResolveState());
-    await this.ctx.storage.setAlarm(
-      permitDeadline === null ? record.expiresAt : Math.min(record.expiresAt, permitDeadline),
+    const vaultDeadline = this.readVaultDeadline();
+    const deadlines = [record.expiresAt, permitDeadline, vaultDeadline].filter(
+      (value): value is number => value !== null,
     );
+    await this.ctx.storage.setAlarm(Math.min(...deadlines));
+  }
+
+  private deleteCandidateAndEmptyBatch(resolveId: string, candidateId: string): void {
+    this.ctx.storage.sql.exec(
+      'DELETE FROM resolved_media_candidates WHERE resolve_id = ? AND candidate_id = ?',
+      resolveId,
+      candidateId,
+    );
+    const remaining = this.ctx.storage.sql
+      .exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM resolved_media_candidates WHERE resolve_id = ?',
+        resolveId,
+      )
+      .toArray()[0]?.['count'];
+    if (remaining === 0) {
+      this.ctx.storage.sql.exec(
+        'DELETE FROM resolved_media_batches WHERE resolve_id = ?',
+        resolveId,
+      );
+    }
+  }
+
+  private compensateStaging(resolveId: string, storeToken: string): void {
+    this.ctx.storage.transactionSync(() => {
+      const row = this.ctx.storage.sql
+        .exec<{ resolve_id: string }>(
+          `SELECT resolve_id FROM resolved_media_batches
+           WHERE resolve_id = ? AND state = 'staging' AND store_token = ?`,
+          resolveId,
+          storeToken,
+        )
+        .toArray()[0];
+      if (row === undefined) {
+        return;
+      }
+      this.ctx.storage.sql.exec(
+        'DELETE FROM resolved_media_candidates WHERE resolve_id = ?',
+        resolveId,
+      );
+      this.ctx.storage.sql.exec(
+        `DELETE FROM resolved_media_batches
+         WHERE resolve_id = ? AND state = 'staging' AND store_token = ?`,
+        resolveId,
+        storeToken,
+      );
+    });
+  }
+
+  private grantBinding(
+    input: {
+      readonly sessionHash: string;
+      readonly resolveId: string;
+      readonly issuedAt: number;
+      readonly expiresAt: number;
+    },
+    candidate: Pick<
+      PreparedVaultCandidate,
+      'candidateId' | 'contentLength' | 'filename' | 'ordinal'
+    >,
+  ): ResolvedMediaGrantBinding {
+    return {
+      sessionHash: input.sessionHash,
+      resolveId: input.resolveId,
+      candidateId: candidate.candidateId,
+      ordinal: candidate.ordinal,
+      filename: candidate.filename,
+      contentLength: candidate.contentLength,
+      issuedAt: input.issuedAt,
+      expiresAt: input.expiresAt,
+    };
+  }
+
+  private prepareVaultCandidates(input: ResolveVaultStoreRequest): PreparedVaultCandidate[] {
+    return input.candidates.map((media, index) => ({
+      candidateId: createOpaqueId(192),
+      ordinal: index + 1,
+      filename: deriveResolvedMediaFilename(input.shortcode, index + 1, media.contentType),
+      contentLength: media.contentLength,
+      media,
+    }));
+  }
+
+  private reserveVaultStore(
+    input: ResolveVaultStoreRequest,
+    resolveId: string,
+    storeToken: string,
+    candidates: readonly PreparedVaultCandidate[],
+    admittedAt: number,
+  ):
+    | {
+        readonly status: 201;
+        readonly record: SessionRecord;
+        readonly issuedAt: number;
+        readonly expiresAt: number;
+      }
+    | { readonly status: 400 | 401 | 409 | 429 } {
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.readRecord();
+      if (!authorizeSessionRecord(record, input, admittedAt) || record === null) {
+        return { status: 401 } as const;
+      }
+      if (admittedAt > Number.MAX_SAFE_INTEGER - RESOLVE_VAULT_TTL_MS) {
+        return { status: 400 } as const;
+      }
+      this.pruneResolveStorage(admittedAt);
+      const permit = this.ctx.storage.sql
+        .exec<{ permit_id: string }>(
+          'SELECT permit_id FROM resolve_permits WHERE permit_id = ? AND expires_at > ?',
+          input.permitId,
+          admittedAt,
+        )
+        .toArray()[0];
+      if (permit === undefined) {
+        return { status: 409 } as const;
+      }
+      const permitUse = this.ctx.storage.sql
+        .exec<{ resolve_id: string }>(
+          'SELECT resolve_id FROM resolved_media_batches WHERE permit_id = ?',
+          input.permitId,
+        )
+        .toArray()[0];
+      if (permitUse !== undefined) {
+        return { status: 409 } as const;
+      }
+      const capacity = this.ctx.storage.sql
+        .exec<{ batch_count: number; candidate_count: number }>(
+          `SELECT COUNT(*) AS batch_count,
+                  COALESCE(SUM(candidate_count), 0) AS candidate_count
+           FROM resolved_media_batches`,
+        )
+        .toArray()[0];
+      if (
+        capacity === undefined ||
+        capacity['batch_count'] >= RESOLVE_VAULT_MAX_BATCHES ||
+        capacity['candidate_count'] + candidates.length > RESOLVE_VAULT_MAX_CANDIDATES
+      ) {
+        return { status: 429 } as const;
+      }
+
+      const expiresAt = Math.min(record.expiresAt, admittedAt + RESOLVE_VAULT_TTL_MS);
+      if (expiresAt <= admittedAt) {
+        return { status: 401 } as const;
+      }
+      const stagingExpiresAt = Math.min(expiresAt, admittedAt + RESOLVE_VAULT_STAGING_MS);
+      this.ctx.storage.sql.exec(
+        `INSERT INTO resolved_media_batches
+          (resolve_id, session_hash, permit_id, state, store_token, issued_at, expires_at,
+           staging_expires_at, candidate_count)
+         VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?)`,
+        resolveId,
+        input.sessionHash,
+        input.permitId,
+        storeToken,
+        admittedAt,
+        expiresAt,
+        stagingExpiresAt,
+        candidates.length,
+      );
+      for (const candidate of candidates) {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO resolved_media_candidates
+            (resolve_id, candidate_id, ordinal, filename, content_length, sealed_grant,
+             reservation_id, reservation_expires_at)
+           VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+          resolveId,
+          candidate.candidateId,
+          candidate.ordinal,
+          candidate.filename,
+          candidate.contentLength,
+        );
+      }
+      return { status: 201, record, issuedAt: admittedAt, expiresAt } as const;
+    });
+  }
+
+  private commitVaultStore(
+    input: ResolveVaultStoreRequest,
+    resolveId: string,
+    storeToken: string,
+    candidates: readonly PreparedVaultCandidate[],
+    sealedGrants: readonly string[],
+    committedAt: number,
+  ): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.readRecord();
+      if (!authorizeSessionRecord(record, input, committedAt)) {
+        return false;
+      }
+      const permit = this.ctx.storage.sql
+        .exec<{ permit_id: string }>(
+          'SELECT permit_id FROM resolve_permits WHERE permit_id = ? AND expires_at > ?',
+          input.permitId,
+          committedAt,
+        )
+        .toArray()[0];
+      if (permit === undefined) {
+        return false;
+      }
+      const batch = this.ctx.storage.sql
+        .exec<{ candidate_count: number }>(
+          `SELECT candidate_count FROM resolved_media_batches
+           WHERE resolve_id = ? AND session_hash = ? AND permit_id = ? AND state = 'staging'
+             AND store_token = ? AND issued_at <= ? AND staging_expires_at > ?
+             AND expires_at > ? AND expires_at - issued_at <= ?`,
+          resolveId,
+          input.sessionHash,
+          input.permitId,
+          storeToken,
+          committedAt,
+          committedAt,
+          committedAt,
+          RESOLVE_VAULT_TTL_MS,
+        )
+        .toArray()[0];
+      const storedCandidates = this.ctx.storage.sql
+        .exec<{ candidate_id: string }>(
+          `SELECT candidate_id FROM resolved_media_candidates
+           WHERE resolve_id = ? AND sealed_grant IS NULL ORDER BY ordinal`,
+          resolveId,
+        )
+        .toArray();
+      if (
+        batch?.['candidate_count'] !== candidates.length ||
+        sealedGrants.length !== candidates.length ||
+        storedCandidates.length !== candidates.length ||
+        storedCandidates.some(
+          (row, index) => row['candidate_id'] !== candidates[index]?.candidateId,
+        )
+      ) {
+        return false;
+      }
+      for (let index = 0; index < candidates.length; index += 1) {
+        this.ctx.storage.sql.exec(
+          `UPDATE resolved_media_candidates SET sealed_grant = ?
+           WHERE resolve_id = ? AND candidate_id = ? AND sealed_grant IS NULL`,
+          sealedGrants[index]!,
+          resolveId,
+          candidates[index]!.candidateId,
+        );
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE resolved_media_batches
+         SET state = 'ready', store_token = NULL, staging_expires_at = NULL
+         WHERE resolve_id = ? AND session_hash = ? AND permit_id = ? AND state = 'staging'
+           AND store_token = ? AND issued_at <= ? AND staging_expires_at > ?
+           AND expires_at > ? AND expires_at - issued_at <= ?`,
+        resolveId,
+        input.sessionHash,
+        input.permitId,
+        storeToken,
+        committedAt,
+        committedAt,
+        committedAt,
+        RESOLVE_VAULT_TTL_MS,
+      );
+      return true;
+    });
+  }
+
+  private safeVaultCandidates(
+    candidates: readonly PreparedVaultCandidate[],
+  ): SafeResolvedMediaCandidate[] {
+    return candidates.map((candidate) => ({
+      candidateId: candidate.candidateId,
+      filename: candidate.filename,
+      ...(candidate.contentLength === null ? {} : { contentLength: candidate.contentLength }),
+    }));
+  }
+
+  private async storeVault(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeResolveVaultStoreRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+
+    let resolveId: string;
+    let storeToken: string;
+    let candidates: PreparedVaultCandidate[];
+    try {
+      resolveId = createOpaqueId(192);
+      storeToken = createOpaqueId(192);
+      candidates = this.prepareVaultCandidates(input);
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+
+    let reservation: ReturnType<SessionCoordinator['reserveVaultStore']>;
+    try {
+      reservation = this.reserveVaultStore(input, resolveId, storeToken, candidates, Date.now());
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (reservation.status !== 201) {
+      return safeJson(reservation.status, { ok: false });
+    }
+
+    try {
+      await this.scheduleAlarm(reservation.record);
+      const codec = await this.grantCodec();
+      const batchBinding = {
+        sessionHash: input.sessionHash,
+        resolveId,
+        issuedAt: reservation.issuedAt,
+        expiresAt: reservation.expiresAt,
+      };
+      const sealedGrants = await Promise.all(
+        candidates.map((candidate) =>
+          codec.seal(
+            candidate.media,
+            this.grantBinding(batchBinding, candidate),
+            reservation.issuedAt,
+          ),
+        ),
+      );
+      if (
+        !this.commitVaultStore(input, resolveId, storeToken, candidates, sealedGrants, Date.now())
+      ) {
+        this.compensateStaging(resolveId, storeToken);
+        return safeJson(500, { ok: false });
+      }
+    } catch {
+      this.compensateStaging(resolveId, storeToken);
+      return safeJson(500, { ok: false });
+    }
+
+    return safeJson(201, {
+      ok: true,
+      resolveId,
+      expiresAt: reservation.expiresAt,
+      candidates: this.safeVaultCandidates(candidates),
+    });
+  }
+
+  private readVaultCandidate(
+    resolveId: string,
+    candidateId: string,
+  ): VaultCandidateRow | undefined {
+    return this.ctx.storage.sql
+      .exec<VaultCandidateRow>(
+        `SELECT b.session_hash, b.state, b.issued_at, b.expires_at,
+                c.candidate_id, c.ordinal, c.filename, c.content_length,
+                c.sealed_grant, c.reservation_id, c.reservation_expires_at
+         FROM resolved_media_batches b
+         INNER JOIN resolved_media_candidates c ON c.resolve_id = b.resolve_id
+         WHERE b.resolve_id = ? AND c.candidate_id = ?`,
+        resolveId,
+        candidateId,
+      )
+      .toArray()[0];
+  }
+
+  private reserveVaultClaim(
+    input: ResolveVaultClaimRequest,
+    reservedAt: number,
+  ):
+    | {
+        readonly status: 200;
+        readonly record: SessionRecord;
+        readonly row: VaultCandidateRow;
+        readonly reservationExpiresAt: number;
+      }
+    | { readonly status: 400 | 401 | 404 | 409 | 500 } {
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.readRecord();
+      if (!authorizeSessionRecord(record, input, reservedAt) || record === null) {
+        return { status: 401 } as const;
+      }
+      if (reservedAt > Number.MAX_SAFE_INTEGER - RESOLVE_VAULT_RESERVATION_MS) {
+        return { status: 400 } as const;
+      }
+      this.pruneResolveStorage(reservedAt);
+      const row = this.readVaultCandidate(input.resolveId, input.candidateId);
+      if (row === undefined || row['state'] !== 'ready') {
+        return { status: 404 } as const;
+      }
+      if (row['session_hash'] !== input.sessionHash) {
+        return { status: 401 } as const;
+      }
+      if (row['sealed_grant'] === null) {
+        this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
+        return { status: 500 } as const;
+      }
+      if (row['reservation_id'] !== null && row['reservation_id'] !== input.reservationId) {
+        return { status: 409 } as const;
+      }
+      let reservationExpiresAt = row['reservation_expires_at'];
+      if (row['reservation_id'] === null || reservationExpiresAt === null) {
+        reservationExpiresAt = Math.min(
+          row['expires_at'],
+          reservedAt + RESOLVE_VAULT_RESERVATION_MS,
+        );
+        this.ctx.storage.sql.exec(
+          `UPDATE resolved_media_candidates
+           SET reservation_id = ?, reservation_expires_at = ?
+           WHERE resolve_id = ? AND candidate_id = ? AND reservation_id IS NULL`,
+          input.reservationId,
+          reservationExpiresAt,
+          input.resolveId,
+          input.candidateId,
+        );
+      }
+      return {
+        status: 200,
+        record,
+        row: {
+          ...row,
+          reservation_id: input.reservationId,
+          reservation_expires_at: reservationExpiresAt,
+        },
+        reservationExpiresAt,
+      } as const;
+    });
+  }
+
+  private releaseVaultReservation(input: ResolveVaultClaimRequest): void {
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `UPDATE resolved_media_candidates
+         SET reservation_id = NULL, reservation_expires_at = NULL
+         WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
+        input.resolveId,
+        input.candidateId,
+        input.reservationId,
+      );
+    });
+  }
+
+  private tryReleaseVaultReservation(input: ResolveVaultClaimRequest): void {
+    try {
+      this.releaseVaultReservation(input);
+    } catch {
+      // A fixed 500 response is safer than exposing a transient storage detail.
+    }
+  }
+
+  private deleteCorruptVaultClaim(input: ResolveVaultClaimRequest): void {
+    this.ctx.storage.transactionSync(() => {
+      const row = this.ctx.storage.sql
+        .exec<{ candidate_id: string }>(
+          `SELECT candidate_id FROM resolved_media_candidates
+           WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
+          input.resolveId,
+          input.candidateId,
+          input.reservationId,
+        )
+        .toArray()[0];
+      if (row !== undefined) {
+        this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
+      }
+    });
+  }
+
+  private tryDeleteCorruptVaultClaim(input: ResolveVaultClaimRequest): void {
+    try {
+      this.deleteCorruptVaultClaim(input);
+    } catch {
+      // The exact reservation predicate prevents deleting a replacement claim.
+    }
+  }
+
+  private bindingFromRow(
+    input: ResolveVaultClaimRequest,
+    row: VaultCandidateRow,
+  ): ResolvedMediaGrantBinding {
+    return {
+      sessionHash: input.sessionHash,
+      resolveId: input.resolveId,
+      candidateId: input.candidateId,
+      ordinal: row['ordinal'],
+      filename: row['filename'],
+      contentLength: row['content_length'],
+      issuedAt: row['issued_at'],
+      expiresAt: row['expires_at'],
+    };
+  }
+
+  private confirmVaultClaim(
+    input: ResolveVaultClaimRequest,
+    expected: VaultCandidateRow,
+    confirmedAt: number,
+  ): 200 | 401 | 404 | 409 | 500 {
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.readRecord();
+      if (!authorizeSessionRecord(record, input, confirmedAt)) {
+        return 401;
+      }
+      this.pruneResolveStorage(confirmedAt);
+      const current = this.readVaultCandidate(input.resolveId, input.candidateId);
+      if (current === undefined || current['state'] !== 'ready') {
+        return 404;
+      }
+      if (current['session_hash'] !== input.sessionHash) {
+        return 401;
+      }
+      if (
+        current['reservation_id'] !== input.reservationId ||
+        current['reservation_expires_at'] === null ||
+        current['reservation_expires_at'] <= confirmedAt ||
+        current['reservation_expires_at'] > confirmedAt + RESOLVE_VAULT_RESERVATION_MS
+      ) {
+        return 409;
+      }
+      if (
+        current['issued_at'] > confirmedAt ||
+        current['expires_at'] <= confirmedAt ||
+        current['expires_at'] - current['issued_at'] > RESOLVE_VAULT_TTL_MS ||
+        current['issued_at'] !== expected['issued_at'] ||
+        current['expires_at'] !== expected['expires_at'] ||
+        current['candidate_id'] !== expected['candidate_id'] ||
+        current['ordinal'] !== expected['ordinal'] ||
+        current['filename'] !== expected['filename'] ||
+        current['content_length'] !== expected['content_length'] ||
+        current['sealed_grant'] !== expected['sealed_grant'] ||
+        current['reservation_expires_at'] !== expected['reservation_expires_at']
+      ) {
+        this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
+        return 500;
+      }
+      return 200;
+    });
+  }
+
+  private vaultClaimResponse(
+    input: ResolveVaultClaimRequest,
+    reservationExpiresAt: number,
+    media: PreparedVaultCandidate['media'],
+  ): Response {
+    try {
+      return safeJson(200, {
+        ok: true,
+        reservationId: input.reservationId,
+        reservationExpiresAt,
+        grant: encodeProbedMediaWire(media),
+      });
+    } catch {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(500, { ok: false });
+    }
+  }
+
+  private async claimVault(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeResolveVaultClaimRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+
+    let claim: ReturnType<SessionCoordinator['reserveVaultClaim']>;
+    try {
+      claim = this.reserveVaultClaim(input, Date.now());
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (claim.status !== 200) {
+      return safeJson(claim.status, { ok: false });
+    }
+
+    try {
+      await this.scheduleAlarm(claim.record);
+    } catch {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(500, { ok: false });
+    }
+    let codec: ResolvedMediaGrantCodec;
+    try {
+      codec = await this.grantCodec();
+    } catch {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(500, { ok: false });
+    }
+    const openingAt = Date.now();
+    let confirmation: ReturnType<SessionCoordinator['confirmVaultClaim']>;
+    try {
+      confirmation = this.confirmVaultClaim(input, claim.row, openingAt);
+    } catch {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(500, { ok: false });
+    }
+    if (confirmation !== 200) {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(confirmation, { ok: false });
+    }
+
+    let media: Awaited<ReturnType<ResolvedMediaGrantCodec['open']>>;
+    try {
+      media = await codec.open(
+        claim.row['sealed_grant']!,
+        this.bindingFromRow(input, claim.row),
+        openingAt,
+      );
+    } catch (error: unknown) {
+      if (
+        error instanceof ResolvedMediaGrantCodecError &&
+        error.code === 'RESOLVED_MEDIA_GRANT_INVALID'
+      ) {
+        this.tryDeleteCorruptVaultClaim(input);
+      } else {
+        this.tryReleaseVaultReservation(input);
+      }
+      return safeJson(500, { ok: false });
+    }
+
+    try {
+      confirmation = this.confirmVaultClaim(input, claim.row, Date.now());
+    } catch {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(500, { ok: false });
+    }
+    if (confirmation !== 200) {
+      this.tryReleaseVaultReservation(input);
+      return safeJson(confirmation, { ok: false });
+    }
+    return this.vaultClaimResponse(input, claim.reservationExpiresAt, media);
+  }
+
+  private settleVaultState(
+    input: ResolveVaultSettleRequest,
+    settledAt: number,
+  ): { readonly status: 200; readonly record: SessionRecord } | { readonly status: 401 | 409 } {
+    return this.ctx.storage.transactionSync(() => {
+      const record = this.readRecord();
+      if (!authorizeSessionRecord(record, input, settledAt) || record === null) {
+        return { status: 401 } as const;
+      }
+      this.pruneResolveStorage(settledAt);
+      const row = this.readVaultCandidate(input.resolveId, input.candidateId);
+      if (row === undefined) {
+        return { status: 200, record } as const;
+      }
+      if (row['session_hash'] !== input.sessionHash) {
+        return { status: 401 } as const;
+      }
+      if (row['reservation_id'] !== input.reservationId) {
+        return row['reservation_id'] === null && input.outcome === 'release'
+          ? ({ status: 200, record } as const)
+          : ({ status: 409 } as const);
+      }
+      if (input.outcome === 'consume') {
+        this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
+      } else {
+        this.ctx.storage.sql.exec(
+          `UPDATE resolved_media_candidates
+           SET reservation_id = NULL, reservation_expires_at = NULL
+           WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
+          input.resolveId,
+          input.candidateId,
+          input.reservationId,
+        );
+      }
+      return { status: 200, record } as const;
+    });
+  }
+
+  private async settleVault(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeResolveVaultSettleRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+    let result: ReturnType<SessionCoordinator['settleVaultState']>;
+    try {
+      result = this.settleVaultState(input, Date.now());
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    if (result.status !== 200) {
+      return safeJson(result.status, { ok: false });
+    }
+    try {
+      await this.scheduleAlarm(result.record);
+    } catch {
+      return safeJson(500, { ok: false });
+    }
+    return safeJson(200, { ok: true });
   }
 
   private async bootstrap(request: Request): Promise<Response> {
@@ -346,6 +1182,15 @@ export class SessionCoordinator extends DurableObject {
     if (pathname === '/resolve-permits/release') {
       return this.releasePermit(request);
     }
+    if (pathname === '/resolve-vault/store') {
+      return this.storeVault(request);
+    }
+    if (pathname === '/resolve-vault/claim') {
+      return this.claimVault(request);
+    }
+    if (pathname === '/resolve-vault/settle') {
+      return this.settleVault(request);
+    }
     return safeJson(404, { ok: false });
   }
 
@@ -358,7 +1203,7 @@ export class SessionCoordinator extends DurableObject {
       this.initializeTables();
       return;
     }
-    this.pruneResolveStorage(now);
+    this.ctx.storage.transactionSync(() => this.pruneResolveStorage(now));
     await this.scheduleAlarm(this.readRecord()!);
   }
 }

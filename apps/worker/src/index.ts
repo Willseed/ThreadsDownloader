@@ -41,6 +41,7 @@ export interface Env {
   readonly EXPECTED_HOST: string;
   readonly EXPECTED_ORIGIN: string;
   readonly IP_RATE_LIMITS: DurableObjectNamespace<IpRateLimiter>;
+  readonly RESOLVED_MEDIA_GRANT_KEY: string;
   readonly SESSION_SIGNING_KEY: string;
   readonly SESSIONS: SessionNamespace;
   readonly TURNSTILE_REPLAYS: DurableObjectNamespace<TurnstileReplay>;

@@ -56,6 +56,7 @@ function createEnv(
     EXPECTED_HOST: expectedHost,
     EXPECTED_ORIGIN: `https://${expectedHost}`,
     IP_RATE_LIMITS: {} as Env['IP_RATE_LIMITS'],
+    RESOLVED_MEDIA_GRANT_KEY: signingKey,
     SESSION_SIGNING_KEY: signingKey,
     SESSIONS: sessions,
     TURNSTILE_REPLAYS: {} as Env['TURNSTILE_REPLAYS'],

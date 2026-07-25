@@ -1,6 +1,22 @@
 import { BrowserSessionError } from './browser-session.js';
 import { createOpaqueId } from './cryptography.js';
 
+export {
+  claimResolvedMediaCandidate,
+  ResolveVaultError,
+  settleResolvedMediaClaim,
+  storeResolvedMediaBatch,
+} from './resolve-vault.js';
+export type {
+  ClaimResolvedMediaCandidateInput,
+  ResolvedMediaClaim,
+  ResolveVaultErrorCode,
+  SafeResolvedMediaCandidate,
+  SettleResolvedMediaClaimInput,
+  StoredResolvedMediaBatch,
+  StoreResolvedMediaBatchInput,
+} from './resolve-vault.js';
+
 interface SessionStub {
   fetch(request: Request): Promise<Response>;
 }
