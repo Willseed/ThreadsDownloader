@@ -5,6 +5,7 @@ const MAX_TOKEN_LENGTH = 64 * 1024;
 const MAX_ATTRIBUTE_LENGTH = 16 * 1024;
 const MAX_ATTRIBUTES = 128;
 const MAX_VIDEO_DEPTH = 32;
+const MAX_SCRIPT_PAYLOADS = 128;
 const MAX_CANDIDATES = 10;
 const MAX_BUCKET_ENTRIES = MAX_CANDIDATES * 2;
 
@@ -15,6 +16,16 @@ export type MarkupCandidateSource = (typeof PRIORITIES)[number];
 export interface MarkupMediaCandidate {
   readonly source: MarkupCandidateSource;
   readonly value: CdnUrl;
+}
+
+export interface MarkupScriptPayload {
+  readonly text: string;
+  readonly type: string | null;
+}
+
+export interface MediaMarkupParts {
+  readonly candidates: readonly MarkupMediaCandidate[];
+  readonly scripts: readonly MarkupScriptPayload[];
 }
 
 export type MarkupTagsErrorCode = 'MARKUP_STRUCTURE_LIMIT' | 'MARKUP_TOO_LARGE';
@@ -43,6 +54,11 @@ interface ParsedAttribute {
 interface ScannedToken {
   readonly end: number;
   readonly tag?: ParsedTag;
+}
+
+interface ScannedScript {
+  readonly end: number;
+  readonly text: string;
 }
 
 type CandidateBuckets = ReadonlyMap<MarkupCandidateSource, Map<string, MarkupMediaCandidate>>;
@@ -83,6 +99,18 @@ function isAsciiLetter(character: string | undefined): boolean {
   }
   const code = character.charCodeAt(0);
   return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function equalsAsciiCaseInsensitiveAt(markup: string, start: number, expected: string): boolean {
+  if (start + expected.length > markup.length) {
+    return false;
+  }
+  for (let offset = 0; offset < expected.length; offset += 1) {
+    if (markup[start + offset]?.toLowerCase() !== expected[offset]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isDecimalDigit(character: string): boolean {
@@ -302,6 +330,28 @@ function scanNextToken(markup: string, cursor: number): ScannedToken | undefined
   return tag === undefined ? { end: tagStart + 1 } : { end: tag.end, tag };
 }
 
+function scanScript(markup: string, start: number): ScannedScript {
+  let cursor = start;
+  while (cursor < markup.length) {
+    if (cursor - start > MAX_TOKEN_LENGTH) {
+      return markupError('MARKUP_STRUCTURE_LIMIT');
+    }
+    if (
+      markup[cursor] === '<' &&
+      markup[cursor + 1] === '/' &&
+      equalsAsciiCaseInsensitiveAt(markup, cursor + 2, 'script') &&
+      !isNameCharacter(markup[cursor + 8])
+    ) {
+      const closingTag = parseTag(markup, cursor);
+      if (closingTag?.isEnd === true && closingTag.name === 'script') {
+        return { end: closingTag.end, text: markup.slice(start, cursor) };
+      }
+    }
+    cursor += 1;
+  }
+  return markupError('MARKUP_STRUCTURE_LIMIT');
+}
+
 function createBuckets(): CandidateBuckets {
   return new Map(PRIORITIES.map((source) => [source, new Map<string, MarkupMediaCandidate>()]));
 }
@@ -409,9 +459,10 @@ function assertMarkupSize(markup: string): void {
   }
 }
 
-export function extractMediaTags(markup: string): readonly MarkupMediaCandidate[] {
+export function extractMediaMarkupParts(markup: string): MediaMarkupParts {
   assertMarkupSize(markup);
   const buckets = createBuckets();
+  const scripts: MarkupScriptPayload[] = [];
   let cursor = 0;
   let videoDepth = 0;
 
@@ -423,8 +474,20 @@ export function extractMediaTags(markup: string): readonly MarkupMediaCandidate[
     cursor = token.end;
     if (token.tag !== undefined) {
       videoDepth = applyTag(token.tag, videoDepth, buckets);
+      if (!token.tag.isEnd && !token.tag.selfClosing && token.tag.name === 'script') {
+        if (scripts.length === MAX_SCRIPT_PAYLOADS) {
+          return markupError('MARKUP_STRUCTURE_LIMIT');
+        }
+        const script = scanScript(markup, cursor);
+        scripts.push({ text: script.text, type: token.tag.attributes.get('type') ?? null });
+        cursor = script.end;
+      }
     }
   }
 
-  return flattenBuckets(buckets);
+  return { candidates: flattenBuckets(buckets), scripts };
+}
+
+export function extractMediaTags(markup: string): readonly MarkupMediaCandidate[] {
+  return extractMediaMarkupParts(markup).candidates;
 }

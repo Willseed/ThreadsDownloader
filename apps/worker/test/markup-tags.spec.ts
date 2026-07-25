@@ -102,6 +102,17 @@ describe('extractMediaTags', () => {
     expect(extractMediaTags(markup)).toEqual([]);
   });
 
+  it('treats bounded script text as raw data instead of nested markup', () => {
+    const markup = [
+      '<script type="application/json">',
+      '{"text":"<meta property=\\"og:video\\" content=\\"https://cdninstagram.com/fake.mp4\\">"}',
+      '</SCRIPT>',
+      '<video src="https://cdninstagram.com/real.mp4"></video>',
+    ].join('');
+
+    expect(urls(markup)).toEqual(['https://cdninstagram.com/real.mp4']);
+  });
+
   it('ignores invalid candidates, including attacker-controlled CDN suffixes', () => {
     const markup = [
       '<meta property="og:video" content="https://cdninstagram.com.attacker.example/a.mp4">',
@@ -117,5 +128,11 @@ describe('extractMediaTags', () => {
     expectMarkupError(oversized, 'MARKUP_TOO_LARGE');
     expectMarkupError('<video src="unterminated>', 'MARKUP_STRUCTURE_LIMIT');
     expectMarkupError('<!-- unterminated', 'MARKUP_STRUCTURE_LIMIT');
+    expectMarkupError(
+      '<script type="application/json">{"url":"unterminated"}',
+      'MARKUP_STRUCTURE_LIMIT',
+    );
+    expectMarkupError(`<script>${' '.repeat(64 * 1024 + 1)}</script>`, 'MARKUP_STRUCTURE_LIMIT');
+    expectMarkupError('<script></script>'.repeat(129), 'MARKUP_STRUCTURE_LIMIT');
   });
 });
