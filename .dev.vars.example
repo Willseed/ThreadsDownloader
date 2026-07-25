@@ -1,2 +1,14 @@
+# Copy this file to .dev.vars for local development. .dev.vars is gitignored and must not be committed.
+# The values below are deliberately invalid placeholders. Never reuse a production secret locally.
+# Generate independent cryptographically secure 32-byte local values for the first three secrets.
+# Encode DOWNLOAD_ENCRYPTION_KEY as canonical unpadded base64url: exactly 43 characters, with no '='.
+# Encode RESOLVED_MEDIA_GRANT_KEY and SESSION_SIGNING_KEY as canonical padded standard base64:
+# exactly 43 base64 characters followed by one '=' character, for 44 characters total.
+# For TURNSTILE_SECRET, use Cloudflare's documented test secret or another controlled local value;
+# never guess, derive, or copy the production value.
 EXPECTED_HOST=localhost
 EXPECTED_ORIGIN=http://localhost:8787
+DOWNLOAD_ENCRYPTION_KEY=INVALID_REPLACE_WITH_43_CHAR_UNPADDED_BASE64URL
+RESOLVED_MEDIA_GRANT_KEY=INVALID_REPLACE_WITH_43_BASE64_CHARS_PLUS_EQUALS=
+SESSION_SIGNING_KEY=INVALID_REPLACE_WITH_43_BASE64_CHARS_PLUS_EQUALS=
+TURNSTILE_SECRET=replace-with-documented-test-or-controlled-local-value
