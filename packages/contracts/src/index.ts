@@ -57,9 +57,6 @@ export interface ResolveCandidate {
   readonly candidateId: string;
   readonly filename: string;
   readonly contentLength?: number;
-  readonly width?: number;
-  readonly height?: number;
-  readonly duration?: number;
 }
 
 export interface ResolveResponse {
@@ -107,7 +104,12 @@ const CANONICAL_CSRF_TOKEN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u;
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
 const CANONICAL_ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
+const SAFE_TURNSTILE_SITE_KEY = /^[A-Za-z0-9_-]{1,128}$/u;
+const UNSAFE_PUBLIC_MESSAGE = /https?:\/\/|cdninstagram\.com/iu;
+const MAX_API_ERROR_MESSAGE_CHARACTERS = 256;
 const MAX_CONCURRENT_DOWNLOAD_STREAMS = 4;
+const MAX_RESOLVE_CANDIDATES = 8;
+const apiErrorCodes = new Set<string>(API_ERROR_CODES);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -124,6 +126,31 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
 
 function isOpaqueId(value: unknown): value is string {
   return typeof value === 'string' && OPAQUE_ID.test(value);
+}
+
+function isApiErrorCode(value: unknown): value is ApiErrorCode {
+  return typeof value === 'string' && apiErrorCodes.has(value);
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSafeApiErrorMessage(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_API_ERROR_MESSAGE_CHARACTERS &&
+    value.trim() === value &&
+    !hasControlCharacter(value) &&
+    !UNSAFE_PUBLIC_MESSAGE.test(value)
+  );
 }
 
 function isCanonicalCsrfToken(value: unknown): value is string {
@@ -144,6 +171,37 @@ function isoTimestamp(value: string): number {
 
 function isNullableCanonicalIsoDate(value: unknown): value is string | null {
   return value === null || isCanonicalIsoDate(value);
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function decodeResolveCandidate(value: unknown): ResolveCandidate | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const hasContentLength = Object.hasOwn(value, 'contentLength');
+  if (
+    !hasExactKeys(
+      value,
+      hasContentLength ? ['candidateId', 'contentLength', 'filename'] : ['candidateId', 'filename'],
+    ) ||
+    !isOpaqueId(value['candidateId']) ||
+    typeof value['filename'] !== 'string' ||
+    value['filename'].length > 128 ||
+    !SAFE_FILENAME.test(value['filename'])
+  ) {
+    return null;
+  }
+  if (!hasContentLength) {
+    return { candidateId: value['candidateId'], filename: value['filename'] };
+  }
+  const contentLength = value['contentLength'];
+  if (!isPositiveSafeInteger(contentLength)) {
+    return null;
+  }
+  return { candidateId: value['candidateId'], filename: value['filename'], contentLength };
 }
 
 function isDownloadStatus(value: unknown): value is DownloadStatus {
@@ -196,6 +254,71 @@ function hasValidDownloadStatusShape(value: Record<string, unknown>): boolean {
       value['completionExpiresAt'] !== null &&
       value['activeStreams'] === 0)
   );
+}
+
+export function decodeApiError(value: unknown): ApiError | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['error']) ||
+    !isPlainObject(value['error']) ||
+    !hasExactKeys(value['error'], ['code', 'message', 'requestId']) ||
+    !isApiErrorCode(value['error']['code']) ||
+    !isSafeApiErrorMessage(value['error']['message']) ||
+    !isOpaqueId(value['error']['requestId'])
+  ) {
+    return null;
+  }
+  return {
+    error: {
+      code: value['error']['code'],
+      message: value['error']['message'],
+      requestId: value['error']['requestId'],
+    },
+  };
+}
+
+export function decodeSessionResponse(value: unknown): SessionResponse | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['csrfToken', 'expiresAt', 'turnstileSiteKey']) ||
+    !isCanonicalCsrfToken(value['csrfToken']) ||
+    !isCanonicalIsoDate(value['expiresAt']) ||
+    typeof value['turnstileSiteKey'] !== 'string' ||
+    !SAFE_TURNSTILE_SITE_KEY.test(value['turnstileSiteKey'])
+  ) {
+    return null;
+  }
+  return {
+    csrfToken: value['csrfToken'],
+    expiresAt: value['expiresAt'],
+    turnstileSiteKey: value['turnstileSiteKey'],
+  };
+}
+
+export function decodeResolveResponse(value: unknown): ResolveResponse | null {
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, ['candidates', 'expiresAt', 'resolveId']) ||
+    !isOpaqueId(value['resolveId']) ||
+    !isCanonicalIsoDate(value['expiresAt']) ||
+    !Array.isArray(value['candidates']) ||
+    value['candidates'].length < 1 ||
+    value['candidates'].length > MAX_RESOLVE_CANDIDATES
+  ) {
+    return null;
+  }
+
+  const candidates: ResolveCandidate[] = [];
+  const candidateIds = new Set<string>();
+  for (const candidate of value['candidates']) {
+    const decoded = decodeResolveCandidate(candidate);
+    if (decoded === null || candidateIds.has(decoded.candidateId)) {
+      return null;
+    }
+    candidateIds.add(decoded.candidateId);
+    candidates.push(decoded);
+  }
+  return { resolveId: value['resolveId'], expiresAt: value['expiresAt'], candidates };
 }
 
 export function decodeDownloadSessionRequest(value: unknown): DownloadSessionRequest | null {

@@ -2,9 +2,12 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   createApiError,
+  decodeApiError,
   decodeDownloadSessionRequest,
   decodeDownloadSessionResponse,
   decodeDownloadStatusResponse,
+  decodeResolveResponse,
+  decodeSessionResponse,
   type ApiError,
   type ApiErrorCode,
   type DownloadSessionRequest,
@@ -50,9 +53,6 @@ describe('contracts', () => {
       readonly candidateId: string;
       readonly filename: string;
       readonly contentLength?: number;
-      readonly width?: number;
-      readonly height?: number;
-      readonly duration?: number;
     }>();
     expectTypeOf<ResolveResponse>().toEqualTypeOf<{
       readonly resolveId: string;
@@ -85,6 +85,94 @@ describe('contracts', () => {
       | 'NOT_FOUND'
       | 'INTERNAL_ERROR'
     >();
+  });
+
+  it('decodes only the exact safe API error envelope', () => {
+    const response = {
+      error: {
+        code: 'URL_INVALID',
+        message: '請輸入有效的 Threads 貼文網址。',
+        requestId: 'A'.repeat(32),
+      },
+    };
+
+    expect(decodeApiError(response)).toEqual(response);
+    for (const invalid of [
+      { ...response, extra: true },
+      { error: { ...response.error, detail: 'private upstream detail' } },
+      { error: { ...response.error, code: 'PRIVATE_UPSTREAM_FAILURE' } },
+      {
+        error: {
+          ...response.error,
+          message: 'https://video.cdninstagram.com/video.mp4?token=private',
+        },
+      },
+      { error: { ...response.error, message: '' } },
+      { error: { ...response.error, requestId: 'A'.repeat(31) } },
+      null,
+    ]) {
+      expect(decodeApiError(invalid)).toBeNull();
+    }
+  });
+
+  it('decodes the exact anonymous session response', () => {
+    const response = {
+      csrfToken: `${'c'.repeat(42)}Q`,
+      expiresAt: '2026-07-25T08:30:00.000Z',
+      turnstileSiteKey: '0x4AAAAAAD9Gx9nArUYJAkKJ',
+    };
+
+    expect(decodeSessionResponse(response)).toEqual(response);
+    for (const invalid of [
+      { ...response, sessionHash: 'private' },
+      { ...response, csrfToken: `${'c'.repeat(42)}B` },
+      { ...response, expiresAt: '2026-07-25T16:30:00+08:00' },
+      { ...response, turnstileSiteKey: 'https://challenges.cloudflare.com/private' },
+      { ...response, turnstileSiteKey: '' },
+      null,
+    ]) {
+      expect(decodeSessionResponse(invalid)).toBeNull();
+    }
+  });
+
+  it('decodes only the safe resolve projection emitted by the worker', () => {
+    const response = {
+      resolveId: 'R'.repeat(32),
+      expiresAt: '2026-07-25T08:35:00.000Z',
+      candidates: [
+        {
+          candidateId: 'A'.repeat(32),
+          filename: 'threads_Abcde_1.mp4',
+          contentLength: 1024,
+        },
+        { candidateId: 'B'.repeat(32), filename: 'threads_Abcde_2.mp4' },
+      ],
+    };
+
+    expect(decodeResolveResponse(response)).toEqual(response);
+    for (const invalid of [
+      { ...response, finalUrl: 'https://video.cdninstagram.com/private.mp4' },
+      {
+        ...response,
+        candidates: [
+          {
+            ...response.candidates[0],
+            finalUrl: 'https://video.cdninstagram.com/private.mp4',
+          },
+        ],
+      },
+      { ...response, candidates: [{ ...response.candidates[0], width: 1920 }] },
+      { ...response, candidates: [{ ...response.candidates[0], contentLength: 0 }] },
+      { ...response, candidates: [{ ...response.candidates[0], filename: '../private.mp4' }] },
+      { ...response, candidates: [response.candidates[0], response.candidates[0]] },
+      { ...response, candidates: [] },
+      { ...response, candidates: Array.from({ length: 9 }, () => response.candidates[0]) },
+      { ...response, resolveId: 'R'.repeat(31) },
+      { ...response, expiresAt: '2026-02-30T08:35:00.000Z' },
+      null,
+    ]) {
+      expect(decodeResolveResponse(invalid)).toBeNull();
+    }
   });
 
   it('keeps the download session request and response exact', () => {
