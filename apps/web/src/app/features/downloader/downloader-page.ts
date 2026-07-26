@@ -81,7 +81,7 @@ function statusText(state: DownloaderWorkflowState): string {
     case 'bootstrapping':
       return '正在建立安全工作階段。';
     case 'ready':
-      return '工作階段已就緒，請完成安全驗證。';
+      return '工作階段已就緒。';
     case 'resolving':
       return '正在解析公開貼文。';
     case 'candidates':
@@ -116,10 +116,16 @@ function statusText(state: DownloaderWorkflowState): string {
           <h2 id="workbench-title">解析公開貼文</h2>
         </div>
 
-        <form [formGroup]="form" (ngSubmit)="submit()" novalidate>
+        <form
+          [formGroup]="form"
+          [attr.aria-busy]="busy() ? 'true' : null"
+          (ngSubmit)="submit()"
+          novalidate
+        >
           <div class="field">
             <label for="post-url">Threads 公開貼文網址</label>
             <input
+              #postUrlInput
               id="post-url"
               type="url"
               inputmode="url"
@@ -149,6 +155,7 @@ function statusText(state: DownloaderWorkflowState): string {
 
           <label class="rights-confirmation">
             <input
+              #rightsConfirmedInput
               id="rights-confirmed"
               type="checkbox"
               formControlName="rightsConfirmed"
@@ -172,10 +179,25 @@ function statusText(state: DownloaderWorkflowState): string {
             <p id="rights-error" class="field-error" role="alert">必須先確認內容使用權利。</p>
           }
 
-          <div class="challenge-block" aria-labelledby="challenge-title">
+          <div
+            #challengeRegion
+            class="challenge-block"
+            aria-labelledby="challenge-title"
+            tabindex="-1"
+          >
             <div>
               <h3 id="challenge-title">安全驗證</h3>
               <p aria-live="polite" aria-atomic="true">{{ verificationMessage() }}</p>
+              @if (verificationRetryAvailable()) {
+                <button
+                  type="button"
+                  class="verification-retry-action"
+                  [disabled]="busy()"
+                  (click)="retryVerification()"
+                >
+                  重新載入安全驗證
+                </button>
+              }
             </div>
             <div #turnstileContainer class="turnstile-container"></div>
           </div>
@@ -200,17 +222,32 @@ function statusText(state: DownloaderWorkflowState): string {
         </div>
         <p class="status-line" aria-live="polite" aria-atomic="true">{{ statusMessage() }}</p>
         @if (errorState(); as error) {
-          <div class="error-panel" role="alert">
+          <div #workflowErrorPanel class="error-panel" role="alert" tabindex="-1">
             <p>{{ error.message }}</p>
             @if (error.requestId !== null) {
               <p class="request-reference">參考編號：{{ error.requestId }}</p>
+            }
+            @if (canRetryBootstrap()) {
+              <button
+                type="button"
+                class="session-retry-action"
+                [disabled]="busy()"
+                (click)="retryBootstrap()"
+              >
+                重新建立安全工作階段
+              </button>
             }
           </div>
         }
       </section>
 
       @if (candidates().length > 0) {
-        <section class="candidate-section" aria-labelledby="candidate-title">
+        <section
+          #candidateSection
+          class="candidate-section"
+          aria-labelledby="candidate-title"
+          tabindex="-1"
+        >
           <div class="section-heading">
             <p aria-hidden="true">03</p>
             <h2 id="candidate-title">影片候選</h2>
@@ -229,9 +266,14 @@ function statusText(state: DownloaderWorkflowState): string {
                   type="button"
                   class="candidate-action"
                   [disabled]="busy()"
+                  [attr.aria-label]="candidateActionLabel(candidate, index)"
                   (click)="download(candidate.candidateId)"
                 >
-                  交給瀏覽器下載
+                  @if (isIssuingCandidate(candidate.candidateId)) {
+                    正在建立下載
+                  } @else {
+                    交給瀏覽器下載
+                  }
                 </button>
               </li>
             }
@@ -272,15 +314,41 @@ export class DownloaderPageComponent implements OnDestroy {
   private readonly workflow = inject(DownloaderWorkflow);
   private readonly challenge = inject(TURNSTILE_CHALLENGE);
   private readonly turnstileContainer = viewChild<ElementRef<HTMLDivElement>>('turnstileContainer');
+  private readonly postUrlInput = viewChild<ElementRef<HTMLInputElement>>('postUrlInput');
+  private readonly rightsConfirmedInput =
+    viewChild<ElementRef<HTMLInputElement>>('rightsConfirmedInput');
+  private readonly challengeRegion = viewChild<ElementRef<HTMLDivElement>>('challengeRegion');
+  private readonly workflowErrorPanel = viewChild<ElementRef<HTMLDivElement>>('workflowErrorPanel');
+  private readonly candidateSection = viewChild<ElementRef<HTMLElement>>('candidateSection');
   private readonly widgetValue = signal<TurnstileWidgetHandle | null>(null);
   private readonly widgetMountFailed = signal(false);
+  private readonly issuingCandidateId = signal<string | null>(null);
   private mountedSiteKey: string | null = null;
   private mountedContainer: HTMLDivElement | null = null;
+  private focusedFeedbackState: DownloaderWorkflowState | null = null;
   private destroyed = false;
   private readonly synchronizeWidget = effect(() => {
     const container = this.turnstileContainer()?.nativeElement ?? null;
     const siteKey = siteKeyFrom(this.workflow.state());
     untracked(() => this.updateWidget(siteKey, container));
+  });
+  private readonly focusWorkflowFeedback = effect(() => {
+    const state = this.workflow.state();
+    let target: ElementRef<HTMLElement> | undefined;
+    if (state.kind === 'candidates') {
+      target = this.candidateSection();
+    } else if (state.kind === 'error') {
+      target = this.workflowErrorPanel();
+    }
+    if (target === undefined || this.focusedFeedbackState === state) {
+      return;
+    }
+    untracked(() => {
+      if (!this.destroyed) {
+        target.nativeElement.focus();
+        this.focusedFeedbackState = state;
+      }
+    });
   });
 
   readonly state = this.workflow.state;
@@ -300,6 +368,16 @@ export class DownloaderPageComponent implements OnDestroy {
     const kind = this.state().kind;
     return kind === 'bootstrapping' || kind === 'resolving' || kind === 'issuing';
   });
+  private readonly synchronizeFormAvailability = effect(() => {
+    const busy = this.busy();
+    untracked(() => {
+      if (busy) {
+        this.form.disable({ emitEvent: false });
+      } else {
+        this.form.enable({ emitEvent: false });
+      }
+    });
+  });
   readonly verified = computed(() => {
     const widget = this.widgetValue();
     return widget?.status() === 'verified' && widget.token() !== null;
@@ -307,9 +385,15 @@ export class DownloaderPageComponent implements OnDestroy {
   readonly verificationRequired = computed(
     () => this.submittedWithoutVerification() && !this.verified(),
   );
+  readonly verificationRetryAvailable = computed(() => {
+    if (siteKeyFrom(this.state()) === null) {
+      return false;
+    }
+    return this.widgetMountFailed() || this.widgetValue()?.status() === 'error';
+  });
   readonly verificationMessage = computed(() => {
     if (this.widgetMountFailed()) {
-      return '安全驗證無法使用，請重新載入頁面。';
+      return '安全驗證無法使用，請重新載入安全驗證。';
     }
     const widget = this.widgetValue();
     if (widget === null) {
@@ -323,7 +407,7 @@ export class DownloaderPageComponent implements OnDestroy {
       case 'verified':
         return '安全驗證已通過，可提交解析。';
       case 'error':
-        return '安全驗證無法使用，請重新載入頁面。';
+        return '安全驗證無法使用，請重新載入安全驗證。';
       case 'removed':
         return '安全驗證已停止。';
     }
@@ -333,6 +417,10 @@ export class DownloaderPageComponent implements OnDestroy {
     const state = this.state();
     return state.kind === 'error' ? state : null;
   });
+  readonly canRetryBootstrap = computed(() => {
+    const state = this.state();
+    return state.kind === 'error' && state.siteKey === null;
+  });
 
   constructor() {
     void this.workflow.bootstrap();
@@ -340,11 +428,19 @@ export class DownloaderPageComponent implements OnDestroy {
 
   async submit(): Promise<void> {
     this.form.markAllAsTouched();
-    if (this.form.invalid || this.busy()) {
+    if (this.busy()) {
+      return;
+    }
+    if (this.form.invalid) {
+      const invalidInput = this.form.controls.postUrl.invalid
+        ? this.postUrlInput()
+        : this.rightsConfirmedInput();
+      invalidInput?.nativeElement.focus();
       return;
     }
     if (!this.verified()) {
       this.submittedWithoutVerification.set(true);
+      this.challengeRegion()?.nativeElement.focus();
       return;
     }
     this.submittedWithoutVerification.set(false);
@@ -356,7 +452,43 @@ export class DownloaderPageComponent implements OnDestroy {
     if (this.busy()) {
       return;
     }
-    await this.workflow.download(candidateId);
+    this.issuingCandidateId.set(candidateId);
+    try {
+      await this.workflow.download(candidateId);
+    } finally {
+      if (this.issuingCandidateId() === candidateId) {
+        this.issuingCandidateId.set(null);
+      }
+    }
+  }
+
+  async retryBootstrap(): Promise<void> {
+    if (!this.canRetryBootstrap() || this.busy()) {
+      return;
+    }
+    await this.workflow.bootstrap();
+  }
+
+  retryVerification(): void {
+    if (!this.verificationRetryAvailable() || this.busy()) {
+      return;
+    }
+    const siteKey = siteKeyFrom(this.state());
+    const container = this.turnstileContainer()?.nativeElement ?? null;
+    this.submittedWithoutVerification.set(false);
+    this.removeWidget();
+    this.updateWidget(siteKey, container);
+  }
+
+  isIssuingCandidate(candidateId: string): boolean {
+    return this.state().kind === 'issuing' && this.issuingCandidateId() === candidateId;
+  }
+
+  candidateActionLabel(candidate: ResolveCandidate, index: number): string {
+    const action = this.isIssuingCandidate(candidate.candidateId)
+      ? '正在建立下載'
+      : '交給瀏覽器下載';
+    return `${action}，候選 ${index + 1}：${candidate.filename}`;
   }
 
   candidateMetadata(candidate: ResolveCandidate): string {

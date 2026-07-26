@@ -26,6 +26,10 @@ const candidate: ResolveCandidate = {
   height: 1080,
   duration: 12.5,
 };
+const otherCandidate: ResolveCandidate = {
+  candidateId: 'D'.repeat(32),
+  filename: 'threads_Abcde_2.mp4',
+};
 
 interface WidgetFixture {
   readonly handle: TurnstileWidgetHandle;
@@ -148,6 +152,9 @@ describe('DownloaderPageComponent', () => {
     expect(mount.mock.calls[0]?.[0]).toMatchObject({ siteKey: SITE_KEY });
     expect(mount.mock.calls[0]?.[0].container.isConnected).toBe(true);
     expect(attachChallenge).toHaveBeenCalledWith(widgets[0]?.handle);
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('.status-line')?.textContent?.trim(),
+    ).toBe('工作階段已就緒。');
     const verificationMessage = (fixture.nativeElement as HTMLElement).querySelector(
       '.challenge-block [aria-live="polite"]',
     );
@@ -193,11 +200,67 @@ describe('DownloaderPageComponent', () => {
     await render();
 
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
-      '安全驗證無法使用，請重新載入頁面。',
+      '安全驗證無法使用，請重新載入安全驗證。',
     );
     expect(fixture.componentInstance.verified()).toBe(false);
+    const retry = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.verification-retry-action',
+    );
+    expect(retry?.textContent?.trim()).toBe('重新載入安全驗證');
+    retry?.click();
+    await render();
+
+    expect(mount).toHaveBeenCalledTimes(3);
+    expect(mount.mock.calls[2]?.[0]).toMatchObject({ siteKey: OTHER_SITE_KEY });
+    expect(attachChallenge).toHaveBeenLastCalledWith(widgets[1]?.handle);
     expect(() => fixture.destroy()).not.toThrow();
+    expect(widgets[1]?.remove).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
+  });
+
+  it('removes and remounts a widget that reports an error', async () => {
+    widgets[0]?.status.set('error');
+    await render();
+
+    const retry = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.verification-retry-action',
+    );
+    expect(retry).not.toBeNull();
+    retry?.click();
+    await render();
+
+    expect(widgets[0]?.remove).toHaveBeenCalledOnce();
+    expect(mount).toHaveBeenCalledTimes(2);
+    expect(mount.mock.calls[1]?.[0]).toMatchObject({ siteKey: SITE_KEY });
+    expect(attachChallenge).toHaveBeenLastCalledWith(widgets[1]?.handle);
+  });
+
+  it('retries a failed bootstrap without clearing the form', async () => {
+    fixture.componentInstance.form.setValue({
+      postUrl: 'https://threads.com/@alice/post/Abcde',
+      rightsConfirmed: true,
+    });
+    state.set({
+      kind: 'error',
+      siteKey: null,
+      code: 'CLIENT_UNAVAILABLE',
+      message: '服務暫時無法使用，請稍後再試。',
+      requestId: null,
+    });
+    await render();
+
+    const retry = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '.session-retry-action',
+    );
+    expect(retry?.textContent?.trim()).toBe('重新建立安全工作階段');
+    retry?.click();
+    await fixture.whenStable();
+
+    expect(bootstrap).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.form.getRawValue()).toEqual({
+      postUrl: 'https://threads.com/@alice/post/Abcde',
+      rightsConfirmed: true,
+    });
   });
 
   it('requires a valid URL, explicit rights, and verification before resolve', async () => {
@@ -222,9 +285,17 @@ describe('DownloaderPageComponent', () => {
     expect(urlInput?.getAttribute('aria-describedby')).toBe('post-url-help post-url-error');
     expect(rightsInput?.getAttribute('aria-invalid')).toBe('true');
     expect(rightsInput?.getAttribute('aria-describedby')).toBe('rights-help rights-error');
+    expect(root.ownerDocument.activeElement).toBe(urlInput);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
       '學術或非商業目的本身不構成授權',
     );
+
+    component.form.setValue({
+      postUrl: 'https://www.threads.com/@alice/post/Abcde',
+      rightsConfirmed: false,
+    });
+    await component.submit();
+    expect(root.ownerDocument.activeElement).toBe(rightsInput);
 
     component.form.setValue({
       postUrl: ' https://www.threads.com/@alice/post/Abcde ',
@@ -236,41 +307,105 @@ describe('DownloaderPageComponent', () => {
     await component.submit();
     expect(resolve).not.toHaveBeenCalled();
     expect(component.verificationRequired()).toBe(true);
+    expect(root.ownerDocument.activeElement).toBe(root.querySelector('.challenge-block'));
 
     widgets[0]?.token.set('verified-widget-response');
     widgets[0]?.status.set('verified');
+    await render();
+    expect(root.textContent).not.toContain('請完成安全驗證');
     await component.submit();
 
     expect(resolve).toHaveBeenCalledWith(' https://www.threads.com/@alice/post/Abcde ', true);
   });
 
   it('renders safe candidate metadata and dispatches only its opaque candidate ID', async () => {
-    state.set({ kind: 'candidates', siteKey: SITE_KEY, candidates: [candidate] });
+    state.set({
+      kind: 'candidates',
+      siteKey: SITE_KEY,
+      candidates: [candidate, otherCandidate],
+    });
     await render();
     const root = fixture.nativeElement as HTMLElement;
-    const action = root.querySelector<HTMLButtonElement>('.candidate-action');
+    const actions = [...root.querySelectorAll<HTMLButtonElement>('.candidate-action')];
 
     expect(root.textContent).toContain('threads_Abcde_1.mp4');
     expect(root.textContent).toContain('1920 × 1080 / 12.5 秒 / 2.0 MB');
     expect(root.textContent).not.toContain(CANDIDATE_ID);
-    action?.click();
+    expect(actions.map((action) => action.getAttribute('aria-label'))).toEqual([
+      '交給瀏覽器下載，候選 1：threads_Abcde_1.mp4',
+      '交給瀏覽器下載，候選 2：threads_Abcde_2.mp4',
+    ]);
+    expect(new Set(actions.map((action) => action.getAttribute('aria-label'))).size).toBe(2);
+    expect(root.ownerDocument.activeElement).toBe(root.querySelector('.candidate-section'));
+    actions[0]?.click();
     await fixture.whenStable();
 
     expect(download).toHaveBeenCalledWith(CANDIDATE_ID);
   });
 
-  it('disables mutation controls while the workflow is issuing', async () => {
-    state.set({ kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate] });
-    widgets[0]?.token.set('verified-widget-response');
-    widgets[0]?.status.set('verified');
+  it('shows progress on the candidate whose download is being issued', async () => {
+    let finishDownload: (() => void) | undefined;
+    const pendingDownload = new Promise<void>((resolvePending) => {
+      finishDownload = resolvePending;
+    });
+    download.mockImplementationOnce(async () => {
+      state.set({ kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate, otherCandidate] });
+      await pendingDownload;
+      state.set({
+        kind: 'handed-off',
+        siteKey: SITE_KEY,
+        candidates: [candidate, otherCandidate],
+        message: '已交由瀏覽器下載管理器處理。',
+      });
+    });
+    state.set({
+      kind: 'candidates',
+      siteKey: SITE_KEY,
+      candidates: [candidate, otherCandidate],
+    });
+    await render();
+
+    const operation = fixture.componentInstance.download(CANDIDATE_ID);
+    await render();
+    const actions = [
+      ...(fixture.nativeElement as HTMLElement).querySelectorAll<HTMLButtonElement>(
+        '.candidate-action',
+      ),
+    ];
+
+    expect(actions[0]?.disabled).toBe(true);
+    expect(actions[0]?.textContent?.trim()).toBe('正在建立下載');
+    expect(actions[0]?.getAttribute('aria-label')).toBe(
+      '正在建立下載，候選 1：threads_Abcde_1.mp4',
+    );
+    expect(actions[1]?.textContent?.trim()).toBe('交給瀏覽器下載');
+
+    finishDownload?.();
+    await operation;
+  });
+
+  it('disables mutation controls throughout every busy workflow state', async () => {
     fixture.componentInstance.form.setValue({
       postUrl: 'https://threads.com/@alice/post/Abcde',
       rightsConfirmed: true,
     });
-    await render();
     const root = fixture.nativeElement as HTMLElement;
+    const busyStates: readonly DownloaderWorkflowState[] = [
+      { kind: 'bootstrapping' },
+      { kind: 'resolving', siteKey: SITE_KEY },
+      { kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate] },
+    ];
 
-    expect(root.querySelector<HTMLButtonElement>('.primary-action')?.disabled).toBe(true);
+    for (const busyState of busyStates) {
+      state.set(busyState);
+      await render();
+
+      expect(root.querySelector('form')?.getAttribute('aria-busy')).toBe('true');
+      expect(root.querySelector<HTMLInputElement>('#post-url')?.disabled).toBe(true);
+      expect(root.querySelector<HTMLInputElement>('#rights-confirmed')?.disabled).toBe(true);
+      expect(root.querySelector<HTMLButtonElement>('.primary-action')?.disabled).toBe(true);
+    }
+
     expect(root.querySelector<HTMLButtonElement>('.candidate-action')?.disabled).toBe(true);
   });
 
@@ -304,6 +439,7 @@ describe('DownloaderPageComponent', () => {
       '操作過於頻繁，請稍後再試。',
     );
     expect(root.textContent).toContain(`參考編號：${REQUEST_ID}`);
+    expect(root.ownerDocument.activeElement).toBe(root.querySelector('.error-panel'));
   });
 
   it('states the research purpose and adjacent service boundaries without affiliation claims', () => {
