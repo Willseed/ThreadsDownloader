@@ -142,6 +142,8 @@ test('keeps legal documents optional while preserving direct shareable routes', 
   await waitForVerifiedChallenge(page);
 
   const termsTrigger = page.locator('.site-nav').getByRole('link', { name: '條款', exact: true });
+  await expect(page.locator('.service-boundary')).toHaveCount(0);
+  await expect(page.getByText('法務與資料處理全文採需要時載入')).toHaveCount(0);
   await expect(page.getByText('本服務不授予任何第三方內容權利')).toHaveCount(0);
   await termsTrigger.click();
 

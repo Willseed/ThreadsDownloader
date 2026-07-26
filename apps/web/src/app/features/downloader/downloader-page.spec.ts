@@ -442,21 +442,18 @@ describe('DownloaderPageComponent', () => {
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.error-panel'));
   });
 
-  it('keeps legal copy out of the page while retaining direct modal fallbacks', () => {
+  it('omits legal documents and legal navigation from the downloader surface', () => {
     const root = fixture.nativeElement as HTMLElement;
-    const paragraphs = [...root.querySelectorAll<HTMLParagraphElement>('.boundary-copy > p')].map(
-      (paragraph) => paragraph.textContent?.trim(),
-    );
 
-    expect(paragraphs).toEqual(['法務與資料處理全文採需要時載入，不會增加主要下載流程的操作。']);
+    expect(root.querySelector('.service-boundary')).toBeNull();
+    expect(root.textContent).not.toContain('使用邊界');
+    expect(root.textContent).not.toContain('法務與資料處理全文採需要時載入');
     expect(root.textContent).not.toContain(
       '本服務之設置與營運目的僅為技術及學術研究，營運者不藉提供本服務獲取任何商業或經濟利益。',
     );
     expect(root.textContent).not.toContain('__Host-td_session');
     expect(
-      [...root.querySelectorAll<HTMLAnchorElement>('.boundary-links a')].map((link) =>
-        link.getAttribute('href'),
-      ),
-    ).toEqual(['/terms', '/privacy', '/copyright']);
+      root.querySelectorAll('a[href="/terms"], a[href="/privacy"], a[href="/copyright"]'),
+    ).toHaveLength(0);
   });
 });

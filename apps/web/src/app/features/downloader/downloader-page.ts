@@ -25,7 +25,6 @@ import {
   TURNSTILE_CHALLENGE,
   type TurnstileWidgetHandle,
 } from '../../core/turnstile/browser-turnstile-challenge.js';
-import { LegalModalTriggerDirective } from '../legal/legal-modal.js';
 import { DownloaderWorkflow, type DownloaderWorkflowState } from './downloader-workflow.js';
 
 const THREADS_HOSTS = new Set(['threads.com', 'www.threads.com', 'threads.net', 'www.threads.net']);
@@ -97,7 +96,7 @@ function statusText(state: DownloaderWorkflowState): string {
 
 @Component({
   selector: 'app-downloader-page',
-  imports: [LegalModalTriggerDirective, ReactiveFormsModule],
+  imports: [ReactiveFormsModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <main id="main-content" class="downloader-page" aria-labelledby="page-title">
@@ -280,21 +279,6 @@ function statusText(state: DownloaderWorkflowState): string {
           </ul>
         </section>
       }
-
-      <section class="service-boundary" aria-labelledby="boundary-title">
-        <div class="section-heading">
-          <p aria-hidden="true">04</p>
-          <h2 id="boundary-title">使用邊界</h2>
-        </div>
-        <div class="boundary-copy">
-          <p>法務與資料處理全文採需要時載入，不會增加主要下載流程的操作。</p>
-          <nav class="boundary-links" aria-label="使用與權利資訊">
-            <a href="/terms" legalModalTrigger="terms">閱讀使用條款</a>
-            <a href="/privacy" legalModalTrigger="privacy">閱讀隱私與資料處理說明</a>
-            <a href="/copyright" legalModalTrigger="copyright">著作權與下架通知</a>
-          </nav>
-        </div>
-      </section>
     </main>
   `,
 })

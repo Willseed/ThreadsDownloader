@@ -160,16 +160,14 @@ h3 {
 }
 
 .site-nav,
-.site-footer nav,
-.boundary-links {
+.site-footer nav {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1) var(--space-3);
 }
 
 .site-nav a,
-.site-footer a,
-.boundary-links a {
+.site-footer a {
   display: inline-flex;
   align-items: center;
   min-height: var(--control-size);
@@ -247,8 +245,7 @@ h3 {
 
 .workbench,
 .system-status,
-.candidate-section,
-.service-boundary {
+.candidate-section {
   border-block-start: 1px solid var(--ink);
 }
 
@@ -400,33 +397,6 @@ h3 {
 
 .candidate-action {
   min-height: var(--control-size);
-}
-
-.service-boundary {
-  display: grid;
-  grid-template-columns: minmax(16rem, 0.65fr) 1fr;
-  column-gap: var(--space-5);
-}
-
-.service-boundary .section-heading {
-  grid-column: 1 / -1;
-}
-
-.boundary-copy {
-  grid-column: 2;
-  display: grid;
-  gap: var(--space-3);
-  padding-block: var(--space-5);
-  color: var(--muted);
-}
-
-.boundary-copy p:first-child {
-  color: var(--ink);
-  font-weight: 700;
-}
-
-.boundary-links {
-  margin-block-start: var(--space-2);
 }
 
 .site-footer {
@@ -698,17 +668,12 @@ h3 {
   }
 
   .challenge-block,
-  .system-status,
-  .service-boundary {
+  .system-status {
     grid-template-columns: 1fr;
   }
 
   .turnstile-container {
     justify-self: start;
-  }
-
-  .boundary-copy {
-    grid-column: 1;
   }
 
   .candidate-list li {
@@ -744,7 +709,6 @@ h3 {
   .workbench,
   .system-status,
   .candidate-section,
-  .service-boundary,
   .research-purpose,
   .legal-article > section,
   .legal-status,
