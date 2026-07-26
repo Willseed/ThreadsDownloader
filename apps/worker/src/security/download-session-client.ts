@@ -51,6 +51,8 @@ export interface DownloadSessionAcquireRequest extends DownloadSessionIdentityRe
 export interface DownloadSessionRenewRequest extends DownloadSessionIdentityRequest {
   readonly holderId: string;
   readonly sequence: number;
+  /** True only when positive-length bytes were forwarded since the last acknowledged renewal. */
+  readonly progress: boolean;
 }
 
 export interface DownloadSessionInterruptRequest extends DownloadSessionIdentityRequest {
@@ -324,10 +326,13 @@ export function decodeDownloadSessionAcquireRequest(
   };
 }
 
-function decodeDownloadSessionLeaseRequest(value: unknown): DownloadSessionRenewRequest | null {
+function decodeDownloadSessionLeaseRequest(
+  value: unknown,
+  expectedKeys: readonly string[],
+): DownloadSessionInterruptRequest | null {
   if (
     !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'holderId', 'sequence', 'sessionHash']) ||
+    !hasExactKeys(value, expectedKeys) ||
     !isDownloadId(value['downloadId']) ||
     !isSessionHash(value['sessionHash']) ||
     !isHolderId(value['holderId']) ||
@@ -346,13 +351,28 @@ function decodeDownloadSessionLeaseRequest(value: unknown): DownloadSessionRenew
 export function decodeDownloadSessionRenewRequest(
   value: unknown,
 ): DownloadSessionRenewRequest | null {
-  return decodeDownloadSessionLeaseRequest(value);
+  const lease = decodeDownloadSessionLeaseRequest(value, [
+    'downloadId',
+    'holderId',
+    'progress',
+    'sequence',
+    'sessionHash',
+  ]);
+  if (lease === null || !isPlainObject(value) || typeof value['progress'] !== 'boolean') {
+    return null;
+  }
+  return { ...lease, progress: value['progress'] };
 }
 
 export function decodeDownloadSessionInterruptRequest(
   value: unknown,
 ): DownloadSessionInterruptRequest | null {
-  return decodeDownloadSessionLeaseRequest(value);
+  return decodeDownloadSessionLeaseRequest(value, [
+    'downloadId',
+    'holderId',
+    'sequence',
+    'sessionHash',
+  ]);
 }
 
 export function decodeDownloadSessionFinishRequest(

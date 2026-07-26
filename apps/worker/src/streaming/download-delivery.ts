@@ -252,6 +252,7 @@ function responseHeaders(
 
 class LeaseTrackedStream {
   private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+  private acknowledgedBytes = 0;
   private actualBytes = 0;
   private downstreamCancelled = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -306,6 +307,8 @@ class LeaseTrackedStream {
     }
     if (this.renewInFlight === null) {
       const sequence = this.sequence + 1;
+      const bytesAtAttempt = this.actualBytes;
+      const progress = bytesAtAttempt > this.acknowledgedBytes;
       this.attemptedSequence = sequence;
       this.renewInFlight = Promise.allSettled([
         boundedLifecycleMutation(() => this.admission.renew()),
@@ -314,6 +317,7 @@ class LeaseTrackedStream {
             ...this.identity,
             holderId: this.acquired.holderId,
             sequence,
+            progress,
           }),
         ),
       ])
@@ -321,6 +325,7 @@ class LeaseTrackedStream {
           const downloadRenewal = results[1];
           if (downloadRenewal.status === 'fulfilled') {
             this.sequence = downloadRenewal.value.sequence;
+            this.acknowledgedBytes = Math.max(this.acknowledgedBytes, bytesAtAttempt);
           }
           const failure = results.find(
             (result): result is PromiseRejectedResult => result.status === 'rejected',

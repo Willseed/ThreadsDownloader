@@ -509,7 +509,7 @@ describe('DownloadSession read-only seams', () => {
 });
 
 describe('DownloadSession lifecycle seams', () => {
-  it('decrypts only for acquire, uses fresh holders, renews monotonically, and interrupts', async () => {
+  it('decrypts only for acquire, separates lease heartbeats from byte activity, and interrupts', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
     const { session, storage } = object();
     expect((await initialize(session)).status).toBe(201);
@@ -527,12 +527,27 @@ describe('DownloadSession lifecycle seams', () => {
     expect(storage.leases).toHaveLength(1);
 
     clock.mockReturnValue(NOW + 1);
+    const missingProgress = await session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: firstBody.holderId,
+        sequence: 1,
+      }),
+    );
+    expect(missingProgress.status).toBe(400);
+    expect(storage.row).toMatchObject({
+      last_activity_at: NOW,
+      idle_expires_at: NOW + 600_000,
+    });
+
     const renewed = await session.fetch(
       jsonRequest('/renew', {
         downloadId,
         sessionHash,
         holderId: firstBody.holderId,
         sequence: 1,
+        progress: false,
       }),
     );
     expect(renewed.status).toBe(200);
@@ -541,14 +556,41 @@ describe('DownloadSession lifecycle seams', () => {
       holderId: firstBody.holderId,
       sequence: 1,
     });
+    expect(storage.row).toMatchObject({
+      last_activity_at: NOW,
+      idle_expires_at: NOW + 600_000,
+    });
+    expect(storage.leases[0]).toMatchObject({
+      sequence: 1,
+      renewed_at: NOW + 1,
+      expires_at: NOW + 1 + 900_000,
+    });
+    expect(storage.alarmAt).toBe(NOW + 600_000);
 
     clock.mockReturnValue(NOW + 2);
+    const progressed = await session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: firstBody.holderId,
+        sequence: 2,
+        progress: true,
+      }),
+    );
+    expect(progressed.status).toBe(200);
+    expect(storage.row).toMatchObject({
+      last_activity_at: NOW + 2,
+      idle_expires_at: NOW + 2 + 600_000,
+    });
+    expect(storage.alarmAt).toBe(NOW + 2 + 600_000);
+
     const replay = await session.fetch(
       jsonRequest('/renew', {
         downloadId,
         sessionHash,
         holderId: firstBody.holderId,
-        sequence: 1,
+        sequence: 2,
+        progress: true,
       }),
     );
     expect(replay.status).toBe(409);
@@ -557,7 +599,7 @@ describe('DownloadSession lifecycle seams', () => {
         downloadId,
         sessionHash,
         holderId: firstBody.holderId,
-        sequence: 1,
+        sequence: 2,
       }),
     );
     expect(interrupted.status).toBe(200);
@@ -567,6 +609,41 @@ describe('DownloadSession lifecycle seams', () => {
     clock.mockReturnValue(NOW + 3);
     const secondBody = (await (await acquire(session)).json()) as { readonly holderId: string };
     expect(secondBody.holderId).not.toBe(firstBody.holderId);
+  });
+
+  it('deletes a blocked stream at the original idle alarm despite a fresh lease heartbeat', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const { session, storage } = object();
+    expect((await initialize(session)).status).toBe(201);
+    const acquired = (await (await acquire(session)).json()) as { readonly holderId: string };
+
+    clock.mockReturnValue(NOW + 599_999);
+    expect(
+      (
+        await session.fetch(
+          jsonRequest('/renew', {
+            downloadId,
+            sessionHash,
+            holderId: acquired.holderId,
+            sequence: 1,
+            progress: false,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(storage.leases[0]).toMatchObject({
+      sequence: 1,
+      renewed_at: NOW + 599_999,
+      expires_at: NOW + 1_499_999,
+    });
+    expect(storage.alarmAt).toBe(NOW + 600_000);
+
+    clock.mockReturnValue(NOW + 600_000);
+    await session.alarm();
+    expect(storage.tables.size).toBe(0);
+    expect(storage.row).toBeNull();
+    expect(storage.leases).toEqual([]);
+    expect(storage.alarmAt).toBeNull();
   });
 
   it('returns canonical range failures and enforces four parallel leases', async () => {

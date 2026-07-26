@@ -730,6 +730,7 @@ describe('download delivery stream accounting', () => {
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
       expect(harness.admissionCalls.filter((call) => call === 'renew')).toHaveLength(2);
       expect(callBody(harness, '/renew')['sequence']).toBe(1);
+      expect(callBody(harness, '/renew')['progress']).toBe(false);
       await vi.advanceTimersByTimeAsync(DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS - 1_000);
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
 
@@ -740,6 +741,7 @@ describe('download delivery stream accounting', () => {
       expect(harness.admissionCalls.filter((call) => call === 'renew')).toHaveLength(3);
       expect(harness.calls.filter((call) => call.path === '/renew').at(-1)!.body).toMatchObject({
         sequence: 2,
+        progress: false,
       });
 
       await expect(reader.cancel()).resolves.toBeUndefined();
@@ -749,6 +751,147 @@ describe('download delivery stream accounting', () => {
       expect(harness.admissionCalls.filter((call) => call === 'release')).toHaveLength(1);
       await expect(pendingRead).resolves.toEqual({ done: true, value: undefined });
       blocked.resolve(undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports progress once for forwarded bytes and not again without new bytes', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = sessionHarness();
+      const response = await delivery(harness, async () => videoResponse(chunkStream([bytes(1)])))(
+        input,
+      );
+      const reader = response.body!.getReader();
+      await expect(reader.read()).resolves.toMatchObject({ done: false, value: bytes(1) });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(
+        harness.calls
+          .filter((call) => call.path === '/renew')
+          .map((call) => (call.body as Record<string, unknown>)['progress']),
+      ).toEqual([true, false]);
+
+      await reader.cancel();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not report a zero-length chunk as byte progress', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = sessionHarness();
+      const response = await delivery(harness, async () => videoResponse(chunkStream([bytes(0)])))(
+        input,
+      );
+      const reader = response.body!.getReader();
+      await expect(reader.read()).resolves.toMatchObject({ done: false, value: bytes(0) });
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callBody(harness, '/renew')['progress']).toBe(false);
+
+      await reader.cancel();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains bytes forwarded during an in-flight renewal for the next heartbeat', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstRenewal = deferred<Response>();
+      let renewalCount = 0;
+      const harness = sessionHarness({
+        renew: async (body) => {
+          renewalCount += 1;
+          return renewalCount === 1
+            ? firstRenewal.promise
+            : Response.json({
+                ok: true,
+                holderId,
+                sequence: body['sequence'],
+                expiresAt: 960_000,
+              });
+        },
+      });
+      const origin = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            controller.enqueue(bytes(1));
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      const response = await delivery(harness, async () => videoResponse(origin))(input);
+      const reader = response.body!.getReader();
+      await reader.read();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(callBody(harness, '/renew')['progress']).toBe(true);
+      await reader.read();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
+
+      firstRenewal.resolve(Response.json({ ok: true, holderId, sequence: 1, expiresAt: 930_000 }));
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(28_999);
+      expect(
+        harness.calls
+          .filter((call) => call.path === '/renew')
+          .map((call) => (call.body as Record<string, unknown>)['progress']),
+      ).toEqual([true, true]);
+
+      await reader.cancel();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed at 600 seconds when heartbeat-only renewals cannot extend idle expiry', async () => {
+    vi.useFakeTimers();
+    try {
+      let renewalCount = 0;
+      const harness = sessionHarness({
+        renew: async (body) => {
+          renewalCount += 1;
+          return renewalCount === 20
+            ? Response.json({ ok: false }, { status: 410 })
+            : Response.json({
+                ok: true,
+                holderId,
+                sequence: body['sequence'],
+                expiresAt: 930_000,
+              });
+        },
+      });
+      const blocked = deferred<void>();
+      const originCancelled = vi.fn();
+      const origin = new ReadableStream<Uint8Array>(
+        { pull: () => blocked.promise, cancel: originCancelled },
+        { highWaterMark: 0 },
+      );
+      const response = await delivery(harness, async () => videoResponse(origin))(input);
+      const pendingRead = response.body!.getReader().read();
+      const failedRead = expect(pendingRead).rejects.toThrow('DOWNLOAD_STREAM_FAILED');
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      await vi.waitFor(() => expect(paths(harness)).toContain('/interrupt'));
+
+      const renewals = harness.calls.filter((call) => call.path === '/renew');
+      expect(renewals).toHaveLength(20);
+      expect(renewals.map((call) => (call.body as Record<string, unknown>)['progress'])).toEqual(
+        Array.from({ length: 20 }, () => false),
+      );
+      expect(originCancelled).toHaveBeenCalledTimes(1);
+      await failedRead;
+      blocked.resolve(undefined);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -779,6 +922,7 @@ describe('download delivery stream accounting', () => {
       await vi.waitFor(() => expect(paths(harness)).toContain('/interrupt'));
 
       expect(paths(harness).filter((path) => path === '/renew')).toHaveLength(1);
+      expect(callBody(harness, '/renew')['progress']).toBe(false);
       expect(callBody(harness, '/interrupt')['sequence']).toBe(1);
       expect(harness.admissionCalls).toEqual(['acquire', 'renew', 'renew', 'release']);
       await failedRead;

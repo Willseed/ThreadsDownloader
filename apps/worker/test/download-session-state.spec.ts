@@ -451,7 +451,7 @@ describe('download stream acquisition', () => {
 });
 
 describe('download stream renewal', () => {
-  it('renews only its holder with a strictly higher sequence', () => {
+  it('renews only its holder with a strictly higher sequence without treating a heartbeat as activity', () => {
     const acquired = acquireDownloadStream(issued(), {
       now: NOW,
       holderId: holder('holder_renew'),
@@ -459,29 +459,80 @@ describe('download stream renewal', () => {
       ifRangeHeader: null,
     });
     const renewed = renewDownloadStream(acquired.state, {
-      now: NOW + 1,
+      now: NOW + DOWNLOAD_IDLE_DEADLINE_MS - 1,
       holderId: holder('holder_renew'),
       sequence: 2,
+      progress: false,
     });
 
-    expect(renewed.lease).toMatchObject({ sequence: 2, renewedAt: NOW + 1 });
+    expect(renewed.lease).toMatchObject({
+      sequence: 2,
+      renewedAt: NOW + DOWNLOAD_IDLE_DEADLINE_MS - 1,
+    });
+    expect(renewed.state).toMatchObject({
+      lastActivityAt: NOW,
+      idleExpiresAt: NOW + DOWNLOAD_IDLE_DEADLINE_MS,
+    });
+    expect(decideDownloadAlarm(renewed.state, NOW + DOWNLOAD_IDLE_DEADLINE_MS)).toMatchObject({
+      action: 'delete',
+      state: { status: 'EXPIRED' },
+    });
     expectStateError(
       () =>
         renewDownloadStream(renewed.state, {
-          now: NOW + 2,
+          now: NOW + DOWNLOAD_IDLE_DEADLINE_MS - 1,
           holderId: holder('holder_renew'),
           sequence: 2,
+          progress: false,
         }),
       'DOWNLOAD_SEQUENCE_INVALID',
     );
     expectStateError(
       () =>
         renewDownloadStream(renewed.state, {
-          now: NOW + 2,
+          now: NOW + DOWNLOAD_IDLE_DEADLINE_MS - 1,
           holderId: holder('other_holder'),
           sequence: 3,
+          progress: false,
         }),
       'DOWNLOAD_LEASE_INVALID',
+    );
+  });
+
+  it('moves activity and idle deadlines only after positive byte progress', () => {
+    const acquired = acquireFull(issued(), 'holder_progress', NOW);
+    const renewed = renewDownloadStream(acquired.state, {
+      now: NOW + 500_000,
+      holderId: holder('holder_progress'),
+      sequence: 1,
+      progress: true,
+    });
+
+    expect(renewed.state).toMatchObject({
+      lastActivityAt: NOW + 500_000,
+      idleExpiresAt: NOW + 500_000 + DOWNLOAD_IDLE_DEADLINE_MS,
+    });
+    expect(renewed.lease).toMatchObject({
+      renewedAt: NOW + 500_000,
+      sequence: 1,
+    });
+  });
+
+  it('requires an exact boolean progress signal', () => {
+    const acquired = acquireFull(issued(), 'holder_progress_shape', NOW);
+    const base = {
+      now: NOW + 1,
+      holderId: holder('holder_progress_shape'),
+      sequence: 1,
+    };
+
+    expectStateError(
+      () => renewDownloadStream(acquired.state, base as never),
+      'DOWNLOAD_STATE_INVALID',
+    );
+    expectStateError(
+      () => renewDownloadStream(acquired.state, { ...base, progress: 1 as never }),
+      'DOWNLOAD_STATE_INVALID',
     );
   });
 
@@ -498,6 +549,7 @@ describe('download stream renewal', () => {
           now: NOW + DOWNLOAD_IDLE_DEADLINE_MS,
           holderId: holder('holder_idle'),
           sequence: 1,
+          progress: true,
         }),
       'DOWNLOAD_EXPIRED',
     );
@@ -527,6 +579,7 @@ describe('download stream renewal', () => {
         now: NOW + offset,
         holderId: holder('holder_absolute'),
         sequence: index + 1,
+        progress: true,
       });
       state = renewed.state;
       lease = renewed.lease;
@@ -566,6 +619,30 @@ describe('download stream completion', () => {
     expect(result.status).toBe('INTERRUPTED');
     expect(result.completedIntervals).toEqual([]);
     expect(result.completionExpiresAt).toBeNull();
+  });
+
+  it('does not treat a zero-byte finish or an interrupt as byte activity', () => {
+    const zeroByte = acquireFull(issued(), 'holder_zero_byte', NOW);
+    const finished = finishFull(zeroByte.state, 'holder_zero_byte', NOW + 1, {
+      actualBytes: 0,
+    });
+    expect(finished).toMatchObject({
+      status: 'INTERRUPTED',
+      lastActivityAt: NOW,
+      idleExpiresAt: NOW + DOWNLOAD_IDLE_DEADLINE_MS,
+    });
+
+    const cancelled = acquireFull(issued(), 'holder_cancelled', NOW);
+    const interrupted = interruptDownloadStream(cancelled.state, {
+      now: NOW + 1,
+      holderId: holder('holder_cancelled'),
+      sequence: 0,
+    });
+    expect(interrupted).toMatchObject({
+      status: 'INTERRUPTED',
+      lastActivityAt: NOW,
+      idleExpiresAt: NOW + DOWNLOAD_IDLE_DEADLINE_MS,
+    });
   });
 
   it('does not credit a forged upstream success status', () => {
@@ -731,6 +808,7 @@ describe('download stream completion', () => {
       now: NOW + 1,
       holderId: holder('holder_sequence'),
       sequence: 2,
+      progress: true,
     });
     expectStateError(
       () => finishFull(renewed.state, 'holder_sequence', NOW + 2, { sequence: 0 }),
@@ -916,6 +994,7 @@ describe('download session alarms', () => {
           now: NOW + offset,
           holderId: holder('holder_absolute_alarm'),
           sequence: index + 1,
+          progress: true,
         }),
       };
     }

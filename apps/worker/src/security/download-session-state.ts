@@ -92,6 +92,8 @@ export interface RenewDownloadStreamInput {
   readonly now: number;
   readonly holderId: string;
   readonly sequence: number;
+  /** True only when positive-length bytes were forwarded since the last acknowledged renewal. */
+  readonly progress: boolean;
 }
 
 export interface RenewDownloadStreamResult {
@@ -303,7 +305,6 @@ function validateLease(lease: DownloadStreamLease, state: DownloadSessionState):
     !isSafeTimestamp(lease.expiresAt) ||
     lease.acquiredAt < state.issuedAt ||
     lease.acquiredAt > lease.renewedAt ||
-    lease.renewedAt > state.lastActivityAt! ||
     lease.expiresAt !==
       boundedDeadline(lease.renewedAt, DOWNLOAD_STREAM_LEASE_MS, state.absoluteExpiresAt) ||
     lease.expiresAt <= lease.renewedAt
@@ -617,7 +618,7 @@ export function renewDownloadStream(
   input: RenewDownloadStreamInput,
 ): RenewDownloadStreamResult {
   validateState(state);
-  if (!isRecord(input)) {
+  if (!isRecord(input) || typeof input.progress !== 'boolean') {
     return fail('DOWNLOAD_STATE_INVALID');
   }
   validateOperationTime(state, input.now);
@@ -646,8 +647,10 @@ export function renewDownloadStream(
   };
   const next: DownloadSessionState = {
     ...cloneState(current),
-    idleExpiresAt: boundedDeadline(input.now, DOWNLOAD_IDLE_DEADLINE_MS, current.absoluteExpiresAt),
-    lastActivityAt: input.now,
+    idleExpiresAt: input.progress
+      ? boundedDeadline(input.now, DOWNLOAD_IDLE_DEADLINE_MS, current.absoluteExpiresAt)
+      : current.idleExpiresAt,
+    lastActivityAt: input.progress ? input.now : current.lastActivityAt,
     leases: current.leases.map((lease) =>
       lease.holderId === input.holderId ? renewed : cloneLease(lease),
     ),
@@ -733,10 +736,13 @@ function stateAfterLeaseEnds(
   state: DownloadSessionState,
   holderId: string,
   now: number,
+  progress: boolean,
 ): Pick<DownloadSessionState, 'idleExpiresAt' | 'lastActivityAt' | 'leases'> {
   return {
-    idleExpiresAt: boundedDeadline(now, DOWNLOAD_IDLE_DEADLINE_MS, state.absoluteExpiresAt),
-    lastActivityAt: now,
+    idleExpiresAt: progress
+      ? boundedDeadline(now, DOWNLOAD_IDLE_DEADLINE_MS, state.absoluteExpiresAt)
+      : state.idleExpiresAt,
+    lastActivityAt: progress ? now : state.lastActivityAt,
     leases: state.leases.filter((lease) => lease.holderId !== holderId).map(cloneLease),
   };
 }
@@ -754,7 +760,7 @@ export function finishDownloadStream(
     return fail('DOWNLOAD_STATE_INVALID');
   }
   const { current, lease } = assertMutableLease(state, input);
-  const ended = stateAfterLeaseEnds(current, input.holderId, input.now);
+  const ended = stateAfterLeaseEnds(current, input.holderId, input.now, input.actualBytes > 0);
   const interval = creditableInterval(current, lease, input);
   const completedIntervals =
     interval === null
@@ -790,7 +796,7 @@ export function interruptDownloadStream(
   input: InterruptDownloadStreamInput,
 ): DownloadSessionState {
   const { current } = assertMutableLease(state, input);
-  const ended = stateAfterLeaseEnds(current, input.holderId, input.now);
+  const ended = stateAfterLeaseEnds(current, input.holderId, input.now, false);
   return cloneState({
     ...cloneState(current),
     ...ended,

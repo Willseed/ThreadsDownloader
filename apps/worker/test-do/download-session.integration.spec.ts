@@ -434,17 +434,11 @@ describe('DownloadSession lifecycle in workerd', () => {
     expect((await snapshot(restarted.target)).tables).toEqual([]);
   });
 
-  it('renews monotonically, replaces an ended holder, and destroys without tombstones', async () => {
+  it('renews a lease without recording heartbeat-only activity and destroys without tombstones', async () => {
     const current = fixture();
     expect((await initialize(current)).status).toBe(201);
     const acquired = (await (await acquire(current)).json()) as { readonly holderId: string };
-    const renewed = await post(current, '/renew', {
-      downloadId: current.downloadId,
-      sessionHash: current.sessionHash,
-      holderId: acquired.holderId,
-      sequence: 1,
-    });
-    expect(renewed.status).toBe(200);
+    const acquiredSnapshot = await snapshot(current.target);
     expect(
       (
         await post(current, '/renew', {
@@ -452,6 +446,37 @@ describe('DownloadSession lifecycle in workerd', () => {
           sessionHash: current.sessionHash,
           holderId: acquired.holderId,
           sequence: 1,
+        })
+      ).status,
+    ).toBe(400);
+    expect(await snapshot(current.target)).toEqual(acquiredSnapshot);
+
+    const renewed = await post(current, '/renew', {
+      downloadId: current.downloadId,
+      sessionHash: current.sessionHash,
+      holderId: acquired.holderId,
+      sequence: 1,
+      progress: false,
+    });
+    expect(renewed.status).toBe(200);
+    const heartbeatSnapshot = await snapshot(current.target);
+    expect(heartbeatSnapshot.sessionRows[0]).toMatchObject({
+      last_activity_at: acquiredSnapshot.sessionRows[0]?.['last_activity_at'],
+      idle_expires_at: acquiredSnapshot.sessionRows[0]?.['idle_expires_at'],
+    });
+    expect(heartbeatSnapshot.leaseRows[0]).toMatchObject({
+      holder_id: acquired.holderId,
+      sequence: 1,
+    });
+    expect(heartbeatSnapshot.alarmAt).toBe(acquiredSnapshot.alarmAt);
+    expect(
+      (
+        await post(current, '/renew', {
+          downloadId: current.downloadId,
+          sessionHash: current.sessionHash,
+          holderId: acquired.holderId,
+          sequence: 1,
+          progress: false,
         })
       ).status,
     ).toBe(409);
@@ -477,6 +502,7 @@ describe('DownloadSession lifecycle in workerd', () => {
           sessionHash: current.sessionHash,
           holderId: acquired.holderId,
           sequence: 2,
+          progress: false,
         },
       ],
       [

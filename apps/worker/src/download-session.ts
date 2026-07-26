@@ -953,6 +953,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
           now,
           holderId: input.holderId,
           sequence: input.sequence,
+          progress: input.progress,
         });
         const alarmAt = this.nextAlarmAt(renewed.state, now);
         this.replaceState(renewed.state);

@@ -10,7 +10,9 @@ import {
   decodeDownloadSessionIdentityRequest,
   decodeDownloadSessionInitializeRequest,
   decodeDownloadSessionInitializeResponse,
+  decodeDownloadSessionInterruptRequest,
   decodeDownloadSessionMetadataHeaders,
+  decodeDownloadSessionRenewRequest,
   decodeDownloadSessionRenewResponse,
   decodeDownloadSessionStatusResponse,
   destroyDownloadSession,
@@ -238,6 +240,18 @@ describe('download session exact request decoders', () => {
         },
       }),
     ).toBeNull();
+  });
+
+  it('requires an exact boolean progress signal only on renewals', () => {
+    const renewal = { ...identity, holderId, sequence: 1, progress: true };
+    const interruption = { ...identity, holderId, sequence: 1 };
+
+    expect(decodeDownloadSessionRenewRequest(renewal)).toEqual(renewal);
+    expect(decodeDownloadSessionRenewRequest(interruption)).toBeNull();
+    expect(decodeDownloadSessionRenewRequest({ ...renewal, progress: 1 })).toBeNull();
+    expect(decodeDownloadSessionRenewRequest({ ...renewal, extra: true })).toBeNull();
+    expect(decodeDownloadSessionInterruptRequest(interruption)).toEqual(interruption);
+    expect(decodeDownloadSessionInterruptRequest(renewal)).toBeNull();
   });
 });
 
@@ -519,7 +533,12 @@ describe('download session namespace client', () => {
       media: media(),
     });
     expect(
-      await renewDownloadSessionStream(sessions, { ...identity, holderId, sequence: 1 }),
+      await renewDownloadSessionStream(sessions, {
+        ...identity,
+        holderId,
+        sequence: 1,
+        progress: true,
+      }),
     ).toEqual({ holderId, sequence: 1, expiresAt: 902_000 });
     await finishDownloadSessionStream(sessions, {
       ...identity,
@@ -558,7 +577,12 @@ describe('download session namespace client', () => {
       rangeHeader: 'bytes=10-19',
       ifRangeHeader: '"v1"',
     });
-    expect(await json(requests[3]!)).toEqual({ ...identity, holderId, sequence: 1 });
+    expect(await json(requests[3]!)).toEqual({
+      ...identity,
+      holderId,
+      sequence: 1,
+      progress: true,
+    });
     expect(await json(requests[4]!)).toEqual({
       ...identity,
       holderId,
