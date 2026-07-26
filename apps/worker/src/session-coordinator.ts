@@ -185,10 +185,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  return (
-    actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index])
-  );
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
+  const expected = [...keys].sort((left, right) => left.localeCompare(right, 'en'));
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 export function decodeCreateSessionRequest(value: unknown): CreateSessionInput | null {

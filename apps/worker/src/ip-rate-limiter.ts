@@ -96,7 +96,12 @@ function isSafeTime(value: unknown): value is number {
 }
 
 export function decodeIpRateLimitRequest(value: unknown): IpPermitRequest | null {
-  if (!isPlainObject(value) || Object.keys(value).sort().join(',') !== 'ipHash,now,permitId') {
+  if (
+    !isPlainObject(value) ||
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .join(',') !== 'ipHash,now,permitId'
+  ) {
     return null;
   }
   return isIpHash(value['ipHash']) && isPermitId(value['permitId']) && isSafeTime(value['now'])
@@ -105,7 +110,12 @@ export function decodeIpRateLimitRequest(value: unknown): IpPermitRequest | null
 }
 
 export function decodeSessionIssuanceRequest(value: unknown): SessionIssuanceRequest | null {
-  if (!isPlainObject(value) || Object.keys(value).sort().join(',') !== 'ipHash,now,reservationId') {
+  if (
+    !isPlainObject(value) ||
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .join(',') !== 'ipHash,now,reservationId'
+  ) {
     return null;
   }
   return isIpHash(value['ipHash']) &&

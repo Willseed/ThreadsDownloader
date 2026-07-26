@@ -59,8 +59,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const sorted = [...expected].sort();
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
+  const sorted = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
   return actual.length === sorted.length && actual.every((key, index) => key === sorted[index]);
 }
 

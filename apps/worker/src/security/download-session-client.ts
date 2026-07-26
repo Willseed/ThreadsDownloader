@@ -8,8 +8,14 @@ import {
   type DownloadState,
   type DownloadStreamRequestPlan,
 } from './download-session-state.js';
-import { decideIfRange, parseSingleByteRange, type HeaderSource } from './range-transfer.js';
-import type { ByteInterval, ReliableValidator, RepresentationPin } from './range-transfer.js';
+import {
+  decideIfRange,
+  parseSingleByteRange,
+  type ByteInterval,
+  type HeaderSource,
+  type ReliableValidator,
+  type RepresentationPin,
+} from './range-transfer.js';
 import {
   decodeProbedMediaWire,
   encodeProbedMediaWire,
@@ -180,8 +186,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const sortedExpected = [...expected].sort();
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
+  const sortedExpected = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
   return (
     actual.length === sortedExpected.length &&
     actual.every((key, index) => key === sortedExpected[index])

@@ -24,7 +24,9 @@ function isCanonicalHash(value: string): boolean {
 function decodeReservation(value: unknown): ReplayReservation | null {
   if (
     !isPlainObject(value) ||
-    Object.keys(value).sort().join(',') !== 'consumedAt,expiresAt,tokenHash'
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .join(',') !== 'consumedAt,expiresAt,tokenHash'
   ) {
     return null;
   }

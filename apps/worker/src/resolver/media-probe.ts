@@ -82,9 +82,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasProbedMediaFields(value: Record<string, unknown>): boolean {
-  const actual = Object.keys(value).sort();
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
   const required = [...PROBED_MEDIA_FIELDS];
-  const withValidator = [...required, 'validator'].sort();
+  const withValidator = [...required, 'validator'].sort((left, right) =>
+    left.localeCompare(right, 'en'),
+  );
   return (
     (actual.length === required.length &&
       actual.every((field, index) => field === required[index])) ||
@@ -278,7 +280,9 @@ function validatorsMatch(left: ReliableValidator | null, right: unknown): boolea
   }
   return (
     isPlainObject(right) &&
-    Object.keys(right).sort().join(',') === 'kind,value' &&
+    Object.keys(right)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .join(',') === 'kind,value' &&
     right['kind'] === left.kind &&
     right['value'] === left.value
   );

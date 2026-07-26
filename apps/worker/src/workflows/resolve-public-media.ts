@@ -96,7 +96,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function hasExactRequestKeys(value: Record<string, unknown>): boolean {
-  return Object.keys(value).sort().join(',') === 'csrfToken,postUrl,rightsConfirmed,turnstileToken';
+  return (
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .join(',') === 'csrfToken,postUrl,rightsConfirmed,turnstileToken'
+  );
 }
 
 function isCanonicalCsrfToken(value: unknown): value is string {
