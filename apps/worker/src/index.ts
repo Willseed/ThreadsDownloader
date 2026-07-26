@@ -10,7 +10,6 @@ import {
   createBrowserSession,
   resumeBrowserSession,
   rotateCsrfToken,
-  SESSION_TTL_SECONDS,
 } from './security/browser-session.js';
 import {
   createOpaqueId,
@@ -18,7 +17,17 @@ import {
   importSigningKey,
 } from './security/cryptography.js';
 import type { DownloadSessionNamespace } from './security/download-session-client.js';
-import { bootstrapSession, type SessionNamespace } from './security/session-client.js';
+import {
+  createSession,
+  resumeSession,
+  SessionProvisioningError,
+  type SessionNamespace,
+} from './security/session-client.js';
+import {
+  reserveSessionIssuance,
+  SessionIssuanceError,
+  type SessionIssuanceReservation,
+} from './security/session-issuance.js';
 import { DownloadSession } from './download-session.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
 import { SessionCoordinator } from './session-coordinator.js';
@@ -123,49 +132,120 @@ function internalServerError(): Response {
 }
 
 async function sessionResponse(request: Request, env: Env): Promise<Response> {
-  const signingKey = await importSigningKey(env.SESSION_SIGNING_KEY);
+  let signingKey: CryptoKey;
+  try {
+    signingKey = await importSigningKey(env.SESSION_SIGNING_KEY);
+  } catch {
+    return sessionUnavailable();
+  }
   const signer = createOpaqueValueSigner(signingKey);
   const now = Date.now();
-  let rawId: string;
-  let sessionHash: string;
-  let csrfToken: string;
-  let csrfHash: string;
-  let setCookie: string | null = null;
   try {
     const resumed = await resumeBrowserSession(request.headers.get('cookie'), signer);
     const csrf = await rotateCsrfToken();
-    rawId = resumed.rawId;
-    sessionHash = resumed.sessionHash;
-    csrfToken = csrf.csrfToken;
-    csrfHash = csrf.csrfHash;
-  } catch (error: unknown) {
-    if (!(error instanceof BrowserSessionError) || error.code !== 'SESSION_COOKIE_INVALID') {
-      throw error;
+    const result = await resumeSession(env.SESSIONS, resumed.rawId, {
+      sessionHash: resumed.sessionHash,
+      csrfHash: csrf.csrfHash,
+    });
+    if (result.resumed) {
+      return sessionSuccess(csrf.csrfToken, result.expiresAt, env.TURNSTILE_SITE_KEY, null);
     }
-    const created = await createBrowserSession(signer, now);
-    rawId = created.rawId;
-    sessionHash = created.sessionHash;
-    csrfToken = created.csrfToken;
-    csrfHash = created.csrfHash;
-    setCookie = created.setCookie;
+  } catch (error: unknown) {
+    if (error instanceof BrowserSessionError && error.code === 'SESSION_COOKIE_INVALID') {
+      return createReplacementSession(request, env, signingKey, signer, now);
+    }
+    return sessionUnavailable();
   }
+  return createReplacementSession(request, env, signingKey, signer, now);
+}
 
-  const expiresAt = await bootstrapSession(env.SESSIONS, rawId, {
-    sessionHash,
-    csrfHash,
-    issuedAt: now,
-    expiresAt: now + SESSION_TTL_SECONDS * 1000,
-  });
+function sessionSuccess(
+  csrfToken: string,
+  expiresAt: number,
+  turnstileSiteKey: string,
+  setCookie: string | null,
+): Response {
   const body: SessionResponse = {
     csrfToken,
     expiresAt: new Date(expiresAt).toISOString(),
-    turnstileSiteKey: env.TURNSTILE_SITE_KEY,
+    turnstileSiteKey,
   };
   const headers = new Headers({ 'cache-control': 'no-store' });
   if (setCookie !== null) {
     headers.set('set-cookie', setCookie);
   }
   return Response.json(body, { headers });
+}
+
+function sessionUnavailable(): Response {
+  return Response.json(
+    createApiError('SESSION_UNAVAILABLE', '工作階段暫時無法使用，請稍後再試。', requestId()),
+    { status: 503, headers: { 'cache-control': 'no-store' } },
+  );
+}
+
+function sessionRateLimited(retryAt: number, now: number): Response {
+  const retryAfter = Math.max(1, Math.ceil((retryAt - now) / 1000));
+  return Response.json(createApiError('RATE_LIMITED', '操作過於頻繁，請稍後再試。', requestId()), {
+    status: 429,
+    headers: { 'cache-control': 'no-store', 'retry-after': String(retryAfter) },
+  });
+}
+
+async function createReplacementSession(
+  request: Request,
+  env: Env,
+  signingKey: CryptoKey,
+  signer: ReturnType<typeof createOpaqueValueSigner>,
+  now: number,
+): Promise<Response> {
+  let reservation: SessionIssuanceReservation;
+  try {
+    reservation = await reserveSessionIssuance({
+      headers: request.headers,
+      ipRateLimits: env.IP_RATE_LIMITS,
+      signingKey,
+      now,
+    });
+  } catch (error: unknown) {
+    return error instanceof SessionIssuanceError &&
+      error.code === 'SESSION_ISSUANCE_RATE_LIMITED' &&
+      error.retryAt !== undefined
+      ? sessionRateLimited(error.retryAt, now)
+      : sessionUnavailable();
+  }
+
+  let created;
+  try {
+    created = await createBrowserSession(signer, now);
+  } catch {
+    await reservation.release(now);
+    return sessionUnavailable();
+  }
+
+  let expiresAt: number;
+  try {
+    expiresAt = await createSession(env.SESSIONS, created.rawId, {
+      sessionHash: created.sessionHash,
+      csrfHash: created.csrfHash,
+      issuedAt: created.issuedAt,
+      expiresAt: created.expiresAt,
+    });
+  } catch (error: unknown) {
+    if (error instanceof SessionProvisioningError && error.code === 'SESSION_CREATE_CONFLICT') {
+      await reservation.release(now);
+    }
+    return sessionUnavailable();
+  }
+  if (expiresAt !== created.expiresAt) {
+    return sessionUnavailable();
+  }
+  try {
+    await reservation.commit(now);
+  } catch {
+    return sessionUnavailable();
+  }
+  return sessionSuccess(created.csrfToken, expiresAt, env.TURNSTILE_SITE_KEY, created.setCookie);
 }
 
 export const app = new Hono<{ Bindings: Env }>();

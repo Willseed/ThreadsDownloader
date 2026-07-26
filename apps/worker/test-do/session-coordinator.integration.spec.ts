@@ -2,13 +2,22 @@ import { SELF, env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare
 import { describe, expect, it } from 'vitest';
 
 import type { ProbedMedia } from '../src/resolver/media-probe.js';
-import { createOpaqueId, hashIdentifier } from '../src/security/cryptography.js';
+import { hashClientIp } from '../src/security/client-ip.js';
+import {
+  createKeyedIdentifierHasher,
+  createOpaqueId,
+  hashIdentifier,
+  importSigningKey,
+} from '../src/security/cryptography.js';
 import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { decodeBase64Url } from '../src/utils/base64url.js';
+import type { IpRateLimiter } from '../src/ip-rate-limiter.js';
 import type { SessionCoordinator } from '../src/session-coordinator.js';
 
 interface TestEnv {
+  readonly IP_RATE_LIMITS: DurableObjectNamespace<IpRateLimiter>;
+  readonly SESSION_SIGNING_KEY: string;
   readonly SESSIONS: DurableObjectNamespace<SessionCoordinator>;
 }
 
@@ -98,6 +107,15 @@ function sessionStub(rawId: string): DurableObjectStub<SessionCoordinator> {
   return testEnv.SESSIONS.get(testEnv.SESSIONS.idFromName(rawId));
 }
 
+async function issuanceLimiterStub(ip: string): Promise<DurableObjectStub<IpRateLimiter>> {
+  const signingKey = await importSigningKey(testEnv.SESSION_SIGNING_KEY);
+  const ipHash = await hashClientIp(
+    new Headers({ 'CF-Connecting-IP': ip }),
+    createKeyedIdentifierHasher(signingKey),
+  );
+  return testEnv.IP_RATE_LIMITS.get(testEnv.IP_RATE_LIMITS.idFromName(ipHash));
+}
+
 function cookieValue(response: Response): string {
   return response.headers.get('set-cookie')!.split(';', 1)[0]!.split('=', 2)[1]!;
 }
@@ -121,10 +139,22 @@ async function bootstrap(
     readonly expiresAt: number;
   },
 ): Promise<Response> {
-  return stub.fetch('https://session.internal/bootstrap', {
+  return stub.fetch('https://session.internal/create', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
+  });
+}
+
+async function resumeCoordinator(
+  stub: DurableObjectStub<SessionCoordinator>,
+  sessionHash: string,
+  csrfHash: string,
+): Promise<Response> {
+  return stub.fetch('https://session.internal/resume', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionHash, csrfHash }),
   });
 }
 
@@ -385,7 +415,10 @@ async function prepareVaultSession(rawId: string): Promise<{
 
 describe('SessionCoordinator in workerd', () => {
   it('creates, resumes, and replaces browser sessions through SELF', async () => {
-    const first = await SELF.fetch('https://session.test/api/session');
+    const clientIp = '203.0.113.41';
+    const first = await SELF.fetch('https://session.test/api/session', {
+      headers: { 'CF-Connecting-IP': clientIp },
+    });
     const firstBody = (await first.json()) as SessionBody;
     const signedCookie = cookieValue(first);
     const rawId = signedCookie.split('.', 1)[0]!;
@@ -415,10 +448,65 @@ describe('SessionCoordinator in workerd', () => {
     const changedLast = signedCookie.endsWith('A') ? 'B' : 'A';
     const tampered = `${signedCookie.slice(0, -1)}${changedLast}`;
     const replaced = await SELF.fetch('https://session.test/api/session', {
-      headers: { cookie: `__Host-td_session=${tampered}` },
+      headers: {
+        'CF-Connecting-IP': clientIp,
+        cookie: `__Host-td_session=${tampered}`,
+      },
     });
     expect(replaced.status).toBe(200);
     expect(cookieValue(replaced)).not.toBe(signedCookie);
+
+    const issuanceRows = await runInDurableObject(
+      await issuanceLimiterStub(clientIp),
+      (_instance, state) =>
+        state.storage.sql
+          .exec('SELECT event_at, reservation_expires_at FROM ip_session_issuance')
+          .toArray(),
+    );
+    expect(issuanceRows).toHaveLength(2);
+  });
+
+  it('charges a replacement after alarm cleanup without resurrecting the signed stale cookie', async () => {
+    const clientIp = '203.0.113.42';
+    const first = await SELF.fetch('https://session.test/api/session', {
+      headers: { 'CF-Connecting-IP': clientIp },
+    });
+    const signedCookie = cookieValue(first);
+    const rawId = signedCookie.split('.', 1)[0]!;
+    const oldStub = sessionStub(rawId);
+    await runInDurableObject(oldStub, (_instance, state) => {
+      state.storage.sql.exec('UPDATE session_record SET expires_at = ?', Date.now() - 1);
+    });
+    await expect(runDurableObjectAlarm(oldStub)).resolves.toBe(true);
+
+    const replacement = await SELF.fetch('https://session.test/api/session', {
+      headers: {
+        'CF-Connecting-IP': clientIp,
+        cookie: `__Host-td_session=${signedCookie}`,
+      },
+    });
+    const replacementBody = (await replacement.json()) as SessionBody;
+    const replacementCookie = cookieValue(replacement);
+    expect(replacement.status).toBe(200);
+    expect(replacementCookie).not.toBe(signedCookie);
+    expect(await readRows(oldStub)).toHaveLength(0);
+
+    const resumed = await SELF.fetch('https://session.test/api/session', {
+      headers: { cookie: `__Host-td_session=${replacementCookie}` },
+    });
+    const resumedBody = (await resumed.json()) as SessionBody;
+    expect(resumed.status).toBe(200);
+    expect(resumed.headers.get('set-cookie')).toBeNull();
+    expect(resumedBody.expiresAt).toBe(replacementBody.expiresAt);
+
+    const issuanceRows = await runInDurableObject(
+      await issuanceLimiterStub(clientIp),
+      (_instance, state) =>
+        state.storage.sql
+          .exec('SELECT event_at, reservation_expires_at FROM ip_session_issuance')
+          .toArray(),
+    );
+    expect(issuanceRows).toHaveLength(2);
   });
 
   it('stores only hashes and timestamps in one SQLite row', async () => {
@@ -467,12 +555,7 @@ describe('SessionCoordinator in workerd', () => {
     expect((await authorize(stub, rotatedHash, csrfHash, issuedAt)).status).toBe(401);
 
     const later = issuedAt + 1_000;
-    const bootstrapAgain = await bootstrap(stub, {
-      sessionHash,
-      csrfHash: rotatedHash,
-      issuedAt: later,
-      expiresAt: expiresAt + 60_000,
-    });
+    const bootstrapAgain = await resumeCoordinator(stub, sessionHash, rotatedHash);
     await expect(bootstrapAgain.json()).resolves.toEqual({ ok: true, expiresAt });
     const newHandle = sessionStub(rawId);
     expect((await authorize(newHandle, sessionHash, rotatedHash, later)).status).toBe(200);

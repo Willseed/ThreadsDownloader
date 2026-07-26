@@ -205,7 +205,7 @@ export async function resumeBrowserSession(
   try {
     return { rawId, sessionHash: await hashIdentifier(rawId) };
   } catch {
-    return fail('SESSION_COOKIE_INVALID');
+    return fail('SESSION_OPERATION_FAILED');
   }
 }
 

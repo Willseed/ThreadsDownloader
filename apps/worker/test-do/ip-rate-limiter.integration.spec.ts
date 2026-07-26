@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 
 import type { IpRateLimiter } from '../src/ip-rate-limiter.js';
 import { createOpaqueId, hashIdentifier } from '../src/security/cryptography.js';
+import {
+  MAX_SESSION_ISSUANCE_BURST,
+  MAX_SESSION_ISSUANCE_CAPACITY,
+  SESSION_ISSUANCE_CAPACITY_WINDOW_MS,
+} from '../src/security/session-issuance-rate-limit.js';
 
 interface TestEnv {
   readonly IP_RATE_LIMITS: DurableObjectNamespace<IpRateLimiter>;
@@ -46,6 +51,20 @@ async function release(
   });
 }
 
+async function mutateSessionIssuance(
+  stub: DurableObjectStub<IpRateLimiter>,
+  operation: 'commit' | 'release' | 'reserve',
+  ipHash: string,
+  reservationId: string,
+  now: number,
+): Promise<Response> {
+  return stub.fetch(`https://ip-rate-limit.internal/session-issuance/${operation}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ipHash, reservationId, now }),
+  });
+}
+
 async function uniqueHash(label: string): Promise<string> {
   return hashIdentifier(`${label}:${crypto.randomUUID()}`);
 }
@@ -83,9 +102,13 @@ describe('IpRateLimiter in workerd', () => {
     const rawIp = '203.0.113.199';
     const ipHash = await uniqueHash('storage');
     const permitId = createOpaqueId();
+    const reservationId = createOpaqueId();
     const stub = limiterStub(ipHash);
     const now = Date.now();
     expect((await acquire(stub, ipHash, permitId, now)).status).toBe(201);
+    expect((await mutateSessionIssuance(stub, 'reserve', ipHash, reservationId, now)).status).toBe(
+      201,
+    );
 
     const stored = await runInDurableObject(stub, (_instance, state) => ({
       meta: state.storage.sql
@@ -95,10 +118,14 @@ describe('IpRateLimiter in workerd', () => {
       permits: state.storage.sql
         .exec('SELECT permit_id, expires_at FROM ip_resolve_permits')
         .toArray(),
+      issuance: state.storage.sql
+        .exec('SELECT reservation_id, event_at, reservation_expires_at FROM ip_session_issuance')
+        .toArray(),
     }));
     expect(stored.meta).toEqual([{ schema_version: 1, ip_hash: ipHash }]);
     expect(stored.events).toHaveLength(1);
     expect(stored.permits).toHaveLength(1);
+    expect(stored.issuance).toHaveLength(1);
     expect(JSON.stringify(stored)).not.toContain(rawIp);
   });
 
@@ -111,6 +138,96 @@ describe('IpRateLimiter in workerd', () => {
     expect((await acquire(stub, otherHash, createOpaqueId(), now + 1)).status).toBe(400);
   });
 
+  it('atomically admits only sixty parallel session issuance reservations', async () => {
+    const ipHash = await uniqueHash('session-parallel');
+    const stub = limiterStub(ipHash);
+    const now = Date.now();
+    const responses = await Promise.all(
+      Array.from({ length: MAX_SESSION_ISSUANCE_BURST + 1 }, () =>
+        mutateSessionIssuance(stub, 'reserve', ipHash, createOpaqueId(), now),
+      ),
+    );
+    expect(responses.filter((response) => response.status === 201)).toHaveLength(
+      MAX_SESSION_ISSUANCE_BURST,
+    );
+    expect(responses.filter((response) => response.status === 429)).toHaveLength(1);
+  });
+
+  it('enforces the 512-event capacity after allowing the final available slot', async () => {
+    const ipHash = await uniqueHash('session-capacity');
+    const stub = limiterStub(ipHash);
+    const now = Date.now();
+    const seed = createOpaqueId();
+    expect((await mutateSessionIssuance(stub, 'reserve', ipHash, seed, now)).status).toBe(201);
+    expect((await mutateSessionIssuance(stub, 'commit', ipHash, seed, now)).status).toBe(200);
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec('DELETE FROM ip_session_issuance');
+      for (let index = 0; index < MAX_SESSION_ISSUANCE_CAPACITY - 1; index += 1) {
+        state.storage.sql.exec(
+          `INSERT INTO ip_session_issuance
+            (reservation_id, event_at, reservation_expires_at)
+           VALUES (?, ?, NULL)`,
+          createOpaqueId(),
+          now - 40_000_000 + index * 70_000,
+        );
+      }
+    });
+
+    const finalReservation = createOpaqueId();
+    expect(
+      (await mutateSessionIssuance(stub, 'reserve', ipHash, finalReservation, now)).status,
+    ).toBe(201);
+    expect(
+      (await mutateSessionIssuance(stub, 'reserve', ipHash, createOpaqueId(), now)).status,
+    ).toBe(429);
+  });
+
+  it('commits, releases, and conservatively retains an expired reservation', async () => {
+    const ipHash = await uniqueHash('session-lifecycle');
+    const stub = limiterStub(ipHash);
+    const now = Date.now();
+    const releasedId = createOpaqueId();
+    expect((await mutateSessionIssuance(stub, 'reserve', ipHash, releasedId, now)).status).toBe(
+      201,
+    );
+    expect((await mutateSessionIssuance(stub, 'release', ipHash, releasedId, now)).status).toBe(
+      200,
+    );
+
+    const committedId = createOpaqueId();
+    expect(
+      (await mutateSessionIssuance(stub, 'reserve', ipHash, committedId, now + 1)).status,
+    ).toBe(201);
+    expect((await mutateSessionIssuance(stub, 'commit', ipHash, committedId, now + 1)).status).toBe(
+      200,
+    );
+    expect(
+      (await mutateSessionIssuance(stub, 'release', ipHash, committedId, now + 1)).status,
+    ).toBe(409);
+
+    const expiredId = createOpaqueId();
+    expect((await mutateSessionIssuance(stub, 'reserve', ipHash, expiredId, now + 2)).status).toBe(
+      201,
+    );
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE ip_session_issuance SET reservation_expires_at = ? WHERE reservation_id = ?',
+        Date.now() - 1,
+        expiredId,
+      );
+    });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
+    const retained = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ reservation_expires_at: number | null }>(
+          'SELECT reservation_expires_at FROM ip_session_issuance WHERE reservation_id = ?',
+          expiredId,
+        )
+        .toArray(),
+    );
+    expect(retained).toEqual([{ reservation_expires_at: null }]);
+  });
+
   it('cleans expired leases and window events by alarm, then safely reuses the object', async () => {
     const ipHash = await uniqueHash('alarm');
     const stub = limiterStub(ipHash);
@@ -120,14 +237,20 @@ describe('IpRateLimiter in workerd', () => {
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec('UPDATE ip_resolve_events SET event_at = ?', Date.now() - 60_001);
       state.storage.sql.exec('UPDATE ip_resolve_permits SET expires_at = ?', Date.now() - 1);
+      state.storage.sql.exec(
+        'INSERT INTO ip_session_issuance (reservation_id, event_at, reservation_expires_at) VALUES (?, ?, NULL)',
+        createOpaqueId(),
+        Date.now() - SESSION_ISSUANCE_CAPACITY_WINDOW_MS - 1,
+      );
     });
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
     const rows = await runInDurableObject(stub, (_instance, state) => ({
       meta: state.storage.sql.exec('SELECT ip_hash FROM ip_rate_meta').toArray(),
       events: state.storage.sql.exec('SELECT event_at FROM ip_resolve_events').toArray(),
       permits: state.storage.sql.exec('SELECT permit_id FROM ip_resolve_permits').toArray(),
+      issuance: state.storage.sql.exec('SELECT reservation_id FROM ip_session_issuance').toArray(),
     }));
-    expect(rows).toEqual({ meta: [], events: [], permits: [] });
+    expect(rows).toEqual({ meta: [], events: [], permits: [], issuance: [] });
     expect((await acquire(stub, ipHash, createOpaqueId(), Date.now())).status).toBe(201);
   });
 });

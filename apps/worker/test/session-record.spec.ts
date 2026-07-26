@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   authorizeSessionRecord,
-  bootstrapSessionRecord,
+  createSessionRecord,
+  resumeSessionRecord,
   sessionAlarmDecision,
   type SessionRecord,
 } from '../src/security/session-record.js';
@@ -25,7 +26,7 @@ function record(overrides: Partial<SessionRecord> = {}): SessionRecord {
 describe('session record transitions', () => {
   it('inserts an absent session without raw credentials', () => {
     expect(
-      bootstrapSessionRecord(
+      createSessionRecord(
         null,
         { sessionHash: hashA, csrfHash: hashB, issuedAt: 100, expiresAt: 1_000 },
         100,
@@ -34,36 +35,31 @@ describe('session record transitions', () => {
   });
 
   it('preserves original lifetime and rotates only the CSRF hash', () => {
-    expect(
-      bootstrapSessionRecord(
-        record(),
-        { sessionHash: hashA, csrfHash: hashC, issuedAt: 500, expiresAt: 2_000 },
-        500,
-      ),
-    ).toEqual({ allowed: true, record: record({ csrfHash: hashC }) });
+    expect(resumeSessionRecord(record(), { sessionHash: hashA, csrfHash: hashC }, 500)).toEqual({
+      allowed: true,
+      record: record({ csrfHash: hashC }),
+    });
   });
 
   it.each([
-    [
-      record(),
-      { sessionHash: hashC, csrfHash: hashB, issuedAt: 200, expiresAt: 1_000 },
-      200,
-      'mismatch',
-    ],
-    [
-      record(),
-      { sessionHash: hashA, csrfHash: hashC, issuedAt: 1_000, expiresAt: 2_000 },
-      1_000,
-      'expired',
-    ],
-    [
-      null,
-      { sessionHash: hashA, csrfHash: hashB, issuedAt: 1_000, expiresAt: 1_000 },
-      1_000,
-      'expired',
-    ],
-  ])('safely denies mismatched or expired bootstrap state', (current, input, now, reason) => {
-    expect(bootstrapSessionRecord(current, input, now)).toEqual({ allowed: false, reason });
+    [record(), { sessionHash: hashC, csrfHash: hashB }, 200, 'mismatch'],
+    [record(), { sessionHash: hashA, csrfHash: hashC }, 1_000, 'expired'],
+    [null, { sessionHash: hashA, csrfHash: hashB }, 1_000, 'missing'],
+  ])(
+    'safely denies missing, mismatched, or expired resume state',
+    (current, input, now, reason) => {
+      expect(resumeSessionRecord(current, input, now)).toEqual({ allowed: false, reason });
+    },
+  );
+
+  it('never lets create replace or revive an existing record', () => {
+    expect(
+      createSessionRecord(
+        record({ expiresAt: 150 }),
+        { sessionHash: hashC, csrfHash: hashB, issuedAt: 200, expiresAt: 1_000 },
+        200,
+      ),
+    ).toEqual({ allowed: false, reason: 'exists' });
   });
 
   it('authorizes only exact hashes strictly before expiry', () => {

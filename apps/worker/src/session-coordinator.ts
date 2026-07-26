@@ -7,11 +7,13 @@ import {
 } from './security/cryptography.js';
 import {
   authorizeSessionRecord,
-  bootstrapSessionRecord,
+  createSessionRecord,
   isSessionRecord,
+  resumeSessionRecord,
   sessionAlarmDecision,
   type AuthorizeSessionInput,
-  type BootstrapSessionInput,
+  type CreateSessionInput,
+  type ResumeSessionInput,
   type SessionRecord,
 } from './security/session-record.js';
 import {
@@ -189,7 +191,7 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   );
 }
 
-export function decodeBootstrapSessionRequest(value: unknown): BootstrapSessionInput | null {
+export function decodeCreateSessionRequest(value: unknown): CreateSessionInput | null {
   if (
     !isPlainObject(value) ||
     !hasExactKeys(value, ['csrfHash', 'expiresAt', 'issuedAt', 'sessionHash'])
@@ -206,6 +208,15 @@ export function decodeBootstrapSessionRequest(value: unknown): BootstrapSessionI
         issuedAt: value['issuedAt'],
         expiresAt: value['expiresAt'],
       }
+    : null;
+}
+
+export function decodeResumeSessionRequest(value: unknown): ResumeSessionInput | null {
+  if (!isPlainObject(value) || !hasExactKeys(value, ['csrfHash', 'sessionHash'])) {
+    return null;
+  }
+  return typeof value['sessionHash'] === 'string' && typeof value['csrfHash'] === 'string'
+    ? { sessionHash: value['sessionHash'], csrfHash: value['csrfHash'] }
     : null;
 }
 
@@ -1268,26 +1279,51 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     return safeJson(200, { ok: true });
   }
 
-  private async bootstrap(request: Request): Promise<Response> {
+  private async createSession(request: Request): Promise<Response> {
     let body: unknown;
     try {
       body = await request.json();
     } catch {
       return safeJson(400, { ok: false });
     }
-    const input = decodeBootstrapSessionRequest(body);
+    const input = decodeCreateSessionRequest(body);
     if (input === null) {
       return safeJson(400, { ok: false });
     }
     const result = this.ctx.storage.transactionSync(() => {
-      const transition = bootstrapSessionRecord(this.readRecord(), input, Date.now());
+      const transition = createSessionRecord(this.readRecord(), input, Date.now());
       if (transition.allowed) {
         this.writeRecord(transition.record);
       }
       return transition;
     });
     if (!result.allowed) {
-      return safeJson(401, { ok: false });
+      return safeJson(result.reason === 'exists' ? 409 : 400, { ok: false });
+    }
+    await this.scheduleAlarm(result.record);
+    return safeJson(200, { ok: true, expiresAt: result.record.expiresAt });
+  }
+
+  private async resumeSession(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return safeJson(400, { ok: false });
+    }
+    const input = decodeResumeSessionRequest(body);
+    if (input === null) {
+      return safeJson(400, { ok: false });
+    }
+    const result = this.ctx.storage.transactionSync(() => {
+      const transition = resumeSessionRecord(this.readRecord(), input, Date.now());
+      if (transition.allowed) {
+        this.writeRecord(transition.record);
+      }
+      return transition;
+    });
+    if (!result.allowed) {
+      return safeJson(410, { ok: false });
     }
     await this.scheduleAlarm(result.record);
     return safeJson(200, { ok: true, expiresAt: result.record.expiresAt });
@@ -1638,8 +1674,11 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       return safeJson(404, { ok: false });
     }
     const pathname = new URL(request.url).pathname;
-    if (pathname === '/bootstrap') {
-      return this.bootstrap(request);
+    if (pathname === '/create') {
+      return this.createSession(request);
+    }
+    if (pathname === '/resume') {
+      return this.resumeSession(request);
     }
     if (pathname === '/authorize') {
       return this.authorize(request);

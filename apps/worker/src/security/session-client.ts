@@ -1,4 +1,3 @@
-import { BrowserSessionError } from './browser-session.js';
 import { createOpaqueId } from './cryptography.js';
 
 export {
@@ -36,6 +35,18 @@ export interface SessionResolvePermit {
   readonly expiresAt: number;
 }
 
+export type SessionProvisioningErrorCode = 'SESSION_CREATE_CONFLICT' | 'SESSION_UNAVAILABLE';
+
+export class SessionProvisioningError extends Error {
+  constructor(readonly code: SessionProvisioningErrorCode) {
+    super(code);
+    this.name = 'SessionProvisioningError';
+  }
+}
+
+export type ResumeSessionResult =
+  { readonly resumed: true; readonly expiresAt: number } | { readonly resumed: false };
+
 export type SessionResolvePermitErrorCode =
   'RESOLVE_PERMIT_DENIED' | 'RESOLVE_PERMIT_UNAVAILABLE' | 'SESSION_INVALID';
 
@@ -50,28 +61,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export async function bootstrapSession(
-  namespace: SessionNamespace,
-  rawId: string,
-  input: {
-    readonly sessionHash: string;
-    readonly csrfHash: string;
-    readonly issuedAt: number;
-    readonly expiresAt: number;
-  },
-): Promise<number> {
-  const stub = namespace.get(namespace.idFromName(rawId));
-  const response = await stub.fetch(
-    new Request('https://session.internal/bootstrap', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    }),
-  );
-  if (response.status !== 200) {
-    throw new BrowserSessionError('SESSION_OPERATION_FAILED');
+function unavailable(): SessionProvisioningError {
+  return new SessionProvisioningError('SESSION_UNAVAILABLE');
+}
+
+async function decodeSessionExpiry(response: Response): Promise<number> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw unavailable();
   }
-  const body: unknown = await response.json();
   if (
     !isPlainObject(body) ||
     Object.keys(body).length !== 2 ||
@@ -81,9 +81,68 @@ export async function bootstrapSession(
     body['expiresAt'] < 0 ||
     body['expiresAt'] > 8_640_000_000_000_000
   ) {
-    throw new BrowserSessionError('SESSION_OPERATION_FAILED');
+    throw unavailable();
   }
   return body['expiresAt'];
+}
+
+export async function createSession(
+  namespace: SessionNamespace,
+  rawId: string,
+  input: {
+    readonly sessionHash: string;
+    readonly csrfHash: string;
+    readonly issuedAt: number;
+    readonly expiresAt: number;
+  },
+): Promise<number> {
+  let response: Response;
+  try {
+    const stub = namespace.get(namespace.idFromName(rawId));
+    response = await stub.fetch(
+      new Request('https://session.internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
+  } catch {
+    throw unavailable();
+  }
+  if (response.status === 409) {
+    throw new SessionProvisioningError('SESSION_CREATE_CONFLICT');
+  }
+  if (response.status !== 200) {
+    throw unavailable();
+  }
+  return decodeSessionExpiry(response);
+}
+
+export async function resumeSession(
+  namespace: SessionNamespace,
+  rawId: string,
+  input: { readonly sessionHash: string; readonly csrfHash: string },
+): Promise<ResumeSessionResult> {
+  let response: Response;
+  try {
+    const stub = namespace.get(namespace.idFromName(rawId));
+    response = await stub.fetch(
+      new Request('https://session.internal/resume', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+      }),
+    );
+  } catch {
+    throw unavailable();
+  }
+  if (response.status === 410) {
+    return { resumed: false };
+  }
+  if (response.status !== 200) {
+    throw unavailable();
+  }
+  return { resumed: true, expiresAt: await decodeSessionExpiry(response) };
 }
 
 export async function authorizeSession(

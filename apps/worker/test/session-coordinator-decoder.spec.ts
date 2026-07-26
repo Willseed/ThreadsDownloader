@@ -4,9 +4,10 @@ import {
   decodeAcquireSessionDownloadPermitRequest,
   decodeAcquireResolvePermitRequest,
   decodeAuthorizeSessionRequest,
-  decodeBootstrapSessionRequest,
+  decodeCreateSessionRequest,
   decodeReleaseResolvePermitRequest,
   decodeReleaseSessionDownloadPermitRequest,
+  decodeResumeSessionRequest,
   decodeRenewSessionDownloadPermitRequest,
   SessionCoordinator,
   type SessionCoordinatorEnv,
@@ -36,11 +37,16 @@ const vaultCandidateWire = {
 } as const;
 
 describe('SessionCoordinator internal request decoders', () => {
-  it('decodes only the exact bootstrap shape', () => {
+  it('decodes only the exact create and resume shapes', () => {
     const valid = { sessionHash, csrfHash, issuedAt: 100, expiresAt: 200 };
-    expect(decodeBootstrapSessionRequest(valid)).toEqual(valid);
-    expect(decodeBootstrapSessionRequest({ ...valid, rawId: 'must-not-pass' })).toBeNull();
-    expect(decodeBootstrapSessionRequest({ ...valid, expiresAt: '200' })).toBeNull();
+    expect(decodeCreateSessionRequest(valid)).toEqual(valid);
+    expect(decodeCreateSessionRequest({ ...valid, rawId: 'must-not-pass' })).toBeNull();
+    expect(decodeCreateSessionRequest({ ...valid, expiresAt: '200' })).toBeNull();
+    expect(decodeResumeSessionRequest({ sessionHash, csrfHash })).toEqual({
+      sessionHash,
+      csrfHash,
+    });
+    expect(decodeResumeSessionRequest({ sessionHash, csrfHash, expiresAt: 200 })).toBeNull();
   });
 
   it('decodes only the exact authorize shape', () => {
@@ -87,7 +93,8 @@ describe('SessionCoordinator internal request decoders', () => {
   });
 
   it.each([
-    decodeBootstrapSessionRequest,
+    decodeCreateSessionRequest,
+    decodeResumeSessionRequest,
     decodeAuthorizeSessionRequest,
     decodeAcquireResolvePermitRequest,
     decodeReleaseResolvePermitRequest,
@@ -124,6 +131,7 @@ describe('SessionCoordinator request error contract', () => {
 
   it.each([
     ['GET', '/bootstrap'],
+    ['POST', '/bootstrap'],
     ['POST', '/missing'],
   ])('returns a safe 404 for unsupported internal requests', async (method, path) => {
     const response = await coordinator().fetch(
@@ -134,7 +142,8 @@ describe('SessionCoordinator request error contract', () => {
   });
 
   it.each([
-    '/bootstrap',
+    '/create',
+    '/resume',
     '/authorize',
     '/resolve-permits/acquire',
     '/resolve-permits/release',

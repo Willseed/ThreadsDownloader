@@ -279,7 +279,7 @@ Worker 尚不存在，因此四個 required Worker Secrets 也尚不存在。
 | Binding             | Class                | 責任                                              |
 | ------------------- | -------------------- | ------------------------------------------------- |
 | `SESSIONS`          | `SessionCoordinator` | 匿名 session、CSRF、resolve grant 與 session 限制 |
-| `IP_RATE_LIMITS`    | `IpRateLimiter`      | 短期 hashed-IP rate limit                         |
+| `IP_RATE_LIMITS`    | `IpRateLimiter`      | hashed-IP 解析限流與 12 小時工作階段核發額度      |
 | `TURNSTILE_REPLAYS` | `TurnstileReplay`    | 一次性 Turnstile token hash                       |
 | `DOWNLOAD_SESSIONS` | `DownloadSession`    | 加密媒體 metadata、Range、lease、狀態與 alarm     |
 

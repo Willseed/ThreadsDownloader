@@ -8,11 +8,16 @@ export interface SessionRecord {
   readonly expiresAt: number;
 }
 
-export interface BootstrapSessionInput {
+export interface CreateSessionInput {
   readonly sessionHash: string;
   readonly csrfHash: string;
   readonly issuedAt: number;
   readonly expiresAt: number;
+}
+
+export interface ResumeSessionInput {
+  readonly sessionHash: string;
+  readonly csrfHash: string;
 }
 
 export interface AuthorizeSessionInput {
@@ -20,9 +25,13 @@ export interface AuthorizeSessionInput {
   readonly csrfHash: string;
 }
 
-export type BootstrapSessionResult =
+export type CreateSessionResult =
   | { readonly allowed: true; readonly record: SessionRecord }
-  | { readonly allowed: false; readonly reason: 'expired' | 'mismatch' };
+  | { readonly allowed: false; readonly reason: 'exists' | 'invalid' };
+
+export type ResumeSessionResult =
+  | { readonly allowed: true; readonly record: SessionRecord }
+  | { readonly allowed: false; readonly reason: 'expired' | 'mismatch' | 'missing' };
 
 function isValidTimestamp(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
@@ -52,23 +61,37 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
   );
 }
 
-export function bootstrapSessionRecord(
+export function createSessionRecord(
   current: SessionRecord | null,
-  input: BootstrapSessionInput,
+  input: CreateSessionInput,
   now: number,
-): BootstrapSessionResult {
+): CreateSessionResult {
   const candidate: SessionRecord = {
     schemaVersion: SESSION_RECORD_SCHEMA_VERSION,
     ...input,
   };
   if (!isSessionRecord(candidate) || !isValidTimestamp(now) || now >= input.expiresAt) {
-    return { allowed: false, reason: 'expired' };
+    return { allowed: false, reason: 'invalid' };
   }
+  if (current !== null) {
+    return { allowed: false, reason: 'exists' };
+  }
+  return { allowed: true, record: candidate };
+}
+
+export function resumeSessionRecord(
+  current: SessionRecord | null,
+  input: ResumeSessionInput,
+  now: number,
+): ResumeSessionResult {
   if (current === null) {
-    return { allowed: true, record: candidate };
+    return { allowed: false, reason: 'missing' };
   }
-  if (now >= current.expiresAt) {
+  if (!isValidTimestamp(now) || now >= current.expiresAt) {
     return { allowed: false, reason: 'expired' };
+  }
+  if (!isValidHash(input.sessionHash) || !isValidHash(input.csrfHash)) {
+    return { allowed: false, reason: 'mismatch' };
   }
   if (current.sessionHash !== input.sessionHash) {
     return { allowed: false, reason: 'mismatch' };

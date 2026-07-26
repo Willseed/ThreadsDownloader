@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { decodeIpRateLimitRequest, IpRateLimiter } from '../src/ip-rate-limiter.js';
+import {
+  decodeIpRateLimitRequest,
+  decodeSessionIssuanceRequest,
+  IpRateLimiter,
+} from '../src/ip-rate-limiter.js';
 import { createOpaqueId } from '../src/security/cryptography.js';
 
 const ipHash = 'ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0';
@@ -32,6 +36,14 @@ describe('IpRateLimiter internal request decoder', () => {
 
   it.each([null, [], '203.0.113.42'])('rejects a non-object payload', (value) => {
     expect(decodeIpRateLimitRequest(value)).toBeNull();
+  });
+
+  it('accepts only the exact session issuance reservation shape', () => {
+    const valid = { ipHash, reservationId: createOpaqueId(), now: 100 };
+    expect(decodeSessionIssuanceRequest(valid)).toEqual(valid);
+    expect(decodeSessionIssuanceRequest({ ...valid, rawIp: '203.0.113.42' })).toBeNull();
+    expect(decodeSessionIssuanceRequest({ ...valid, reservationId: 'short' })).toBeNull();
+    expect(decodeSessionIssuanceRequest({ ...valid, now: Number.MAX_SAFE_INTEGER })).toBeNull();
   });
 });
 
