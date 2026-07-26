@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import {
   createAesGcmSealer,
@@ -180,127 +181,122 @@ interface VaultCandidateRow {
   readonly reservation_expires_at: number | null;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const expected = [...keys].sort((left, right) => left.localeCompare(right, 'en'));
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
 export function decodeCreateSessionRequest(value: unknown): CreateSessionInput | null {
+  const record = decodeExactRecord(value, ['csrfHash', 'expiresAt', 'issuedAt', 'sessionHash']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['csrfHash', 'expiresAt', 'issuedAt', 'sessionHash'])
+    record === null ||
+    typeof record['sessionHash'] !== 'string' ||
+    typeof record['csrfHash'] !== 'string' ||
+    typeof record['issuedAt'] !== 'number' ||
+    typeof record['expiresAt'] !== 'number'
   ) {
     return null;
   }
-  return typeof value['sessionHash'] === 'string' &&
-    typeof value['csrfHash'] === 'string' &&
-    typeof value['issuedAt'] === 'number' &&
-    typeof value['expiresAt'] === 'number'
-    ? {
-        sessionHash: value['sessionHash'],
-        csrfHash: value['csrfHash'],
-        issuedAt: value['issuedAt'],
-        expiresAt: value['expiresAt'],
-      }
-    : null;
+  return {
+    sessionHash: record['sessionHash'],
+    csrfHash: record['csrfHash'],
+    issuedAt: record['issuedAt'],
+    expiresAt: record['expiresAt'],
+  };
 }
 
 export function decodeResumeSessionRequest(value: unknown): ResumeSessionInput | null {
-  if (!isPlainObject(value) || !hasExactKeys(value, ['csrfHash', 'sessionHash'])) {
+  const record = decodeExactRecord(value, ['csrfHash', 'sessionHash']);
+  if (
+    record === null ||
+    typeof record['sessionHash'] !== 'string' ||
+    typeof record['csrfHash'] !== 'string'
+  ) {
     return null;
   }
-  return typeof value['sessionHash'] === 'string' && typeof value['csrfHash'] === 'string'
-    ? { sessionHash: value['sessionHash'], csrfHash: value['csrfHash'] }
-    : null;
+  return { sessionHash: record['sessionHash'], csrfHash: record['csrfHash'] };
 }
 
 export function decodeAuthorizeSessionRequest(
   value: unknown,
 ): (AuthorizeSessionInput & { readonly now: number }) | null {
-  if (!isPlainObject(value) || !hasExactKeys(value, ['csrfHash', 'now', 'sessionHash'])) {
-    return null;
-  }
-  return typeof value['sessionHash'] === 'string' &&
-    typeof value['csrfHash'] === 'string' &&
-    typeof value['now'] === 'number'
-    ? { sessionHash: value['sessionHash'], csrfHash: value['csrfHash'], now: value['now'] }
-    : null;
-}
-
-export function decodeAcquireResolvePermitRequest(value: unknown): AcquirePermitInput | null {
+  const record = decodeExactRecord(value, ['csrfHash', 'now', 'sessionHash']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['csrfHash', 'now', 'permitId', 'sessionHash'])
+    record === null ||
+    typeof record['sessionHash'] !== 'string' ||
+    typeof record['csrfHash'] !== 'string' ||
+    typeof record['now'] !== 'number'
   ) {
     return null;
   }
-  return typeof value['sessionHash'] === 'string' &&
-    typeof value['csrfHash'] === 'string' &&
-    typeof value['permitId'] === 'string' &&
-    typeof value['now'] === 'number'
-    ? {
-        sessionHash: value['sessionHash'],
-        csrfHash: value['csrfHash'],
-        permitId: value['permitId'],
-        now: value['now'],
-      }
-    : null;
+  return { sessionHash: record['sessionHash'], csrfHash: record['csrfHash'], now: record['now'] };
+}
+
+export function decodeAcquireResolvePermitRequest(value: unknown): AcquirePermitInput | null {
+  const record = decodeExactRecord(value, ['csrfHash', 'now', 'permitId', 'sessionHash']);
+  if (
+    record === null ||
+    typeof record['sessionHash'] !== 'string' ||
+    typeof record['csrfHash'] !== 'string' ||
+    typeof record['permitId'] !== 'string' ||
+    typeof record['now'] !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    sessionHash: record['sessionHash'],
+    csrfHash: record['csrfHash'],
+    permitId: record['permitId'],
+    now: record['now'],
+  };
 }
 
 export function decodeReleaseResolvePermitRequest(value: unknown): ReleasePermitInput | null {
-  if (!isPlainObject(value) || !hasExactKeys(value, ['now', 'permitId', 'sessionHash'])) {
+  const record = decodeExactRecord(value, ['now', 'permitId', 'sessionHash']);
+  if (
+    record === null ||
+    typeof record['sessionHash'] !== 'string' ||
+    typeof record['permitId'] !== 'string' ||
+    typeof record['now'] !== 'number'
+  ) {
     return null;
   }
-  return typeof value['sessionHash'] === 'string' &&
-    typeof value['permitId'] === 'string' &&
-    typeof value['now'] === 'number'
-    ? { sessionHash: value['sessionHash'], permitId: value['permitId'], now: value['now'] }
-    : null;
+  return { sessionHash: record['sessionHash'], permitId: record['permitId'], now: record['now'] };
 }
 
 export function decodeAcquireSessionDownloadPermitRequest(
   value: unknown,
 ): AcquireSessionDownloadPermitRequest | null {
+  const record = decodeExactRecord(value, ['downloadId', 'permitId', 'sessionHash']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'permitId', 'sessionHash']) ||
-    !isSessionIdentityHash(value['sessionHash']) ||
-    !isSessionDownloadId(value['downloadId']) ||
-    !isSessionDownloadPermitId(value['permitId'])
+    record === null ||
+    !isSessionIdentityHash(record['sessionHash']) ||
+    !isSessionDownloadId(record['downloadId']) ||
+    !isSessionDownloadPermitId(record['permitId'])
   ) {
     return null;
   }
   return {
-    sessionHash: value['sessionHash'],
-    downloadId: value['downloadId'],
-    permitId: value['permitId'],
+    sessionHash: record['sessionHash'],
+    downloadId: record['downloadId'],
+    permitId: record['permitId'],
   };
 }
 
 export function decodeRenewSessionDownloadPermitRequest(
   value: unknown,
 ): RenewSessionDownloadPermitRequest | null {
+  const record = decodeExactRecord(value, ['downloadId', 'permitId', 'sequence', 'sessionHash']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'permitId', 'sequence', 'sessionHash']) ||
-    !isSessionIdentityHash(value['sessionHash']) ||
-    !isSessionDownloadId(value['downloadId']) ||
-    !isSessionDownloadPermitId(value['permitId']) ||
-    !Number.isSafeInteger(value['sequence']) ||
-    (value['sequence'] as number) < 0
+    record === null ||
+    !isSessionIdentityHash(record['sessionHash']) ||
+    !isSessionDownloadId(record['downloadId']) ||
+    !isSessionDownloadPermitId(record['permitId']) ||
+    !Number.isSafeInteger(record['sequence']) ||
+    (record['sequence'] as number) < 0
   ) {
     return null;
   }
   return {
-    sessionHash: value['sessionHash'],
-    downloadId: value['downloadId'],
-    permitId: value['permitId'],
-    sequence: value['sequence'] as number,
+    sessionHash: record['sessionHash'],
+    downloadId: record['downloadId'],
+    permitId: record['permitId'],
+    sequence: record['sequence'] as number,
   };
 }
 

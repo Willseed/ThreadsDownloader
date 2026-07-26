@@ -1,3 +1,5 @@
+import { decodeExactRecord } from './strict-json.js';
+
 export const API_ERROR_CODES = [
   'HOST_NOT_ALLOWED',
   'SESSION_INVALID',
@@ -124,15 +126,6 @@ const apiErrorCodes = new Set<string>(API_ERROR_CODES);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const sortedExpected = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
 }
 
 function isOpaqueId(value: unknown): value is string {
@@ -384,17 +377,21 @@ function decodeResolveCandidate(value: unknown): ResolveCandidate | null {
     return null;
   }
   const metadata = decodeResolveCandidateMetadata(value);
+  const record =
+    metadata === null
+      ? null
+      : decodeExactRecord(value, ['candidateId', 'filename', ...Object.keys(metadata)]);
   if (
     metadata === null ||
-    !hasExactKeys(value, ['candidateId', 'filename', ...Object.keys(metadata)]) ||
-    !isOpaqueId(value['candidateId']) ||
-    typeof value['filename'] !== 'string' ||
-    value['filename'].length > 128 ||
-    !SAFE_FILENAME.test(value['filename'])
+    record === null ||
+    !isOpaqueId(record['candidateId']) ||
+    typeof record['filename'] !== 'string' ||
+    record['filename'].length > 128 ||
+    !SAFE_FILENAME.test(record['filename'])
   ) {
     return null;
   }
-  return { candidateId: value['candidateId'], filename: value['filename'], ...metadata };
+  return { candidateId: record['candidateId'], filename: record['filename'], ...metadata };
 }
 
 function isDownloadStatus(value: unknown): value is DownloadStatus {
@@ -411,19 +408,24 @@ function isDownloadRangeCapability(value: unknown): value is DownloadRangeCapabi
 }
 
 function isDownloadStatusMetadata(value: unknown): value is DownloadStatusMetadata {
+  const record = decodeExactRecord(value, [
+    'contentLength',
+    'contentType',
+    'filename',
+    'rangeCapability',
+  ]);
   return (
-    isPlainObject(value) &&
-    hasExactKeys(value, ['contentLength', 'contentType', 'filename', 'rangeCapability']) &&
-    typeof value['filename'] === 'string' &&
-    value['filename'].length <= 128 &&
-    SAFE_FILENAME.test(value['filename']) &&
-    typeof value['contentType'] === 'string' &&
-    VIDEO_MEDIA_TYPE.test(value['contentType']) &&
-    (value['contentLength'] === null ||
-      (typeof value['contentLength'] === 'number' &&
-        Number.isSafeInteger(value['contentLength']) &&
-        value['contentLength'] > 0)) &&
-    isDownloadRangeCapability(value['rangeCapability'])
+    record !== null &&
+    typeof record['filename'] === 'string' &&
+    record['filename'].length <= 128 &&
+    SAFE_FILENAME.test(record['filename']) &&
+    typeof record['contentType'] === 'string' &&
+    VIDEO_MEDIA_TYPE.test(record['contentType']) &&
+    (record['contentLength'] === null ||
+      (typeof record['contentLength'] === 'number' &&
+        Number.isSafeInteger(record['contentLength']) &&
+        record['contentLength'] > 0)) &&
+    isDownloadRangeCapability(record['rangeCapability'])
   );
 }
 
@@ -450,60 +452,60 @@ function hasValidDownloadStatusShape(value: Record<string, unknown>): boolean {
 }
 
 export function decodeApiError(value: unknown): ApiError | null {
+  const record = decodeExactRecord(value, ['error']);
+  const error =
+    record === null ? null : decodeExactRecord(record['error'], ['code', 'message', 'requestId']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['error']) ||
-    !isPlainObject(value['error']) ||
-    !hasExactKeys(value['error'], ['code', 'message', 'requestId']) ||
-    !isApiErrorCode(value['error']['code']) ||
-    !isSafeApiErrorMessage(value['error']['message']) ||
-    !isOpaqueId(value['error']['requestId'])
+    error === null ||
+    !isApiErrorCode(error['code']) ||
+    !isSafeApiErrorMessage(error['message']) ||
+    !isOpaqueId(error['requestId'])
   ) {
     return null;
   }
   return {
     error: {
-      code: value['error']['code'],
-      message: value['error']['message'],
-      requestId: value['error']['requestId'],
+      code: error['code'],
+      message: error['message'],
+      requestId: error['requestId'],
     },
   };
 }
 
 export function decodeSessionResponse(value: unknown): SessionResponse | null {
+  const record = decodeExactRecord(value, ['csrfToken', 'expiresAt', 'turnstileSiteKey']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['csrfToken', 'expiresAt', 'turnstileSiteKey']) ||
-    !isCanonicalCsrfToken(value['csrfToken']) ||
-    !isCanonicalIsoDate(value['expiresAt']) ||
-    typeof value['turnstileSiteKey'] !== 'string' ||
-    !SAFE_TURNSTILE_SITE_KEY.test(value['turnstileSiteKey'])
+    record === null ||
+    !isCanonicalCsrfToken(record['csrfToken']) ||
+    !isCanonicalIsoDate(record['expiresAt']) ||
+    typeof record['turnstileSiteKey'] !== 'string' ||
+    !SAFE_TURNSTILE_SITE_KEY.test(record['turnstileSiteKey'])
   ) {
     return null;
   }
   return {
-    csrfToken: value['csrfToken'],
-    expiresAt: value['expiresAt'],
-    turnstileSiteKey: value['turnstileSiteKey'],
+    csrfToken: record['csrfToken'],
+    expiresAt: record['expiresAt'],
+    turnstileSiteKey: record['turnstileSiteKey'],
   };
 }
 
 export function decodeResolveResponse(value: unknown): ResolveResponse | null {
+  const record = decodeExactRecord(value, ['candidates', 'expiresAt', 'resolveId']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['candidates', 'expiresAt', 'resolveId']) ||
-    !isOpaqueId(value['resolveId']) ||
-    !isCanonicalIsoDate(value['expiresAt']) ||
-    !Array.isArray(value['candidates']) ||
-    value['candidates'].length < 1 ||
-    value['candidates'].length > MAX_RESOLVE_CANDIDATES
+    record === null ||
+    !isOpaqueId(record['resolveId']) ||
+    !isCanonicalIsoDate(record['expiresAt']) ||
+    !Array.isArray(record['candidates']) ||
+    record['candidates'].length < 1 ||
+    record['candidates'].length > MAX_RESOLVE_CANDIDATES
   ) {
     return null;
   }
 
   const candidates: ResolveCandidate[] = [];
   const candidateIds = new Set<string>();
-  for (const candidate of value['candidates']) {
+  for (const candidate of record['candidates']) {
     const decoded = decodeResolveCandidate(candidate);
     if (decoded === null || candidateIds.has(decoded.candidateId)) {
       return null;
@@ -511,78 +513,78 @@ export function decodeResolveResponse(value: unknown): ResolveResponse | null {
     candidateIds.add(decoded.candidateId);
     candidates.push(decoded);
   }
-  return { resolveId: value['resolveId'], expiresAt: value['expiresAt'], candidates };
+  return { resolveId: record['resolveId'], expiresAt: record['expiresAt'], candidates };
 }
 
 export function decodeDownloadSessionRequest(value: unknown): DownloadSessionRequest | null {
+  const record = decodeExactRecord(value, ['candidateId', 'csrfToken', 'resolveId']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['candidateId', 'csrfToken', 'resolveId']) ||
-    !isOpaqueId(value['resolveId']) ||
-    !isOpaqueId(value['candidateId']) ||
-    !isCanonicalCsrfToken(value['csrfToken'])
+    record === null ||
+    !isOpaqueId(record['resolveId']) ||
+    !isOpaqueId(record['candidateId']) ||
+    !isCanonicalCsrfToken(record['csrfToken'])
   ) {
     return null;
   }
   return {
-    resolveId: value['resolveId'],
-    candidateId: value['candidateId'],
-    csrfToken: value['csrfToken'],
+    resolveId: record['resolveId'],
+    candidateId: record['candidateId'],
+    csrfToken: record['csrfToken'],
   };
 }
 
 export function decodeDownloadSessionResponse(value: unknown): DownloadSessionResponse | null {
+  const record = decodeExactRecord(value, ['downloadId', 'downloadUrl', 'startExpiresAt']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'downloadUrl', 'startExpiresAt']) ||
-    !isOpaqueId(value['downloadId']) ||
-    value['downloadUrl'] !== `/api/download/${value['downloadId']}` ||
-    !isCanonicalIsoDate(value['startExpiresAt'])
+    record === null ||
+    !isOpaqueId(record['downloadId']) ||
+    record['downloadUrl'] !== `/api/download/${record['downloadId']}` ||
+    !isCanonicalIsoDate(record['startExpiresAt'])
   ) {
     return null;
   }
   return {
-    downloadId: value['downloadId'],
-    downloadUrl: value['downloadUrl'],
-    startExpiresAt: value['startExpiresAt'],
+    downloadId: record['downloadId'],
+    downloadUrl: record['downloadUrl'],
+    startExpiresAt: record['startExpiresAt'],
   };
 }
 
 export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResponse | null {
+  const record = decodeExactRecord(value, [
+    'absoluteExpiresAt',
+    'activeStreams',
+    'available',
+    'completionExpiresAt',
+    'idleExpiresAt',
+    'metadata',
+    'startExpiresAt',
+    'status',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'absoluteExpiresAt',
-      'activeStreams',
-      'available',
-      'completionExpiresAt',
-      'idleExpiresAt',
-      'metadata',
-      'startExpiresAt',
-      'status',
-    ]) ||
-    value['available'] !== true ||
-    !isDownloadStatus(value['status']) ||
-    !isCanonicalIsoDate(value['startExpiresAt']) ||
-    !isNullableCanonicalIsoDate(value['idleExpiresAt']) ||
-    !isCanonicalIsoDate(value['absoluteExpiresAt']) ||
-    !isNullableCanonicalIsoDate(value['completionExpiresAt']) ||
-    typeof value['activeStreams'] !== 'number' ||
-    !Number.isSafeInteger(value['activeStreams']) ||
-    value['activeStreams'] < 0 ||
-    value['activeStreams'] > MAX_CONCURRENT_DOWNLOAD_STREAMS ||
-    !isDownloadStatusMetadata(value['metadata']) ||
-    !hasValidDownloadStatusShape(value)
+    record === null ||
+    record['available'] !== true ||
+    !isDownloadStatus(record['status']) ||
+    !isCanonicalIsoDate(record['startExpiresAt']) ||
+    !isNullableCanonicalIsoDate(record['idleExpiresAt']) ||
+    !isCanonicalIsoDate(record['absoluteExpiresAt']) ||
+    !isNullableCanonicalIsoDate(record['completionExpiresAt']) ||
+    typeof record['activeStreams'] !== 'number' ||
+    !Number.isSafeInteger(record['activeStreams']) ||
+    record['activeStreams'] < 0 ||
+    record['activeStreams'] > MAX_CONCURRENT_DOWNLOAD_STREAMS ||
+    !isDownloadStatusMetadata(record['metadata']) ||
+    !hasValidDownloadStatusShape(record)
   ) {
     return null;
   }
 
-  const startExpiresAt = isoTimestamp(value['startExpiresAt']);
-  const absoluteExpiresAt = isoTimestamp(value['absoluteExpiresAt']);
+  const startExpiresAt = isoTimestamp(record['startExpiresAt']);
+  const absoluteExpiresAt = isoTimestamp(record['absoluteExpiresAt']);
   const idleExpiresAt =
-    value['idleExpiresAt'] === null ? null : isoTimestamp(value['idleExpiresAt']);
+    record['idleExpiresAt'] === null ? null : isoTimestamp(record['idleExpiresAt']);
   const completionExpiresAt =
-    value['completionExpiresAt'] === null ? null : isoTimestamp(value['completionExpiresAt']);
+    record['completionExpiresAt'] === null ? null : isoTimestamp(record['completionExpiresAt']);
   if (
     startExpiresAt >= absoluteExpiresAt ||
     (idleExpiresAt !== null && idleExpiresAt > absoluteExpiresAt) ||
@@ -594,13 +596,13 @@ export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResp
 
   return {
     available: true,
-    status: value['status'],
-    startExpiresAt: value['startExpiresAt'],
-    idleExpiresAt: value['idleExpiresAt'],
-    absoluteExpiresAt: value['absoluteExpiresAt'],
-    completionExpiresAt: value['completionExpiresAt'],
-    activeStreams: value['activeStreams'],
-    metadata: value['metadata'],
+    status: record['status'],
+    startExpiresAt: record['startExpiresAt'],
+    idleExpiresAt: record['idleExpiresAt'],
+    absoluteExpiresAt: record['absoluteExpiresAt'],
+    completionExpiresAt: record['completionExpiresAt'],
+    activeStreams: record['activeStreams'],
+    metadata: record['metadata'],
   };
 }
 

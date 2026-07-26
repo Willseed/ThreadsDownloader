@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import {
   createProbeTransferPlan,
   inspectRepresentationHeaders,
@@ -23,6 +25,7 @@ const PROBED_MEDIA_FIELDS = [
   'rangeCapability',
   'strongEtag',
 ] as const;
+const PROBED_MEDIA_WITH_VALIDATOR_FIELDS = [...PROBED_MEDIA_FIELDS, 'validator'] as const;
 
 export type MediaRangeCapability = 'bytes' | 'none' | 'unknown';
 
@@ -79,20 +82,6 @@ function fail(code: MediaProbeErrorCode): never {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasProbedMediaFields(value: Record<string, unknown>): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const required = [...PROBED_MEDIA_FIELDS];
-  const withValidator = [...required, 'validator'].sort((left, right) =>
-    left.localeCompare(right, 'en'),
-  );
-  return (
-    (actual.length === required.length &&
-      actual.every((field, index) => field === required[index])) ||
-    (actual.length === withValidator.length &&
-      actual.every((field, index) => field === withValidator[index]))
-  );
 }
 
 function defaultTimeoutSignal(milliseconds: number): AbortSignal {
@@ -278,14 +267,8 @@ function validatorsMatch(left: ReliableValidator | null, right: unknown): boolea
   if (left === null) {
     return right === null;
   }
-  return (
-    isPlainObject(right) &&
-    Object.keys(right)
-      .sort((left, right) => left.localeCompare(right, 'en'))
-      .join(',') === 'kind,value' &&
-    right['kind'] === left.kind &&
-    right['value'] === left.value
-  );
+  const record = decodeExactRecord(right, ['kind', 'value']);
+  return record !== null && record['kind'] === left.kind && record['value'] === left.value;
 }
 
 function normalizeContentLength(value: unknown): number | null {
@@ -374,22 +357,28 @@ function normalizeCompletionReliability(
 }
 
 export function normalizeProbedMedia(value: unknown): ProbedMedia {
-  if (!isPlainObject(value) || !hasProbedMediaFields(value)) {
+  const record =
+    decodeExactRecord(value, PROBED_MEDIA_FIELDS) ??
+    decodeExactRecord(value, PROBED_MEDIA_WITH_VALIDATOR_FIELDS);
+  if (record === null) {
     return fail('MEDIA_PROBE_METADATA_INVALID');
   }
-  const representation = normalizeRepresentation(value);
-  const rangeCapability = normalizeRangeCapability(value['rangeCapability']);
-  const probeMethod = normalizeProbeMethod(value['probeMethod'], rangeCapability);
+  const representation = normalizeRepresentation(record);
+  const rangeCapability = normalizeRangeCapability(record['rangeCapability']);
+  const probeMethod = normalizeProbeMethod(record['probeMethod'], rangeCapability);
 
   return {
-    finalUrl: normalizeFinalUrl(value['finalUrl']),
-    contentType: normalizeContentType(value['contentType']),
+    finalUrl: normalizeFinalUrl(record['finalUrl']),
+    contentType: normalizeContentType(record['contentType']),
     contentLength: representation.contentLength,
     rangeCapability,
     strongEtag: representation.strongEtag,
     lastModified: representation.lastModified,
     validator: representation.validator,
-    completionReliable: normalizeCompletionReliability(value['completionReliable'], representation),
+    completionReliable: normalizeCompletionReliability(
+      record['completionReliable'],
+      representation,
+    ),
     probeMethod,
   };
 }

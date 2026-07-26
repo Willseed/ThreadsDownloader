@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 import { createOpaqueId } from './cryptography.js';
@@ -131,12 +133,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const expected = [...keys].sort((left, right) => left.localeCompare(right, 'en'));
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
 function hasCanonicalBytes(
   value: unknown,
   characters: number | null,
@@ -220,11 +216,12 @@ export function encodeProbedMediaWire(media: ProbedMedia): ProbedMediaWire {
 }
 
 export function decodeProbedMediaWire(value: unknown): ProbedMedia | null {
-  if (!isPlainObject(value) || !hasExactKeys(value, PROBED_MEDIA_WIRE_FIELDS)) {
+  const record = decodeExactRecord(value, PROBED_MEDIA_WIRE_FIELDS);
+  if (record === null) {
     return null;
   }
   try {
-    return normalizeProbedMedia(value);
+    return normalizeProbedMedia(record);
   } catch {
     return null;
   }
@@ -254,30 +251,30 @@ export function deriveResolvedMediaFilename(
 }
 
 export function decodeResolveVaultStoreRequest(value: unknown): ResolveVaultStoreRequest | null {
+  const record = decodeExactRecord(value, [
+    'candidates',
+    'csrfHash',
+    'now',
+    'permitId',
+    'sessionHash',
+    'shortcode',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'candidates',
-      'csrfHash',
-      'now',
-      'permitId',
-      'sessionHash',
-      'shortcode',
-    ]) ||
-    !isSessionHash(value['sessionHash']) ||
-    !isSessionHash(value['csrfHash']) ||
-    !isPermitId(value['permitId']) ||
-    !isSafeTimestamp(value['now']) ||
-    typeof value['shortcode'] !== 'string' ||
-    !SHORTCODE.test(value['shortcode']) ||
-    !Array.isArray(value['candidates']) ||
-    value['candidates'].length < 1 ||
-    value['candidates'].length > RESOLVE_VAULT_MAX_BATCH_CANDIDATES
+    record === null ||
+    !isSessionHash(record['sessionHash']) ||
+    !isSessionHash(record['csrfHash']) ||
+    !isPermitId(record['permitId']) ||
+    !isSafeTimestamp(record['now']) ||
+    typeof record['shortcode'] !== 'string' ||
+    !SHORTCODE.test(record['shortcode']) ||
+    !Array.isArray(record['candidates']) ||
+    record['candidates'].length < 1 ||
+    record['candidates'].length > RESOLVE_VAULT_MAX_BATCH_CANDIDATES
   ) {
     return null;
   }
   const candidates: ProbedMedia[] = [];
-  for (const candidate of value['candidates']) {
+  for (const candidate of record['candidates']) {
     const decoded = decodeProbedMediaWire(candidate);
     if (decoded === null) {
       return null;
@@ -285,72 +282,70 @@ export function decodeResolveVaultStoreRequest(value: unknown): ResolveVaultStor
     candidates.push(decoded);
   }
   return {
-    sessionHash: value['sessionHash'],
-    csrfHash: value['csrfHash'],
-    permitId: value['permitId'],
-    now: value['now'],
-    shortcode: value['shortcode'],
+    sessionHash: record['sessionHash'],
+    csrfHash: record['csrfHash'],
+    permitId: record['permitId'],
+    now: record['now'],
+    shortcode: record['shortcode'],
     candidates,
   };
 }
 
 export function decodeResolveVaultClaimRequest(value: unknown): ResolveVaultClaimRequest | null {
+  const record = decodeExactRecord(value, [
+    'candidateId',
+    'csrfHash',
+    'now',
+    'reservationId',
+    'resolveId',
+    'sessionHash',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'candidateId',
-      'csrfHash',
-      'now',
-      'reservationId',
-      'resolveId',
-      'sessionHash',
-    ]) ||
-    !isSessionHash(value['sessionHash']) ||
-    !isSessionHash(value['csrfHash']) ||
-    !isSafeTimestamp(value['now']) ||
-    !isOpaqueId(value['resolveId']) ||
-    !isOpaqueId(value['candidateId']) ||
-    !isOpaqueId(value['reservationId'])
+    record === null ||
+    !isSessionHash(record['sessionHash']) ||
+    !isSessionHash(record['csrfHash']) ||
+    !isSafeTimestamp(record['now']) ||
+    !isOpaqueId(record['resolveId']) ||
+    !isOpaqueId(record['candidateId']) ||
+    !isOpaqueId(record['reservationId'])
   ) {
     return null;
   }
   return {
-    sessionHash: value['sessionHash'],
-    csrfHash: value['csrfHash'],
-    now: value['now'],
-    resolveId: value['resolveId'],
-    candidateId: value['candidateId'],
-    reservationId: value['reservationId'],
+    sessionHash: record['sessionHash'],
+    csrfHash: record['csrfHash'],
+    now: record['now'],
+    resolveId: record['resolveId'],
+    candidateId: record['candidateId'],
+    reservationId: record['reservationId'],
   };
 }
 
 export function decodeResolveVaultSettleRequest(value: unknown): ResolveVaultSettleRequest | null {
-  if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'candidateId',
-      'csrfHash',
-      'now',
-      'outcome',
-      'reservationId',
-      'resolveId',
-      'sessionHash',
-    ])
-  ) {
+  const record = decodeExactRecord(value, [
+    'candidateId',
+    'csrfHash',
+    'now',
+    'outcome',
+    'reservationId',
+    'resolveId',
+    'sessionHash',
+  ]);
+  if (record === null) {
     return null;
   }
   const claim = decodeResolveVaultClaimRequest({
-    sessionHash: value['sessionHash'],
-    csrfHash: value['csrfHash'],
-    now: value['now'],
-    resolveId: value['resolveId'],
-    candidateId: value['candidateId'],
-    reservationId: value['reservationId'],
+    sessionHash: record['sessionHash'],
+    csrfHash: record['csrfHash'],
+    now: record['now'],
+    resolveId: record['resolveId'],
+    candidateId: record['candidateId'],
+    reservationId: record['reservationId'],
   });
-  if (claim === null || (value['outcome'] !== 'consume' && value['outcome'] !== 'release')) {
+  if (claim === null || (record['outcome'] !== 'consume' && record['outcome'] !== 'release')) {
     return null;
   }
-  return { ...claim, outcome: value['outcome'] };
+  return { ...claim, outcome: record['outcome'] };
 }
 
 function mapStatus(status: number): never {
@@ -407,26 +402,27 @@ function decodeSafeCandidate(value: unknown): SafeResolvedMediaCandidate | null 
     return null;
   }
   const hasLength = Object.hasOwn(value, 'contentLength');
+  const record = decodeExactRecord(
+    value,
+    hasLength ? ['candidateId', 'contentLength', 'filename'] : ['candidateId', 'filename'],
+  );
   if (
-    !hasExactKeys(
-      value,
-      hasLength ? ['candidateId', 'contentLength', 'filename'] : ['candidateId', 'filename'],
-    ) ||
-    !isOpaqueId(value['candidateId']) ||
-    typeof value['filename'] !== 'string' ||
-    !SAFE_FILENAME.test(value['filename']) ||
-    (hasLength && !isContentLength(value['contentLength'])) ||
-    value['contentLength'] === null
+    record === null ||
+    !isOpaqueId(record['candidateId']) ||
+    typeof record['filename'] !== 'string' ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    (hasLength && !isContentLength(record['contentLength'])) ||
+    record['contentLength'] === null
   ) {
     return null;
   }
   return hasLength
     ? {
-        candidateId: value['candidateId'],
-        filename: value['filename'],
-        contentLength: value['contentLength'] as number,
+        candidateId: record['candidateId'],
+        filename: record['filename'],
+        contentLength: record['contentLength'] as number,
       }
-    : { candidateId: value['candidateId'], filename: value['filename'] };
+    : { candidateId: record['candidateId'], filename: record['filename'] };
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -475,25 +471,31 @@ export async function storeResolvedMediaBatch(
   }
   const body = await readJson(response);
   const receivedAt = responseTime(clock);
+  const record = decodeExactRecord(body, [
+    'candidates',
+    'expiresAt',
+    'issuedAt',
+    'ok',
+    'resolveId',
+  ]);
   if (
-    !isPlainObject(body) ||
-    !hasExactKeys(body, ['candidates', 'expiresAt', 'issuedAt', 'ok', 'resolveId']) ||
-    body['ok'] !== true ||
-    !isOpaqueId(body['resolveId']) ||
+    record === null ||
+    record['ok'] !== true ||
+    !isOpaqueId(record['resolveId']) ||
     !isBoundedServerDeadline(
-      body['issuedAt'],
-      body['expiresAt'],
+      record['issuedAt'],
+      record['expiresAt'],
       receivedAt,
       RESOLVE_VAULT_TTL_MS,
     ) ||
-    !Array.isArray(body['candidates']) ||
-    body['candidates'].length !== candidates.length
+    !Array.isArray(record['candidates']) ||
+    record['candidates'].length !== candidates.length
   ) {
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
   const safeCandidates: SafeResolvedMediaCandidate[] = [];
   const seen = new Set<string>();
-  for (const candidate of body['candidates']) {
+  for (const candidate of record['candidates']) {
     const decoded = decodeSafeCandidate(candidate);
     if (decoded === null || seen.has(decoded.candidateId)) {
       return fail('RESOLVE_VAULT_UNAVAILABLE');
@@ -501,7 +503,11 @@ export async function storeResolvedMediaBatch(
     seen.add(decoded.candidateId);
     safeCandidates.push(decoded);
   }
-  return { resolveId: body['resolveId'], expiresAt: body['expiresAt'], candidates: safeCandidates };
+  return {
+    resolveId: record['resolveId'],
+    expiresAt: record['expiresAt'],
+    candidates: safeCandidates,
+  };
 }
 
 export async function claimResolvedMediaCandidate(
@@ -567,26 +573,26 @@ export async function claimResolvedMediaCandidate(
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
+  const record = decodeExactRecord(body, [
+    'filename',
+    'grant',
+    'ok',
+    'reservationExpiresAt',
+    'reservationId',
+    'reservedAt',
+    'shortcode',
+  ]);
   if (
-    !isPlainObject(body) ||
-    !hasExactKeys(body, [
-      'filename',
-      'grant',
-      'ok',
-      'reservationExpiresAt',
-      'reservationId',
-      'reservedAt',
-      'shortcode',
-    ]) ||
-    body['ok'] !== true ||
-    body['reservationId'] !== reservationId ||
-    typeof body['filename'] !== 'string' ||
-    !SAFE_FILENAME.test(body['filename']) ||
-    typeof body['shortcode'] !== 'string' ||
-    !SHORTCODE.test(body['shortcode']) ||
+    record === null ||
+    record['ok'] !== true ||
+    record['reservationId'] !== reservationId ||
+    typeof record['filename'] !== 'string' ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    typeof record['shortcode'] !== 'string' ||
+    !SHORTCODE.test(record['shortcode']) ||
     !isBoundedServerDeadline(
-      body['reservedAt'],
-      body['reservationExpiresAt'],
+      record['reservedAt'],
+      record['reservationExpiresAt'],
       receivedAt,
       RESOLVE_VAULT_RESERVATION_MS,
     )
@@ -594,16 +600,16 @@ export async function claimResolvedMediaCandidate(
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
-  const media = decodeProbedMediaWire(body['grant']);
+  const media = decodeProbedMediaWire(record['grant']);
   if (media === null) {
     await bestEffortRelease(input, reservationId);
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
   return {
     reservationId,
-    reservationExpiresAt: body['reservationExpiresAt'],
-    filename: body['filename'],
-    shortcode: body['shortcode'],
+    reservationExpiresAt: record['reservationExpiresAt'],
+    filename: record['filename'],
+    shortcode: record['shortcode'],
     media,
   };
 }
@@ -643,7 +649,8 @@ export async function settleResolvedMediaClaim(
     return mapStatus(response.status);
   }
   const body = await readJson(response);
-  if (!isPlainObject(body) || !hasExactKeys(body, ['ok']) || body['ok'] !== true) {
+  const record = decodeExactRecord(body, ['ok']);
+  if (record === null || record['ok'] !== true) {
     return fail('RESOLVE_VAULT_UNAVAILABLE');
   }
 }

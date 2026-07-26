@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 import type { AesGcmSealer } from './cryptography.js';
@@ -55,19 +57,6 @@ function fail(code: ResolvedMediaGrantCodecErrorCode): never {
   throw new ResolvedMediaGrantCodecError(code);
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const sortedExpected = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
-}
-
 function hasCanonicalBytes(value: unknown, characters: number, bytes: number): value is string {
   if (typeof value !== 'string' || value.length !== characters) {
     return false;
@@ -88,49 +77,49 @@ function isContentLength(value: unknown): value is number | null {
 }
 
 function normalizeBinding(value: unknown): NormalizedBinding {
+  const record = decodeExactRecord(value, [
+    'candidateId',
+    'contentLength',
+    'expiresAt',
+    'filename',
+    'issuedAt',
+    'ordinal',
+    'resolveId',
+    'sessionHash',
+    'shortcode',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'candidateId',
-      'contentLength',
-      'expiresAt',
-      'filename',
-      'issuedAt',
-      'ordinal',
-      'resolveId',
-      'sessionHash',
-      'shortcode',
-    ]) ||
-    !hasCanonicalBytes(value['sessionHash'], 43, 32) ||
-    !hasCanonicalBytes(value['resolveId'], 32, 24) ||
-    !hasCanonicalBytes(value['candidateId'], 32, 24) ||
-    typeof value['ordinal'] !== 'number' ||
-    !Number.isSafeInteger(value['ordinal']) ||
-    value['ordinal'] < 1 ||
-    value['ordinal'] > 10 ||
-    typeof value['filename'] !== 'string' ||
-    value['filename'].length > MAX_FILENAME_CHARACTERS ||
-    !SAFE_FILENAME.test(value['filename']) ||
-    typeof value['shortcode'] !== 'string' ||
-    !SAFE_SHORTCODE.test(value['shortcode']) ||
-    !isContentLength(value['contentLength']) ||
-    !isSafeTimestamp(value['issuedAt']) ||
-    !isSafeTimestamp(value['expiresAt']) ||
-    value['expiresAt'] <= value['issuedAt'] ||
-    value['expiresAt'] - value['issuedAt'] > RESOLVED_MEDIA_GRANT_MAX_TTL_MS
+    record === null ||
+    !hasCanonicalBytes(record['sessionHash'], 43, 32) ||
+    !hasCanonicalBytes(record['resolveId'], 32, 24) ||
+    !hasCanonicalBytes(record['candidateId'], 32, 24) ||
+    typeof record['ordinal'] !== 'number' ||
+    !Number.isSafeInteger(record['ordinal']) ||
+    record['ordinal'] < 1 ||
+    record['ordinal'] > 10 ||
+    typeof record['filename'] !== 'string' ||
+    record['filename'].length > MAX_FILENAME_CHARACTERS ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    typeof record['shortcode'] !== 'string' ||
+    !SAFE_SHORTCODE.test(record['shortcode']) ||
+    !isContentLength(record['contentLength']) ||
+    !isSafeTimestamp(record['issuedAt']) ||
+    !isSafeTimestamp(record['expiresAt']) ||
+    record['expiresAt'] <= record['issuedAt'] ||
+    record['expiresAt'] - record['issuedAt'] > RESOLVED_MEDIA_GRANT_MAX_TTL_MS
   ) {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
   return {
-    sessionHash: value['sessionHash'],
-    resolveId: value['resolveId'],
-    candidateId: value['candidateId'],
-    ordinal: value['ordinal'],
-    filename: value['filename'],
-    shortcode: value['shortcode'],
-    contentLength: value['contentLength'],
-    issuedAt: value['issuedAt'],
-    expiresAt: value['expiresAt'],
+    sessionHash: record['sessionHash'],
+    resolveId: record['resolveId'],
+    candidateId: record['candidateId'],
+    ordinal: record['ordinal'],
+    filename: record['filename'],
+    shortcode: record['shortcode'],
+    contentLength: record['contentLength'],
+    issuedAt: record['issuedAt'],
+    expiresAt: record['expiresAt'],
   };
 }
 
@@ -200,22 +189,19 @@ function deserializeMedia(plaintext: string): ProbedMedia {
   } catch {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
-  if (
-    !isPlainObject(payload) ||
-    !hasExactKeys(payload, PAYLOAD_FIELDS) ||
-    payload['v'] !== RESOLVED_MEDIA_GRANT_VERSION
-  ) {
+  const record = decodeExactRecord(payload, PAYLOAD_FIELDS);
+  if (record === null || record['v'] !== RESOLVED_MEDIA_GRANT_VERSION) {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
   return normalizeMedia({
-    finalUrl: payload['finalUrl'],
-    contentType: payload['contentType'],
-    contentLength: payload['contentLength'],
-    rangeCapability: payload['rangeCapability'],
-    strongEtag: payload['strongEtag'],
-    lastModified: payload['lastModified'],
-    completionReliable: payload['completionReliable'],
-    probeMethod: payload['probeMethod'],
+    finalUrl: record['finalUrl'],
+    contentType: record['contentType'],
+    contentLength: record['contentLength'],
+    rangeCapability: record['rangeCapability'],
+    strongEtag: record['strongEtag'],
+    lastModified: record['lastModified'],
+    completionReliable: record['completionReliable'],
+    probeMethod: record['probeMethod'],
   });
 }
 

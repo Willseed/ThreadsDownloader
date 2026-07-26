@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import type { ProbedMedia } from '../resolver/media-probe.js';
 import { decodeBase64Url, encodeBase64Url } from '../utils/base64url.js';
 import { decodeProbedMediaWire, encodeProbedMediaWire } from './resolve-vault.js';
@@ -51,19 +53,6 @@ function fail(code: DownloadMediaCodecErrorCode): never {
   throw new DownloadMediaCodecError(code);
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const sortedExpected = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
-}
-
 function hasCanonicalBytes(
   value: unknown,
   minimumBytes: number,
@@ -85,37 +74,37 @@ function isSafeTimestamp(value: unknown): value is number {
 }
 
 function normalizeBinding(value: unknown): DownloadMediaBinding {
+  const record = decodeExactRecord(value, [
+    'absoluteExpiresAt',
+    'downloadId',
+    'filename',
+    'issuedAt',
+    'sessionHash',
+    'shortcode',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'absoluteExpiresAt',
-      'downloadId',
-      'filename',
-      'issuedAt',
-      'sessionHash',
-      'shortcode',
-    ]) ||
-    !hasCanonicalBytes(value['sessionHash'], KEY_BYTES, KEY_BYTES) ||
-    !hasCanonicalBytes(value['downloadId'], 16) ||
-    typeof value['filename'] !== 'string' ||
-    value['filename'].length > MAX_FILENAME_CHARACTERS ||
-    !SAFE_FILENAME.test(value['filename']) ||
-    typeof value['shortcode'] !== 'string' ||
-    !SAFE_SHORTCODE.test(value['shortcode']) ||
-    !isSafeTimestamp(value['issuedAt']) ||
-    !isSafeTimestamp(value['absoluteExpiresAt']) ||
-    value['absoluteExpiresAt'] <= value['issuedAt'] ||
-    value['absoluteExpiresAt'] - value['issuedAt'] > DOWNLOAD_MEDIA_MAX_TTL_MS
+    record === null ||
+    !hasCanonicalBytes(record['sessionHash'], KEY_BYTES, KEY_BYTES) ||
+    !hasCanonicalBytes(record['downloadId'], 16) ||
+    typeof record['filename'] !== 'string' ||
+    record['filename'].length > MAX_FILENAME_CHARACTERS ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    typeof record['shortcode'] !== 'string' ||
+    !SAFE_SHORTCODE.test(record['shortcode']) ||
+    !isSafeTimestamp(record['issuedAt']) ||
+    !isSafeTimestamp(record['absoluteExpiresAt']) ||
+    record['absoluteExpiresAt'] <= record['issuedAt'] ||
+    record['absoluteExpiresAt'] - record['issuedAt'] > DOWNLOAD_MEDIA_MAX_TTL_MS
   ) {
     return fail('DOWNLOAD_MEDIA_INVALID');
   }
   return {
-    sessionHash: value['sessionHash'],
-    downloadId: value['downloadId'],
-    filename: value['filename'],
-    shortcode: value['shortcode'],
-    issuedAt: value['issuedAt'],
-    absoluteExpiresAt: value['absoluteExpiresAt'],
+    sessionHash: record['sessionHash'],
+    downloadId: record['downloadId'],
+    filename: record['filename'],
+    shortcode: record['shortcode'],
+    issuedAt: record['issuedAt'],
+    absoluteExpiresAt: record['absoluteExpiresAt'],
   };
 }
 
@@ -205,23 +194,23 @@ function deserializeEnvelope(sealedMedia: string): {
   } catch {
     return fail('DOWNLOAD_MEDIA_INVALID');
   }
+  const record = decodeExactRecord(value, ['ciphertext', 'iv', 'v']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['ciphertext', 'iv', 'v']) ||
-    value['v'] !== DOWNLOAD_MEDIA_VERSION ||
-    !hasCanonicalBytes(value['iv'], IV_BYTES, IV_BYTES) ||
-    !hasCanonicalBytes(value['ciphertext'], TAG_BYTES) ||
+    record === null ||
+    record['v'] !== DOWNLOAD_MEDIA_VERSION ||
+    !hasCanonicalBytes(record['iv'], IV_BYTES, IV_BYTES) ||
+    !hasCanonicalBytes(record['ciphertext'], TAG_BYTES) ||
     JSON.stringify({
-      v: value['v'],
-      iv: value['iv'],
-      ciphertext: value['ciphertext'],
+      v: record['v'],
+      iv: record['iv'],
+      ciphertext: record['ciphertext'],
     }) !== sealedMedia
   ) {
     return fail('DOWNLOAD_MEDIA_INVALID');
   }
   return {
-    iv: decodeBase64Url(value['iv']),
-    ciphertext: decodeBase64Url(value['ciphertext']),
+    iv: decodeBase64Url(record['iv']),
+    ciphertext: decodeBase64Url(record['ciphertext']),
   };
 }
 

@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import {
   acquireRateLimitPermit,
@@ -52,10 +53,6 @@ interface SessionIssuanceRequest {
   readonly now: number;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isIpHash(value: unknown): value is string {
   if (typeof value !== 'string' || value.length !== 43) {
     return false;
@@ -96,33 +93,33 @@ function isSafeTime(value: unknown): value is number {
 }
 
 export function decodeIpRateLimitRequest(value: unknown): IpPermitRequest | null {
+  const record = decodeExactRecord(value, ['ipHash', 'now', 'permitId']);
   if (
-    !isPlainObject(value) ||
-    Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
-      .join(',') !== 'ipHash,now,permitId'
+    record === null ||
+    !isIpHash(record['ipHash']) ||
+    !isPermitId(record['permitId']) ||
+    !isSafeTime(record['now'])
   ) {
     return null;
   }
-  return isIpHash(value['ipHash']) && isPermitId(value['permitId']) && isSafeTime(value['now'])
-    ? { ipHash: value['ipHash'], permitId: value['permitId'], now: value['now'] }
-    : null;
+  return { ipHash: record['ipHash'], permitId: record['permitId'], now: record['now'] };
 }
 
 export function decodeSessionIssuanceRequest(value: unknown): SessionIssuanceRequest | null {
+  const record = decodeExactRecord(value, ['ipHash', 'now', 'reservationId']);
   if (
-    !isPlainObject(value) ||
-    Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
-      .join(',') !== 'ipHash,now,reservationId'
+    record === null ||
+    !isIpHash(record['ipHash']) ||
+    !isSessionIssuanceReservationId(record['reservationId']) ||
+    !isSafeTime(record['now'])
   ) {
     return null;
   }
-  return isIpHash(value['ipHash']) &&
-    isSessionIssuanceReservationId(value['reservationId']) &&
-    isSafeTime(value['now'])
-    ? { ipHash: value['ipHash'], reservationId: value['reservationId'], now: value['now'] }
-    : null;
+  return {
+    ipHash: record['ipHash'],
+    reservationId: record['reservationId'],
+    now: record['now'],
+  };
 }
 
 export class IpRateLimiter extends DurableObject {

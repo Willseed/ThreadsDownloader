@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 const replayLifetimeMs = 300_000;
 const tableSql = `CREATE TABLE IF NOT EXISTS turnstile_replay (
@@ -13,40 +14,30 @@ interface ReplayReservation {
   readonly expiresAt: number;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isCanonicalHash(value: string): boolean {
   return value.length === 43 && /^[A-Za-z0-9_-]+$/u.test(value);
 }
 
 function decodeReservation(value: unknown): ReplayReservation | null {
+  const record = decodeExactRecord(value, ['consumedAt', 'expiresAt', 'tokenHash']);
   if (
-    !isPlainObject(value) ||
-    Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
-      .join(',') !== 'consumedAt,expiresAt,tokenHash'
-  ) {
-    return null;
-  }
-  if (
-    typeof value['tokenHash'] !== 'string' ||
-    !isCanonicalHash(value['tokenHash']) ||
-    typeof value['consumedAt'] !== 'number' ||
-    !Number.isSafeInteger(value['consumedAt']) ||
-    value['consumedAt'] < 0 ||
-    typeof value['expiresAt'] !== 'number' ||
-    !Number.isSafeInteger(value['expiresAt']) ||
-    value['expiresAt'] <= value['consumedAt'] ||
-    value['expiresAt'] - value['consumedAt'] > replayLifetimeMs
+    record === null ||
+    typeof record['tokenHash'] !== 'string' ||
+    !isCanonicalHash(record['tokenHash']) ||
+    typeof record['consumedAt'] !== 'number' ||
+    !Number.isSafeInteger(record['consumedAt']) ||
+    record['consumedAt'] < 0 ||
+    typeof record['expiresAt'] !== 'number' ||
+    !Number.isSafeInteger(record['expiresAt']) ||
+    record['expiresAt'] <= record['consumedAt'] ||
+    record['expiresAt'] - record['consumedAt'] > replayLifetimeMs
   ) {
     return null;
   }
   return {
-    tokenHash: value['tokenHash'],
-    consumedAt: value['consumedAt'],
-    expiresAt: value['expiresAt'],
+    tokenHash: record['tokenHash'],
+    consumedAt: record['consumedAt'],
+    expiresAt: record['expiresAt'],
   };
 }
 

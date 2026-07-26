@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import { createOpaqueId } from './cryptography.js';
 import {
   hasCanonicalOpaqueBytes,
@@ -54,16 +56,6 @@ interface SessionStub {
   fetch(request: Request): Promise<Response>;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const sorted = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
-  return actual.length === sorted.length && actual.every((key, index) => key === sorted[index]);
-}
-
 function isSafeTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
@@ -72,31 +64,31 @@ function decodePermitResponse(
   value: unknown,
   receivedAt: number,
 ): SessionDownloadPermitResponse | null {
+  const record = decodeExactRecord(value, ['expiresAt', 'ok', 'permitId', 'sequence']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['expiresAt', 'ok', 'permitId', 'sequence']) ||
-    value['ok'] !== true ||
-    !isSessionDownloadPermitId(value['permitId']) ||
-    !Number.isSafeInteger(value['sequence']) ||
-    (value['sequence'] as number) < 0 ||
-    !isSafeTimestamp(value['expiresAt']) ||
+    record === null ||
+    record['ok'] !== true ||
+    !isSessionDownloadPermitId(record['permitId']) ||
+    !Number.isSafeInteger(record['sequence']) ||
+    (record['sequence'] as number) < 0 ||
+    !isSafeTimestamp(record['expiresAt']) ||
     !Number.isSafeInteger(receivedAt) ||
     receivedAt < 0 ||
     receivedAt > Number.MAX_SAFE_INTEGER - SESSION_DOWNLOAD_PERMIT_LEASE_MS ||
-    value['expiresAt'] < receivedAt + SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS ||
-    value['expiresAt'] > receivedAt + SESSION_DOWNLOAD_PERMIT_LEASE_MS
+    record['expiresAt'] < receivedAt + SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS ||
+    record['expiresAt'] > receivedAt + SESSION_DOWNLOAD_PERMIT_LEASE_MS
   ) {
     return null;
   }
   return {
-    permitId: value['permitId'],
-    sequence: value['sequence'] as number,
-    expiresAt: value['expiresAt'],
+    permitId: record['permitId'],
+    sequence: record['sequence'] as number,
+    expiresAt: record['expiresAt'],
   };
 }
 
 function decodeAck(value: unknown): boolean {
-  return isPlainObject(value) && hasExactKeys(value, ['ok']) && value['ok'] === true;
+  return decodeExactRecord(value, ['ok'])?.['ok'] === true;
 }
 
 function unavailable(): SessionDownloadAdmissionError {

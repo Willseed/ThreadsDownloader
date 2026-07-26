@@ -5,6 +5,7 @@ import {
   type ResolveRequest,
   type ResolveResponse,
 } from '@threads-downloader/contracts';
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import { createMediaProbe, MediaProbeError, type ProbedMedia } from '../resolver/media-probe.js';
 import {
@@ -91,18 +92,6 @@ class ResolvePublicMediaError extends Error {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactRequestKeys(value: Record<string, unknown>): boolean {
-  return (
-    Object.keys(value)
-      .sort((left, right) => left.localeCompare(right, 'en'))
-      .join(',') === 'csrfToken,postUrl,rightsConfirmed,turnstileToken'
-  );
-}
-
 function isCanonicalCsrfToken(value: unknown): value is string {
   if (typeof value !== 'string') {
     return false;
@@ -115,20 +104,25 @@ function isCanonicalCsrfToken(value: unknown): value is string {
 }
 
 function decodeResolveRequest(value: unknown): ResolveRequest | null {
+  const record = decodeExactRecord(value, [
+    'csrfToken',
+    'postUrl',
+    'rightsConfirmed',
+    'turnstileToken',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactRequestKeys(value) ||
-    typeof value['postUrl'] !== 'string' ||
-    !isCanonicalCsrfToken(value['csrfToken']) ||
-    typeof value['turnstileToken'] !== 'string' ||
-    value['rightsConfirmed'] !== true
+    record === null ||
+    typeof record['postUrl'] !== 'string' ||
+    !isCanonicalCsrfToken(record['csrfToken']) ||
+    typeof record['turnstileToken'] !== 'string' ||
+    record['rightsConfirmed'] !== true
   ) {
     return null;
   }
   return {
-    postUrl: value['postUrl'],
-    csrfToken: value['csrfToken'],
-    turnstileToken: value['turnstileToken'],
+    postUrl: record['postUrl'],
+    csrfToken: record['csrfToken'],
+    turnstileToken: record['turnstileToken'],
     rightsConfirmed: true,
   };
 }

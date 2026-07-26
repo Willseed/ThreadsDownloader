@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import type { ProbedMedia } from '../resolver/media-probe.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 import { createOpaqueId } from './cryptography.js';
@@ -181,19 +183,6 @@ export class DownloadSessionClientError extends Error {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  const sortedExpected = [...expected].sort((left, right) => left.localeCompare(right, 'en'));
-  return (
-    actual.length === sortedExpected.length &&
-    actual.every((key, index) => key === sortedExpected[index])
-  );
-}
-
 function hasCanonicalBytes(value: unknown, characters: number, bytes: number): value is string {
   if (typeof value !== 'string' || value.length !== characters) {
     return false;
@@ -228,21 +217,26 @@ function isForwardedHeader(value: unknown): value is string | null {
 }
 
 function decodeDownloadHeaderEvidence(value: unknown): DownloadHeaderEvidence | null {
+  const record = decodeExactRecord(value, [
+    'contentLength',
+    'contentRange',
+    'etag',
+    'lastModified',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['contentLength', 'contentRange', 'etag', 'lastModified']) ||
-    !isForwardedHeader(value['contentLength']) ||
-    !isForwardedHeader(value['contentRange']) ||
-    !isForwardedHeader(value['etag']) ||
-    !isForwardedHeader(value['lastModified'])
+    record === null ||
+    !isForwardedHeader(record['contentLength']) ||
+    !isForwardedHeader(record['contentRange']) ||
+    !isForwardedHeader(record['etag']) ||
+    !isForwardedHeader(record['lastModified'])
   ) {
     return null;
   }
   return {
-    contentLength: value['contentLength'],
-    contentRange: value['contentRange'],
-    etag: value['etag'],
-    lastModified: value['lastModified'],
+    contentLength: record['contentLength'],
+    contentRange: record['contentRange'],
+    etag: record['etag'],
+    lastModified: record['lastModified'],
   };
 }
 
@@ -272,27 +266,33 @@ export function downloadHeaderEvidenceSource(evidence: DownloadHeaderEvidence): 
 export function decodeDownloadSessionInitializeRequest(
   value: unknown,
 ): DownloadSessionInitializeRequest | null {
+  const record = decodeExactRecord(value, [
+    'downloadId',
+    'filename',
+    'media',
+    'sessionHash',
+    'shortcode',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'filename', 'media', 'sessionHash', 'shortcode']) ||
-    !isDownloadId(value['downloadId']) ||
-    !isSessionHash(value['sessionHash']) ||
-    typeof value['filename'] !== 'string' ||
-    value['filename'].length > MAX_FILENAME_CHARACTERS ||
-    !SAFE_FILENAME.test(value['filename']) ||
-    typeof value['shortcode'] !== 'string' ||
-    !SAFE_SHORTCODE.test(value['shortcode'])
+    record === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash']) ||
+    typeof record['filename'] !== 'string' ||
+    record['filename'].length > MAX_FILENAME_CHARACTERS ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    typeof record['shortcode'] !== 'string' ||
+    !SAFE_SHORTCODE.test(record['shortcode'])
   ) {
     return null;
   }
-  const media = decodeProbedMediaWire(value['media']);
+  const media = decodeProbedMediaWire(record['media']);
   return media === null
     ? null
     : {
-        downloadId: value['downloadId'],
-        sessionHash: value['sessionHash'],
-        filename: value['filename'],
-        shortcode: value['shortcode'],
+        downloadId: record['downloadId'],
+        sessionHash: record['sessionHash'],
+        filename: record['filename'],
+        shortcode: record['shortcode'],
         media,
       };
 }
@@ -300,35 +300,40 @@ export function decodeDownloadSessionInitializeRequest(
 export function decodeDownloadSessionIdentityRequest(
   value: unknown,
 ): DownloadSessionIdentityRequest | null {
+  const record = decodeExactRecord(value, ['downloadId', 'sessionHash']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'sessionHash']) ||
-    !isDownloadId(value['downloadId']) ||
-    !isSessionHash(value['sessionHash'])
+    record === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash'])
   ) {
     return null;
   }
-  return { downloadId: value['downloadId'], sessionHash: value['sessionHash'] };
+  return { downloadId: record['downloadId'], sessionHash: record['sessionHash'] };
 }
 
 export function decodeDownloadSessionAcquireRequest(
   value: unknown,
 ): DownloadSessionAcquireRequest | null {
+  const record = decodeExactRecord(value, [
+    'downloadId',
+    'ifRangeHeader',
+    'rangeHeader',
+    'sessionHash',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['downloadId', 'ifRangeHeader', 'rangeHeader', 'sessionHash']) ||
-    !isDownloadId(value['downloadId']) ||
-    !isSessionHash(value['sessionHash']) ||
-    !isForwardedHeader(value['rangeHeader']) ||
-    !isForwardedHeader(value['ifRangeHeader'])
+    record === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash']) ||
+    !isForwardedHeader(record['rangeHeader']) ||
+    !isForwardedHeader(record['ifRangeHeader'])
   ) {
     return null;
   }
   return {
-    downloadId: value['downloadId'],
-    sessionHash: value['sessionHash'],
-    rangeHeader: value['rangeHeader'],
-    ifRangeHeader: value['ifRangeHeader'],
+    downloadId: record['downloadId'],
+    sessionHash: record['sessionHash'],
+    rangeHeader: record['rangeHeader'],
+    ifRangeHeader: record['ifRangeHeader'],
   };
 }
 
@@ -336,38 +341,51 @@ function decodeDownloadSessionLeaseRequest(
   value: unknown,
   expectedKeys: readonly string[],
 ): DownloadSessionInterruptRequest | null {
+  const record = decodeExactRecord(value, expectedKeys);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, expectedKeys) ||
-    !isDownloadId(value['downloadId']) ||
-    !isSessionHash(value['sessionHash']) ||
-    !isHolderId(value['holderId']) ||
-    !isSafeNonNegativeInteger(value['sequence'])
+    record === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash']) ||
+    !isHolderId(record['holderId']) ||
+    !isSafeNonNegativeInteger(record['sequence'])
   ) {
     return null;
   }
   return {
-    downloadId: value['downloadId'],
-    sessionHash: value['sessionHash'],
-    holderId: value['holderId'],
-    sequence: value['sequence'],
+    downloadId: record['downloadId'],
+    sessionHash: record['sessionHash'],
+    holderId: record['holderId'],
+    sequence: record['sequence'],
   };
 }
 
 export function decodeDownloadSessionRenewRequest(
   value: unknown,
 ): DownloadSessionRenewRequest | null {
-  const lease = decodeDownloadSessionLeaseRequest(value, [
+  const record = decodeExactRecord(value, [
     'downloadId',
     'holderId',
     'progress',
     'sequence',
     'sessionHash',
   ]);
-  if (lease === null || !isPlainObject(value) || typeof value['progress'] !== 'boolean') {
+  if (
+    record === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash']) ||
+    !isHolderId(record['holderId']) ||
+    !isSafeNonNegativeInteger(record['sequence']) ||
+    typeof record['progress'] !== 'boolean'
+  ) {
     return null;
   }
-  return { ...lease, progress: value['progress'] };
+  return {
+    downloadId: record['downloadId'],
+    sessionHash: record['sessionHash'],
+    holderId: record['holderId'],
+    sequence: record['sequence'],
+    progress: record['progress'],
+  };
 }
 
 export function decodeDownloadSessionInterruptRequest(
@@ -384,41 +402,42 @@ export function decodeDownloadSessionInterruptRequest(
 export function decodeDownloadSessionFinishRequest(
   value: unknown,
 ): DownloadSessionFinishRequest | null {
+  const record = decodeExactRecord(value, [
+    'actualBytes',
+    'downloadId',
+    'holderId',
+    'normalEof',
+    'sequence',
+    'sessionHash',
+    'upstream',
+  ]);
+  const upstream =
+    record === null ? null : decodeExactRecord(record['upstream'], ['headers', 'status']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'actualBytes',
-      'downloadId',
-      'holderId',
-      'normalEof',
-      'sequence',
-      'sessionHash',
-      'upstream',
-    ]) ||
-    !isDownloadId(value['downloadId']) ||
-    !isSessionHash(value['sessionHash']) ||
-    !isHolderId(value['holderId']) ||
-    !isSafeNonNegativeInteger(value['sequence']) ||
-    typeof value['normalEof'] !== 'boolean' ||
-    !isSafeNonNegativeInteger(value['actualBytes']) ||
-    !isPlainObject(value['upstream']) ||
-    !hasExactKeys(value['upstream'], ['headers', 'status']) ||
-    (value['upstream']['status'] !== 200 && value['upstream']['status'] !== 206)
+    record === null ||
+    upstream === null ||
+    !isDownloadId(record['downloadId']) ||
+    !isSessionHash(record['sessionHash']) ||
+    !isHolderId(record['holderId']) ||
+    !isSafeNonNegativeInteger(record['sequence']) ||
+    typeof record['normalEof'] !== 'boolean' ||
+    !isSafeNonNegativeInteger(record['actualBytes']) ||
+    (upstream['status'] !== 200 && upstream['status'] !== 206)
   ) {
     return null;
   }
-  const headers = decodeDownloadHeaderEvidence(value['upstream']['headers']);
+  const headers = decodeDownloadHeaderEvidence(upstream['headers']);
   if (headers === null) {
     return null;
   }
   return {
-    downloadId: value['downloadId'],
-    sessionHash: value['sessionHash'],
-    holderId: value['holderId'],
-    sequence: value['sequence'],
-    normalEof: value['normalEof'],
-    actualBytes: value['actualBytes'],
-    upstream: { status: value['upstream']['status'], headers },
+    downloadId: record['downloadId'],
+    sessionHash: record['sessionHash'],
+    holderId: record['holderId'],
+    sequence: record['sequence'],
+    normalEof: record['normalEof'],
+    actualBytes: record['actualBytes'],
+    upstream: { status: upstream['status'], headers },
   };
 }
 
@@ -494,62 +513,60 @@ function isRangeCapability(value: unknown): value is ProbedMedia['rangeCapabilit
 }
 
 function isReliableValidator(value: unknown): value is ReliableValidator {
-  if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['kind', 'value']) ||
-    typeof value['value'] !== 'string'
-  ) {
+  const record = decodeExactRecord(value, ['kind', 'value']);
+  if (record === null || typeof record['value'] !== 'string') {
     return false;
   }
-  if (value['kind'] === 'etag') {
-    return isStrongEtag(value['value']);
+  if (record['kind'] === 'etag') {
+    return isStrongEtag(record['value']);
   }
-  return value['kind'] === 'last-modified' && isHttpDate(value['value']);
+  return record['kind'] === 'last-modified' && isHttpDate(record['value']);
 }
 
 function decodeByteInterval(value: unknown): ByteInterval | null {
+  const record = decodeExactRecord(value, ['end', 'start', 'total']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['end', 'start', 'total']) ||
-    !isSafeNonNegativeInteger(value['start']) ||
-    !isSafeNonNegativeInteger(value['end']) ||
-    !isPositiveSafeInteger(value['total']) ||
-    value['start'] > value['end'] ||
-    value['end'] >= value['total']
+    record === null ||
+    !isSafeNonNegativeInteger(record['start']) ||
+    !isSafeNonNegativeInteger(record['end']) ||
+    !isPositiveSafeInteger(record['total']) ||
+    record['start'] > record['end'] ||
+    record['end'] >= record['total']
   ) {
     return null;
   }
-  return { start: value['start'], end: value['end'], total: value['total'] };
+  return { start: record['start'], end: record['end'], total: record['total'] };
 }
 
 function decodeRepresentationPin(value: unknown): RepresentationPin | null {
+  const record = decodeExactRecord(value, ['total', 'validator']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['total', 'validator']) ||
-    !isPositiveSafeInteger(value['total']) ||
-    !isReliableValidator(value['validator'])
+    record === null ||
+    !isPositiveSafeInteger(record['total']) ||
+    !isReliableValidator(record['validator'])
   ) {
     return null;
   }
   return {
-    total: value['total'],
-    validator: { ...value['validator'] },
+    total: record['total'],
+    validator: { ...record['validator'] },
   };
 }
 
 function decodeDownloadStreamRequestPlan(value: unknown): DownloadStreamRequestPlan | null {
-  if (!isPlainObject(value) || !hasExactKeys(value, ['representationPin', 'requestedInterval'])) {
+  const record = decodeExactRecord(value, ['representationPin', 'requestedInterval']);
+  if (record === null) {
     return null;
   }
   const requestedInterval =
-    value['requestedInterval'] === null ? null : decodeByteInterval(value['requestedInterval']);
+    record['requestedInterval'] === null ? null : decodeByteInterval(record['requestedInterval']);
   const representationPin =
-    value['representationPin'] === null
+    record['representationPin'] === null
       ? null
-      : decodeRepresentationPin(value['representationPin']);
+      : decodeRepresentationPin(record['representationPin']);
   if (
-    (value['requestedInterval'] !== null && requestedInterval === null) ||
-    (value['representationPin'] !== null && representationPin === null)
+    (record['requestedInterval'] !== null && requestedInterval === null) ||
+    (record['representationPin'] !== null && representationPin === null)
   ) {
     return null;
   }
@@ -559,131 +576,143 @@ function decodeDownloadStreamRequestPlan(value: unknown): DownloadStreamRequestP
 export function decodeDownloadSessionInitializeResponse(
   value: unknown,
 ): DownloadSessionInitializeResponse | null {
+  const record = decodeExactRecord(value, [
+    'absoluteExpiresAt',
+    'issuedAt',
+    'ok',
+    'startExpiresAt',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['absoluteExpiresAt', 'issuedAt', 'ok', 'startExpiresAt']) ||
-    value['ok'] !== true ||
-    !isSafeTimestamp(value['issuedAt']) ||
-    !isSafeTimestamp(value['startExpiresAt']) ||
-    !isSafeTimestamp(value['absoluteExpiresAt']) ||
-    value['issuedAt'] > Number.MAX_SAFE_INTEGER - DOWNLOAD_ABSOLUTE_LIFETIME_MS ||
-    value['startExpiresAt'] !== value['issuedAt'] + DOWNLOAD_START_DEADLINE_MS ||
-    value['absoluteExpiresAt'] !== value['issuedAt'] + DOWNLOAD_ABSOLUTE_LIFETIME_MS
+    record === null ||
+    record['ok'] !== true ||
+    !isSafeTimestamp(record['issuedAt']) ||
+    !isSafeTimestamp(record['startExpiresAt']) ||
+    !isSafeTimestamp(record['absoluteExpiresAt']) ||
+    record['issuedAt'] > Number.MAX_SAFE_INTEGER - DOWNLOAD_ABSOLUTE_LIFETIME_MS ||
+    record['startExpiresAt'] !== record['issuedAt'] + DOWNLOAD_START_DEADLINE_MS ||
+    record['absoluteExpiresAt'] !== record['issuedAt'] + DOWNLOAD_ABSOLUTE_LIFETIME_MS
   ) {
     return null;
   }
   return {
     ok: true,
-    issuedAt: value['issuedAt'],
-    startExpiresAt: value['startExpiresAt'],
-    absoluteExpiresAt: value['absoluteExpiresAt'],
+    issuedAt: record['issuedAt'],
+    startExpiresAt: record['startExpiresAt'],
+    absoluteExpiresAt: record['absoluteExpiresAt'],
   };
 }
 
 export function decodeDownloadSessionStatusResponse(
   value: unknown,
 ): DownloadSessionStatusResponse | null {
+  const record = decodeExactRecord(value, [
+    'absoluteExpiresAt',
+    'activeStreams',
+    'available',
+    'completionExpiresAt',
+    'contentLength',
+    'contentType',
+    'filename',
+    'idleExpiresAt',
+    'lastModified',
+    'ok',
+    'rangeCapability',
+    'startExpiresAt',
+    'status',
+    'strongEtag',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, [
-      'absoluteExpiresAt',
-      'activeStreams',
-      'available',
-      'completionExpiresAt',
-      'contentLength',
-      'contentType',
-      'filename',
-      'idleExpiresAt',
-      'lastModified',
-      'ok',
-      'rangeCapability',
-      'startExpiresAt',
-      'status',
-      'strongEtag',
-    ]) ||
-    value['ok'] !== true ||
-    !isDownloadState(value['status']) ||
-    value['available'] !== true ||
-    value['status'] === 'EXPIRED' ||
-    !isSafeTimestamp(value['startExpiresAt']) ||
-    !isSafeTimestamp(value['absoluteExpiresAt']) ||
-    value['startExpiresAt'] >= value['absoluteExpiresAt'] ||
-    value['absoluteExpiresAt'] - value['startExpiresAt'] !==
+    record === null ||
+    record['ok'] !== true ||
+    !isDownloadState(record['status']) ||
+    record['available'] !== true ||
+    record['status'] === 'EXPIRED' ||
+    !isSafeTimestamp(record['startExpiresAt']) ||
+    !isSafeTimestamp(record['absoluteExpiresAt']) ||
+    record['startExpiresAt'] >= record['absoluteExpiresAt'] ||
+    record['absoluteExpiresAt'] - record['startExpiresAt'] !==
       DOWNLOAD_ABSOLUTE_LIFETIME_MS - DOWNLOAD_START_DEADLINE_MS ||
-    (value['idleExpiresAt'] !== null && !isSafeTimestamp(value['idleExpiresAt'])) ||
-    (value['completionExpiresAt'] !== null && !isSafeTimestamp(value['completionExpiresAt'])) ||
-    (typeof value['idleExpiresAt'] === 'number' &&
-      value['idleExpiresAt'] > value['absoluteExpiresAt']) ||
-    (typeof value['completionExpiresAt'] === 'number' &&
-      value['completionExpiresAt'] > value['absoluteExpiresAt']) ||
-    !isSafeNonNegativeInteger(value['activeStreams']) ||
-    value['activeStreams'] > MAX_CONCURRENT_DOWNLOAD_STREAMS ||
-    typeof value['filename'] !== 'string' ||
-    value['filename'].length > MAX_FILENAME_CHARACTERS ||
-    !SAFE_FILENAME.test(value['filename']) ||
-    typeof value['contentType'] !== 'string' ||
-    !VIDEO_MEDIA_TYPE.test(value['contentType']) ||
-    (value['contentLength'] !== null && !isPositiveSafeInteger(value['contentLength'])) ||
-    (value['strongEtag'] !== null && !isStrongEtag(value['strongEtag'])) ||
-    (value['lastModified'] !== null && !isHttpDate(value['lastModified'])) ||
-    !isRangeCapability(value['rangeCapability'])
+    (record['idleExpiresAt'] !== null && !isSafeTimestamp(record['idleExpiresAt'])) ||
+    (record['completionExpiresAt'] !== null && !isSafeTimestamp(record['completionExpiresAt'])) ||
+    (typeof record['idleExpiresAt'] === 'number' &&
+      record['idleExpiresAt'] > record['absoluteExpiresAt']) ||
+    (typeof record['completionExpiresAt'] === 'number' &&
+      record['completionExpiresAt'] > record['absoluteExpiresAt']) ||
+    !isSafeNonNegativeInteger(record['activeStreams']) ||
+    record['activeStreams'] > MAX_CONCURRENT_DOWNLOAD_STREAMS ||
+    typeof record['filename'] !== 'string' ||
+    record['filename'].length > MAX_FILENAME_CHARACTERS ||
+    !SAFE_FILENAME.test(record['filename']) ||
+    typeof record['contentType'] !== 'string' ||
+    !VIDEO_MEDIA_TYPE.test(record['contentType']) ||
+    (record['contentLength'] !== null && !isPositiveSafeInteger(record['contentLength'])) ||
+    (record['strongEtag'] !== null && !isStrongEtag(record['strongEtag'])) ||
+    (record['lastModified'] !== null && !isHttpDate(record['lastModified'])) ||
+    !isRangeCapability(record['rangeCapability'])
   ) {
     return null;
   }
   const validStateShape =
-    (value['status'] === 'ISSUED' &&
-      value['idleExpiresAt'] === null &&
-      value['completionExpiresAt'] === null &&
-      value['activeStreams'] === 0) ||
-    (value['status'] === 'ACTIVE' &&
-      value['idleExpiresAt'] !== null &&
-      value['completionExpiresAt'] === null &&
-      value['activeStreams'] >= 1) ||
-    (value['status'] === 'INTERRUPTED' &&
-      value['idleExpiresAt'] !== null &&
-      value['completionExpiresAt'] === null &&
-      value['activeStreams'] === 0) ||
-    (value['status'] === 'COMPLETE_PENDING' &&
-      value['idleExpiresAt'] !== null &&
-      value['completionExpiresAt'] !== null &&
-      value['completionExpiresAt'] <= value['idleExpiresAt'] &&
-      value['activeStreams'] === 0);
+    (record['status'] === 'ISSUED' &&
+      record['idleExpiresAt'] === null &&
+      record['completionExpiresAt'] === null &&
+      record['activeStreams'] === 0) ||
+    (record['status'] === 'ACTIVE' &&
+      record['idleExpiresAt'] !== null &&
+      record['completionExpiresAt'] === null &&
+      record['activeStreams'] >= 1) ||
+    (record['status'] === 'INTERRUPTED' &&
+      record['idleExpiresAt'] !== null &&
+      record['completionExpiresAt'] === null &&
+      record['activeStreams'] === 0) ||
+    (record['status'] === 'COMPLETE_PENDING' &&
+      record['idleExpiresAt'] !== null &&
+      record['completionExpiresAt'] !== null &&
+      record['completionExpiresAt'] <= record['idleExpiresAt'] &&
+      record['activeStreams'] === 0);
   if (!validStateShape) {
     return null;
   }
   return {
     ok: true,
-    status: value['status'],
-    available: value['available'],
-    startExpiresAt: value['startExpiresAt'],
-    idleExpiresAt: value['idleExpiresAt'],
-    absoluteExpiresAt: value['absoluteExpiresAt'],
-    completionExpiresAt: value['completionExpiresAt'],
-    activeStreams: value['activeStreams'],
-    filename: value['filename'],
-    contentType: value['contentType'],
-    contentLength: value['contentLength'],
-    strongEtag: value['strongEtag'],
-    lastModified: value['lastModified'],
-    rangeCapability: value['rangeCapability'],
+    status: record['status'],
+    available: record['available'],
+    startExpiresAt: record['startExpiresAt'],
+    idleExpiresAt: record['idleExpiresAt'],
+    absoluteExpiresAt: record['absoluteExpiresAt'],
+    completionExpiresAt: record['completionExpiresAt'],
+    activeStreams: record['activeStreams'],
+    filename: record['filename'],
+    contentType: record['contentType'],
+    contentLength: record['contentLength'],
+    strongEtag: record['strongEtag'],
+    lastModified: record['lastModified'],
+    rangeCapability: record['rangeCapability'],
   };
 }
 
 export function decodeDownloadSessionAcquireResponse(
   value: unknown,
 ): DownloadSessionAcquireResponse | null {
+  const record = decodeExactRecord(value, [
+    'expiresAt',
+    'holderId',
+    'media',
+    'ok',
+    'request',
+    'sequence',
+  ]);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['expiresAt', 'holderId', 'media', 'ok', 'request', 'sequence']) ||
-    value['ok'] !== true ||
-    !isHolderId(value['holderId']) ||
-    value['sequence'] !== 0 ||
-    !isSafeTimestamp(value['expiresAt'])
+    record === null ||
+    record['ok'] !== true ||
+    !isHolderId(record['holderId']) ||
+    record['sequence'] !== 0 ||
+    !isSafeTimestamp(record['expiresAt'])
   ) {
     return null;
   }
-  const request = decodeDownloadStreamRequestPlan(value['request']);
-  const media = decodeProbedMediaWire(value['media']);
+  const request = decodeDownloadStreamRequestPlan(record['request']);
+  const media = decodeProbedMediaWire(record['media']);
   if (request === null || media === null) {
     return null;
   }
@@ -701,9 +730,9 @@ export function decodeDownloadSessionAcquireResponse(
   }
   return {
     ok: true,
-    holderId: value['holderId'],
-    sequence: value['sequence'],
-    expiresAt: value['expiresAt'],
+    holderId: record['holderId'],
+    sequence: record['sequence'],
+    expiresAt: record['expiresAt'],
     request,
     media,
   };
@@ -712,30 +741,29 @@ export function decodeDownloadSessionAcquireResponse(
 export function decodeDownloadSessionRenewResponse(
   value: unknown,
 ): DownloadSessionRenewResponse | null {
+  const record = decodeExactRecord(value, ['expiresAt', 'holderId', 'ok', 'sequence']);
   if (
-    !isPlainObject(value) ||
-    !hasExactKeys(value, ['expiresAt', 'holderId', 'ok', 'sequence']) ||
-    value['ok'] !== true ||
-    !isHolderId(value['holderId']) ||
-    !isSafeNonNegativeInteger(value['sequence']) ||
-    !isSafeTimestamp(value['expiresAt'])
+    record === null ||
+    record['ok'] !== true ||
+    !isHolderId(record['holderId']) ||
+    !isSafeNonNegativeInteger(record['sequence']) ||
+    !isSafeTimestamp(record['expiresAt'])
   ) {
     return null;
   }
   return {
     ok: true,
-    holderId: value['holderId'],
-    sequence: value['sequence'],
-    expiresAt: value['expiresAt'],
+    holderId: record['holderId'],
+    sequence: record['sequence'],
+    expiresAt: record['expiresAt'],
   };
 }
 
 export function decodeDownloadSessionAckResponse(
   value: unknown,
 ): DownloadSessionAckResponse | null {
-  return isPlainObject(value) && hasExactKeys(value, ['ok']) && value['ok'] === true
-    ? { ok: true }
-    : null;
+  const record = decodeExactRecord(value, ['ok']);
+  return record?.['ok'] === true ? { ok: true } : null;
 }
 
 function invalidRequest(): never {

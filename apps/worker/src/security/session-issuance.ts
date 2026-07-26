@@ -1,3 +1,5 @@
+import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
+
 import type { HeaderSource } from './browser-session.js';
 import { hashClientIp } from './client-ip.js';
 import { createKeyedIdentifierHasher, createOpaqueId } from './cryptography.js';
@@ -38,16 +40,6 @@ export interface ReserveSessionIssuanceInput {
   readonly now: number;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const expected = [...keys].sort((left, right) => left.localeCompare(right, 'en'));
-  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, 'en'));
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
 function unavailable(): SessionIssuanceError {
   return new SessionIssuanceError('SESSION_ISSUANCE_UNAVAILABLE');
 }
@@ -72,7 +64,8 @@ async function mutateReservation(
       return false;
     }
     const body: unknown = await response.json();
-    return isPlainObject(body) && hasExactKeys(body, ['ok']) && body['ok'] === true;
+    const record = decodeExactRecord(body, ['ok']);
+    return record !== null && record['ok'] === true;
   } catch {
     return false;
   }
@@ -110,26 +103,26 @@ export async function reserveSessionIssuance(
     throw unavailable();
   }
   if (response.status === 429) {
+    const record = decodeExactRecord(body, ['ok', 'retryAt']);
     if (
-      !isPlainObject(body) ||
-      !hasExactKeys(body, ['ok', 'retryAt']) ||
-      body['ok'] !== false ||
-      typeof body['retryAt'] !== 'number' ||
-      !Number.isSafeInteger(body['retryAt']) ||
-      body['retryAt'] <= input.now
+      record === null ||
+      record['ok'] !== false ||
+      typeof record['retryAt'] !== 'number' ||
+      !Number.isSafeInteger(record['retryAt']) ||
+      record['retryAt'] <= input.now
     ) {
       throw unavailable();
     }
-    throw new SessionIssuanceError('SESSION_ISSUANCE_RATE_LIMITED', body['retryAt']);
+    throw new SessionIssuanceError('SESSION_ISSUANCE_RATE_LIMITED', record['retryAt']);
   }
   const expectedExpiresAt = input.now + SESSION_ISSUANCE_RESERVATION_MS;
+  const record = decodeExactRecord(body, ['expiresAt', 'ok', 'reservationId']);
   if (
     response.status !== 201 ||
-    !isPlainObject(body) ||
-    !hasExactKeys(body, ['expiresAt', 'ok', 'reservationId']) ||
-    body['ok'] !== true ||
-    body['reservationId'] !== reservationId ||
-    body['expiresAt'] !== expectedExpiresAt
+    record === null ||
+    record['ok'] !== true ||
+    record['reservationId'] !== reservationId ||
+    record['expiresAt'] !== expectedExpiresAt
   ) {
     throw unavailable();
   }
