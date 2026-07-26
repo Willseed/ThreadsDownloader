@@ -305,8 +305,10 @@ if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-  main().catch(() => {
+  try {
+    await main();
+  } catch {
     process.stderr.write('BUNDLE_CHECK_FAILED <bundle-root>\n');
     process.exitCode = 1;
-  });
+  }
 }
