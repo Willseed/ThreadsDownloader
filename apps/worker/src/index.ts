@@ -71,7 +71,7 @@ const securityHeaders = {
     "base-uri 'self'",
     "frame-ancestors 'none'",
     "form-action 'self'",
-    "script-src 'self' https://challenges.cloudflare.com",
+    "script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com",
     "style-src 'self'",
     'frame-src https://challenges.cloudflare.com',
     "connect-src 'self'",

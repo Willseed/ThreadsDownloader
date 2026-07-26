@@ -642,7 +642,7 @@ describe('worker entry policy', () => {
 
     expect(contentSecurityPolicy).toBe(
       "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; " +
-        "script-src 'self' https://challenges.cloudflare.com; " +
+        "script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com; " +
         "style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self'",
     );
     expect(contentSecurityPolicy).toContain("base-uri 'self'");
@@ -651,7 +651,7 @@ describe('worker entry policy', () => {
     expect(contentSecurityPolicy).not.toContain("'unsafe-inline'");
     expect(contentSecurityPolicy).not.toContain("'unsafe-eval'");
     expect(contentSecurityPolicy).not.toContain('connect-src https://challenges.cloudflare.com');
-    expect(contentSecurityPolicy).not.toContain('static.cloudflareinsights.com');
+    expect(contentSecurityPolicy).not.toContain('https://cloudflareinsights.com');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();

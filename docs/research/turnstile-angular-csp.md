@@ -1,6 +1,7 @@
 # Turnstile Angular SPA 與 CSP 研究紀錄
 
-- 查證日期：2026-07-25；窄版 reflow 追加查證：2026-07-25
+- 查證日期：2026-07-25；窄版 reflow 追加查證：2026-07-25；Web Analytics CSP
+  追加查證：2026-07-27
 - 狀態：完成
 - 適用專案：Threads Downloader 的 Angular SPA、同源 Worker API 與回應 CSP
 
@@ -11,6 +12,7 @@
 3. Turnstile 需要哪些 CSP 來源，是否需要 `connect-src`、
    `unsafe-inline` 或 `unsafe-eval`？
 4. 前端 `action` 應使用什麼值，才能符合既有 Worker 驗證契約？
+5. Cloudflare automatic Web Analytics 需要放行哪些 CSP 來源？
 
 ## 研究順序與狀態
 
@@ -71,6 +73,47 @@ scale 或 `overflow: hidden` 裁切 widget。沒有採用或推測不存在官�
 Cloudflare 官方文件沒有保證 widget 在所有互動狀態均符合 WCAG 400% zoom／
 320 CSS px reflow，也未保證小於尺寸下限時會自動切換。正式可及性驗收仍需使用
 320 CSS px viewport 對實際 Turnstile widget 狀態執行 E2E；此項目前尚未確認。
+
+## 2026-07-27 Cloudflare Web Analytics CSP 追加查證
+
+本次沿用已完成的外部查證與正式頁證據，沒有重複呼叫 ask-bridge，也沒有執行 Web
+Search query。交叉驗證的 Cloudflare 官方文件如下：
+
+| 官方文件                                                                                                                                                             | 已確認證據                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [Web Analytics CSP FAQ](https://developers.cloudflare.com/web-analytics/faq/#what-do-i-need-to-add-to-my-content-security-policy-csp)                                | Web Analytics beacon script 由 `static.cloudflareinsights.com` 載入。        |
+| [Automatic 與 manual setup FAQ](https://developers.cloudflare.com/web-analytics/faq/#i-am-proxying-my-site-through-cloudflare-should-i-manually-add-the-js-beacon)   | 經 Cloudflare proxy 的網站可由 automatic setup 注入 beacon，不需再手動加入。 |
+| [Data origin and collection](https://developers.cloudflare.com/web-analytics/data-metrics/data-origin-and-collection/)                                               | Web Analytics 收集的資料範圍與 beacon 傳輸用途。                             |
+| [Cloudflare CSP product requirements](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/content-security-policies/#product-requirements) | Web Analytics 的 CSP product requirement 與 Cloudflare 官方來源。            |
+| [Web Analytics changelog](https://developers.cloudflare.com/web-analytics/changelog/)                                                                                | Beacon 會持續更新，因此 CSP 不應綁定特定 beacon 版本路徑。                   |
+
+Automatic setup 實際注入的 script URL 形狀為：
+
+```text
+https://static.cloudflareinsights.com/beacon.min.js/<version>
+```
+
+官方 FAQ 說明 automatic setup 會 POST 到同源 `/cdn-cgi/rum`，因此目前
+`connect-src 'self'` 已涵蓋這個傳輸，不需要額外放行
+`https://cloudflareinsights.com`。manual setup 才可能直接使用
+`https://cloudflareinsights.com/cdn-cgi/rum`；本專案目前不採 manual setup。
+
+此外，直接下載並檢查當時由 Cloudflare 提供的 `2026.6.0` beacon，確認它處理
+`data-cf-beacon` 的 `2024.11.0` 設定時使用相對 URL `/cdn-cgi/rum`。這項可重現
+檢查只證明該版本快照的行為，不取代官方文件，也不構成固定 script 或設定版本的
+依據。
+
+因此 automatic setup 的最小 CSP 增量只有：
+
+```text
+script-src https://static.cloudflareinsights.com
+```
+
+此結論只適用於目前由 Cloudflare proxy 注入、以同源 `/cdn-cgi/rum` 傳輸的
+automatic Web Analytics。它不適用於 manual setup、自訂 beacon、不同 proxy 路徑
+或未來 Cloudflare 改變傳輸來源的情況；發生任一情況時必須依當時官方文件與實際
+beacon 重新驗證。未確認事項是 Cloudflare 未來 beacon 版本是否會改變傳輸來源，
+所以本案不寫死 beacon 版本，也不預先放寬 `connect-src`。
 
 ## 結論與專案決策
 
@@ -153,11 +196,24 @@ Turnstile 官方 CSP 文件沒有要求 `unsafe-inline` 或 `unsafe-eval`，本�
 Turnstile 加入兩者。上列內容只描述 Turnstile 與同源 API 的必要部分，不取代
 對 Angular assets、圖片、字型或其他未來資源所做的完整 CSP 盤點。
 
+automatic Web Analytics 另外只在既有 `script-src` 加入
+`https://static.cloudflareinsights.com`。不加入 `https://cloudflareinsights.com`，
+不改動 `connect-src 'self'`，也不加入 `unsafe-inline`、`unsafe-eval` 或其他寬鬆
+fallback。完整相關 directive 為：
+
+```text
+script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com;
+frame-src https://challenges.cloudflare.com;
+connect-src 'self';
+```
+
 ## 適用範圍
 
 - 適用於瀏覽器端 Angular standalone SPA 的單一 Turnstile widget lifecycle。
 - 適用於目前以 JSON 傳送 token、由 Worker 呼叫 Siteverify 的同源 API 流程。
 - 適用於目前未啟用 pre-clearance、未 proxy/self-host Turnstile script 的部署。
+- 適用於 Cloudflare proxy 的 automatic Web Analytics 注入與同源 `/cdn-cgi/rum`
+  傳輸，不涵蓋 manual setup。
 - 本紀錄不確認任何 Threads 上游未公開 API 語意，也不改變 Worker 已有的
   replay、hostname、challenge age 或錯誤處理契約。
 
@@ -172,5 +228,6 @@ Turnstile 加入兩者。上列內容只描述 Turnstile 與同源 API 的必要
    禁止；本案沿用官方 `defer` 範例。
 4. 官方只示範 `turnstile.ready(callback)` 的用途，未完整定義 callback 取消、
    script 永久載入失敗或排程順序；實作需以 timeout/error 狀態 fail closed。
-5. 標準模式沒有額外 `connect-src` 官方需求；若新增 pre-clearance、analytics、
-   WebSocket 或其他外部連線，必須針對新增範圍另行查證。
+5. Turnstile 標準模式與 automatic Web Analytics 都沒有額外第三方 `connect-src`
+   需求；若新增 pre-clearance、manual Web Analytics、WebSocket 或其他外部連線，
+   必須針對新增範圍另行查證。
