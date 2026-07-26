@@ -562,8 +562,7 @@ export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResp
     'status',
   ]);
   if (
-    record === null ||
-    record['available'] !== true ||
+    record?.['available'] !== true ||
     !isDownloadStatus(record['status']) ||
     !isCanonicalIsoDate(record['startExpiresAt']) ||
     !isNullableCanonicalIsoDate(record['idleExpiresAt']) ||
