@@ -28,9 +28,7 @@ import {
   SessionIssuanceError,
   type SessionIssuanceReservation,
 } from './security/session-issuance.js';
-import { DownloadSession } from './download-session.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
-import { SessionCoordinator } from './session-coordinator.js';
 import { TurnstileReplay } from './turnstile-replay.js';
 import { createResolvePublicMediaHandler } from './workflows/resolve-public-media.js';
 import { createPublicDownloadApiHandler } from './workflows/public-download-api.js';
@@ -47,6 +45,8 @@ export type {
   SessionResolvePermit,
 } from './security/session-client.js';
 export type { DownloadSessionNamespace } from './security/download-session-client.js';
+export { DownloadSession } from './download-session.js';
+export { SessionCoordinator } from './session-coordinator.js';
 
 export interface Env {
   readonly ASSETS: {
@@ -100,7 +100,7 @@ const publicDownloadApi = createPublicDownloadApiHandler({
 
 function applyResponsePolicy(response: Response): Response {
   const headers = new Headers(response.headers);
-  for (const name of [...headers.keys()]) {
+  for (const name of response.headers.keys()) {
     if (name.startsWith('access-control-')) {
       headers.delete(name);
     }
@@ -285,4 +285,4 @@ const worker = {
 };
 
 export default worker;
-export { DownloadSession, IpRateLimiter, SessionCoordinator, TurnstileReplay };
+export { IpRateLimiter, TurnstileReplay };
