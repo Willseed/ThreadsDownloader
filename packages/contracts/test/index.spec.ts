@@ -89,6 +89,26 @@ describe('contracts', () => {
     expect(decodeApiError(created)).toEqual(created);
   });
 
+  it('accepts printable ASCII and Unicode but rejects controls and isolated surrogates', () => {
+    const requestId = 'A'.repeat(32);
+    for (const message of ['Retry later.', '請稍後重試 😀。']) {
+      const created = createApiError('INTERNAL_ERROR', message, requestId);
+      expect(decodeApiError(created)).toEqual(created);
+    }
+
+    for (const message of [
+      'invalid\u001fmessage',
+      'invalid\u0085message',
+      'invalid\ud800message',
+      'invalid\udc00message',
+    ]) {
+      expect(() => createApiError('INTERNAL_ERROR', message, requestId)).toThrowError(
+        'API_ERROR_INVALID',
+      );
+      expect(decodeApiError({ error: { code: 'INTERNAL_ERROR', message, requestId } })).toBeNull();
+    }
+  });
+
   it('keeps response discriminants type-safe', () => {
     expectTypeOf<ApiError['error']['code']>().toEqualTypeOf<ApiErrorCode>();
     expectTypeOf<HealthResponse['status']>().toEqualTypeOf<'ok'>();
