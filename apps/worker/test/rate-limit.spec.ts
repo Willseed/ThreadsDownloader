@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   acquireRateLimitPermit,
   acquireResolvePermit,
+  hydrateRateLimitState,
   IP_RESOLVE_POLICY,
   nextRateLimitDeadline,
   nextResolvePermitDeadline,
@@ -34,6 +35,30 @@ function expectRateError(action: () => unknown, code: string): void {
 }
 
 describe('resolve rate-limit state', () => {
+  it('hydrates SQLite rows in input order without mutating or aliasing inputs', () => {
+    const eventRows = [{ event_at: 30 }, { event_at: 10 }];
+    const permitRows = [
+      { permit_id: permitIds[1]!, expires_at: 90 },
+      { permit_id: permitIds[0]!, expires_at: 40 },
+    ];
+    const inputs = { eventRows, permitRows };
+    const before = structuredClone(inputs);
+
+    const state = hydrateRateLimitState(eventRows, permitRows);
+
+    expect(state).toEqual({
+      events: [30, 10],
+      permits: [
+        { id: permitIds[1], expiresAt: 90 },
+        { id: permitIds[0], expiresAt: 40 },
+      ],
+    });
+    expect(state.events).not.toBe(eventRows);
+    expect(state.permits).not.toBe(permitRows);
+    expect(state.permits[0]).not.toBe(permitRows[0]);
+    expect(inputs).toEqual(before);
+  });
+
   it('admits five released attempts and denies the sixth without mutating state', () => {
     let state = empty;
     for (let attempt = 0; attempt < 5; attempt += 1) {

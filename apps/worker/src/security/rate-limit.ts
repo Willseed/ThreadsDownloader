@@ -42,6 +42,28 @@ export interface ResolveRateLimitState {
 
 export type RateLimitState = ResolveRateLimitState;
 
+interface RateLimitEventRow {
+  readonly event_at: number;
+}
+
+interface RateLimitPermitRow {
+  readonly permit_id: string;
+  readonly expires_at: number;
+}
+
+export function hydrateRateLimitState(
+  eventRows: readonly RateLimitEventRow[],
+  permitRows: readonly RateLimitPermitRow[],
+): RateLimitState {
+  return {
+    events: eventRows.map((row) => row['event_at']),
+    permits: permitRows.map((row) => ({
+      id: row['permit_id'],
+      expiresAt: row['expires_at'],
+    })),
+  };
+}
+
 export type ResolveRateLimitErrorCode =
   'RESOLVE_CONCURRENT_LIMIT' | 'RESOLVE_RATE_INVALID' | 'RESOLVE_WINDOW_LIMIT';
 

@@ -3,6 +3,7 @@ import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import {
   acquireRateLimitPermit,
+  hydrateRateLimitState,
   IP_RESOLVE_POLICY,
   nextRateLimitDeadline,
   releaseRateLimitPermit,
@@ -189,17 +190,15 @@ export class IpRateLimiter extends DurableObject {
   }
 
   private readState(): RateLimitState {
-    const events = this.ctx.storage.sql
+    const eventRows = this.ctx.storage.sql
       .exec<{ event_at: number }>('SELECT event_at FROM ip_resolve_events ORDER BY event_at')
-      .toArray()
-      .map((row) => row['event_at']);
-    const permits = this.ctx.storage.sql
+      .toArray();
+    const permitRows = this.ctx.storage.sql
       .exec<{ permit_id: string; expires_at: number }>(
         'SELECT permit_id, expires_at FROM ip_resolve_permits ORDER BY expires_at',
       )
-      .toArray()
-      .map((row) => ({ id: row['permit_id'], expiresAt: row['expires_at'] }));
-    return { events, permits };
+      .toArray();
+    return hydrateRateLimitState(eventRows, permitRows);
   }
 
   private readSessionIssuanceEvents(): readonly number[] {
