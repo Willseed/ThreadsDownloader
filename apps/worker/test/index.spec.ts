@@ -145,6 +145,22 @@ function createDownloadSessionNamespace(
   };
 }
 
+function createLostSessionNamespace(): FakeSessionNamespace {
+  return {
+    delete: () => undefined,
+    idFromName: () => ({}) as DurableObjectId,
+    get: () => ({
+      fetch: async () => {
+        throw new Error('session response lost');
+      },
+    }),
+  };
+}
+
+function issuancePaths(namespace: FakeIpRateLimitNamespace): string[] {
+  return namespace.requests.map((request) => new URL(request.url).pathname);
+}
+
 async function fetchWorker(path: string, env = createEnv()): Promise<Response> {
   return worker.fetch(
     new Request(`https://${expectedHost}${path}`, {
@@ -187,6 +203,71 @@ describe('worker entry policy', () => {
       'expiresAt',
       'issuedAt',
       'sessionHash',
+    ]);
+  });
+
+  it('releases an issuance reservation only for a definite session create conflict', async () => {
+    const ipRateLimits = createIpRateLimitNamespace();
+    const response = await fetchWorker(
+      '/api/session',
+      createEnv(undefined, createSessionNamespace([], 409), undefined, ipRateLimits),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(issuancePaths(ipRateLimits)).toEqual([
+      '/session-issuance/reserve',
+      '/session-issuance/release',
+    ]);
+  });
+
+  it('retains the reservation for known and ambiguous non-conflict create failures', async () => {
+    const failures: FakeSessionNamespace[] = [
+      createSessionNamespace([], 500),
+      createLostSessionNamespace(),
+    ];
+
+    for (const sessions of failures) {
+      const ipRateLimits = createIpRateLimitNamespace();
+      const response = await fetchWorker(
+        '/api/session',
+        createEnv(undefined, sessions, undefined, ipRateLimits),
+      );
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get('set-cookie')).toBeNull();
+      expect(issuancePaths(ipRateLimits)).toEqual(['/session-issuance/reserve']);
+    }
+  });
+
+  it('retains a committed-or-unknown reservation and withholds the cookie when commit fails', async () => {
+    const ipRateLimits = createIpRateLimitNamespace(async (request) => {
+      if (new URL(request.url).pathname !== '/session-issuance/reserve') {
+        throw new Error('commit response lost');
+      }
+      const body = (await request.json()) as {
+        readonly now: number;
+        readonly reservationId: string;
+      };
+      return Response.json(
+        {
+          ok: true,
+          reservationId: body.reservationId,
+          expiresAt: body.now + 30_000,
+        },
+        { status: 201 },
+      );
+    });
+    const response = await fetchWorker(
+      '/api/session',
+      createEnv(undefined, createSessionNamespace(), undefined, ipRateLimits),
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(issuancePaths(ipRateLimits)).toEqual([
+      '/session-issuance/reserve',
+      '/session-issuance/commit',
     ]);
   });
 

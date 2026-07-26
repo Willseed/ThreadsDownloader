@@ -1,4 +1,9 @@
-import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import {
+  abortAllDurableObjects,
+  env,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
 import type { IpRateLimiter } from '../src/ip-rate-limiter.js';
@@ -127,6 +132,44 @@ describe('IpRateLimiter in workerd', () => {
     expect(stored.permits).toHaveLength(1);
     expect(stored.issuance).toHaveLength(1);
     expect(JSON.stringify(stored)).not.toContain(rawIp);
+  });
+
+  it('adds the issuance table to pre-issuance storage without altering resolve state', async () => {
+    const ipHash = await uniqueHash('issuance-table-upgrade');
+    const stub = limiterStub(ipHash);
+    const permitId = createOpaqueId();
+    const now = Date.now();
+    expect((await acquire(stub, ipHash, permitId, now)).status).toBe(201);
+
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec('DROP TABLE ip_session_issuance');
+    });
+    await abortAllDurableObjects();
+
+    const restartedStub = limiterStub(ipHash);
+    const reservationId = createOpaqueId();
+    expect(
+      (await mutateSessionIssuance(restartedStub, 'reserve', ipHash, reservationId, now + 1))
+        .status,
+    ).toBe(201);
+    const stored = await runInDurableObject(restartedStub, (_instance, state) => ({
+      meta: state.storage.sql
+        .exec<MetaRow>('SELECT schema_version, ip_hash FROM ip_rate_meta')
+        .toArray(),
+      events: state.storage.sql.exec('SELECT event_at FROM ip_resolve_events').toArray(),
+      permits: state.storage.sql
+        .exec('SELECT permit_id, expires_at FROM ip_resolve_permits')
+        .toArray(),
+      issuance: state.storage.sql.exec('SELECT reservation_id FROM ip_session_issuance').toArray(),
+    }));
+    expect(stored.meta).toEqual([{ schema_version: 1, ip_hash: ipHash }]);
+    expect(stored.events).toEqual([{ event_at: now }]);
+    expect(stored.permits).toEqual([
+      expect.objectContaining({
+        permit_id: permitId,
+      }),
+    ]);
+    expect(stored.issuance).toEqual([{ reservation_id: reservationId }]);
   });
 
   it('rejects a hash that does not match the pinned object identity', async () => {
