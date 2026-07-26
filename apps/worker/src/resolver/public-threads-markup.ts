@@ -132,11 +132,7 @@ function assertDeclaredLength(response: Response): void {
 }
 
 function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  try {
-    void reader.cancel().catch(() => undefined);
-  } catch {
-    // Cancellation is best-effort and the original safe error is retained.
-  }
+  void reader.cancel().catch(() => undefined);
 }
 
 async function readBoundedMarkup(response: Response): Promise<string> {
