@@ -285,13 +285,17 @@ export function formatBundleIssue({ ruleId }) {
 }
 
 async function main() {
-  if (process.argv.length > 3) {
+  let issues;
+  if (process.argv.length === 2) {
+    issues = await scanBundle(defaultBundleRoot);
+  } else if (process.argv.length === 3 && process.argv[2] === '.') {
+    issues = await scanBundle(process.cwd());
+  } else {
     process.stderr.write('BUNDLE_ARGUMENT_INVALID <bundle-root>\n');
     process.exitCode = 1;
     return;
   }
 
-  const issues = await scanBundle(process.argv[2] ?? defaultBundleRoot, process.cwd());
   if (issues.length === 0) {
     return;
   }

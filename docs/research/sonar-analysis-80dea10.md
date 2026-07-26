@@ -200,3 +200,55 @@ message 都由該列表直接取得。僅在 detail UI 明確顯示 rule link �
   immutable analysis ID；若需法證級重現，必須使用能明確選取歷史 analysis 的官方 UI
   或可信匯出資料重新核對。
 - 修復後需要新一輪 CI analysis；既有 failed Quality Gate 不會因本地修改自動更新。
+
+## Sonar run #7 CLI path taint 追查
+
+### 結論
+
+- 最新 Sonar UI 將殘留的 CLI path findings 確認為 `jssecurity:S8707`。已顯示的資料流
+  以 `process.argv[2]` 為 source，經 exported scanner 的 root 參數、`resolve` 與
+  `realpath`，最後到達 `lstat`、`readdir` 或 `readFile` sink。
+- 前一輪已加入 lexical containment、canonical containment、symlink rejection 與
+  `O_NOFOLLOW`，但自訂的 `relative(root, candidate)` relational proof 未被分析器視為
+  validator。`realpath` 只 canonicalize path，不會自行解除 taint。
+- 最小修正是在 CLI boundary 切斷資料流：無參數時使用固定 `defaultBundleRoot`；唯一
+  合法參數為精確字面值 `.`，但實際 path 使用 `process.cwd()`；其他或多餘參數一律在
+  呼叫 path、filesystem 或 exported scanner API 前以固定 `ARGUMENT_INVALID` 拒絕。
+- Programmatic API 仍保留自訂 absolute root，並保留既有 containment、symlink 與
+  no-follow 防護。CLI taint remediation 不取代實際 filesystem security boundary。
+
+### 證據
+
+- Sonar UI 的完整 flow 明示 `process.argv[2]` 到 bundle scanner 的 `lstat` 與
+  `readdir`；deploy scanner 的四個 sink 顯示相同訊息。UI 修復說明要求 canonicalize
+  後以 canonical base directory 驗證再使用。
+- Git commit `fb58577` 已實作 lexical 與 `realpath` 後 containment，但 run #7 仍有
+  findings，證明僅重複相同 guard 不能形成分析器可辨識的 sanitizer。
+- `security:bundle` 與 `security:deploy-ready` package scripts 均不傳 bundle path；直接
+  CLI specs 唯一需要保留的自訂 root 形式是字面值 `.` 搭配 fixture working directory。
+- 依專案研究規則使用下列命令參數進行兩輪交叉分析：
+
+  ```text
+  ask-bridge --provider chatgpt --model high --timeout 1500 --headless=true
+  ```
+
+  回覆支持讓 argv 僅作固定值分支判斷、不要參與 path construction；該回覆僅作方案
+  輔助，最終依據仍是 Sonar UI 與本地可重現測試。
+
+- 本輪未使用 Web Search。
+
+### 適用範圍
+
+- 僅調整 `check-bundle-secrets.mjs` 與 `check-deploy-readiness.mjs` 的 CLI adapter，以及
+  直接對應的 argument-contract tests。Exported scanner APIs 與其安全語意不變。
+- Deploy script 僅供轉出的 `resolvePathWithinRoot` 改用 direct `export … from`；首輪不
+  額外重寫 nested traversal，以保持 remediation 最小且可由下一次 analysis 歸因。
+
+### 未確認事項
+
+- 下一次 Sonar run 才能確認 S8707 是否將 `process.cwd()` 或固定值分支視為新的 taint
+  source，以及切斷 root source 後 deploy nested sinks 是否一併消失。
+- 若 nested sink 仍存在，才評估在 canonical-relative segment 驗證後，從 trusted root
+  重新 materialize child path；現階段不得先加入未經 run 證實的 entry-name allowlist。
+- SonarJS 對自訂 containment helper 的 sanitizer 模型未公開確認，不得把本次方案描述
+  為 analyzer 行為保證。

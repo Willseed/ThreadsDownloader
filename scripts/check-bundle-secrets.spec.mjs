@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -175,19 +175,21 @@ describe('bundle secret gate', () => {
     expect(success.stderr).toBe('');
   });
 
-  it('rejects CLI traversal and absolute paths outside the invocation root', async () => {
+  it('rejects every CLI root except a single literal dot before scanning', async () => {
     const invocationRoot = await fixture();
     const outsideRoot = await fixture();
+    await writeFixture(invocationRoot, 'index.html', '<main>safe</main>');
+    await writeFixture(invocationRoot, 'child/index.html', '<main>safe</main>');
     await writeFixture(outsideRoot, 'index.html', '<main>safe</main>');
 
-    for (const candidate of [relative(invocationRoot, outsideRoot), outsideRoot]) {
-      const result = spawnSync(process.execPath, [scriptPath, candidate], {
+    for (const arguments_ of [['./'], ['..'], ['child'], [outsideRoot], ['.', 'extra']]) {
+      const result = spawnSync(process.execPath, [scriptPath, ...arguments_], {
         cwd: invocationRoot,
         encoding: 'utf8',
       });
       expect(result.status).toBe(1);
       expect(result.stdout).toBe('');
-      expect(result.stderr).toBe('BUNDLE_ROOT_OUTSIDE_ALLOWED_ROOT <bundle-entry>\n');
+      expect(result.stderr).toBe('BUNDLE_ARGUMENT_INVALID <bundle-root>\n');
       expect(result.stderr).not.toContain(invocationRoot);
       expect(result.stderr).not.toContain(outsideRoot);
     }

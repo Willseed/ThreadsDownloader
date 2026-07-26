@@ -3,9 +3,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
 
-import { resolvePathWithinRoot } from './path-containment.mjs';
-
-export { resolvePathWithinRoot };
+export { resolvePathWithinRoot } from './path-containment.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const defaultBundleRoot = resolve(repositoryRoot, 'dist/web/browser');
@@ -155,13 +153,17 @@ export async function checkDeployReadiness(
 }
 
 async function main() {
-  if (process.argv.length > 3) {
+  let rules;
+  if (process.argv.length === 2) {
+    rules = await checkDeployReadiness(defaultBundleRoot);
+  } else if (process.argv.length === 3 && process.argv[2] === '.') {
+    rules = await checkDeployReadiness(process.cwd());
+  } else {
     process.stderr.write(`${DEPLOY_READINESS_RULES.argumentInvalid} <web-bundle>\n`);
     process.exitCode = 1;
     return;
   }
 
-  const rules = await checkDeployReadiness(process.argv[2] ?? defaultBundleRoot, process.cwd());
   if (rules.length === 0) {
     return;
   }
