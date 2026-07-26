@@ -619,6 +619,51 @@ h3 {
   text-transform: uppercase;
 }
 
+@media (min-width: 64rem) {
+  .downloader-page {
+    display: grid;
+    grid-template-columns: minmax(17rem, 0.78fr) minmax(0, 1.22fr);
+    column-gap: clamp(var(--space-5), 5vw, 5rem);
+    align-items: start;
+    padding-block-start: clamp(var(--space-4), 4vh, 2.5rem);
+  }
+
+  .hero {
+    grid-row: 1;
+    grid-column: 1;
+    gap: var(--space-3);
+    padding-block-end: 0;
+  }
+
+  .hero h1 {
+    font-size: clamp(4.5rem, 7vw, 7rem);
+  }
+
+  .workbench {
+    grid-row: 1;
+    grid-column: 2;
+  }
+
+  .workbench .section-heading {
+    padding-block: var(--space-3);
+  }
+
+  .workbench form {
+    gap: var(--space-3);
+    padding-block: var(--space-4) var(--space-5);
+  }
+
+  .challenge-block {
+    min-height: 6rem;
+    padding: var(--space-3);
+  }
+
+  .system-status,
+  .candidate-section {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 48rem) {
   .site-header {
     align-items: flex-start;

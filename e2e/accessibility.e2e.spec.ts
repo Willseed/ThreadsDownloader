@@ -84,6 +84,37 @@ test('contains focus in an on-demand legal dialog and restores its trigger', asy
   await expect(trigger).toBeFocused();
 });
 
+test('keeps the primary form operable in the 1280 by 800 initial viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await waitForReadyPage(page);
+
+  const postUrl = page.getByRole('textbox', { name: 'Threads 公開貼文網址' });
+  const submit = page.getByRole('button', { name: '解析影片候選' });
+  const viewport = await page.evaluate(() => ({
+    height: window.innerHeight,
+    scrollY: window.scrollY,
+    width: window.innerWidth,
+  }));
+
+  expect(viewport).toEqual({ height: 800, scrollY: 0, width: 1280 });
+  for (const control of [postUrl, submit]) {
+    await expect(control).toBeVisible();
+    await expect(control).toBeEnabled();
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
+  }
+
+  const exampleUrl = 'https://www.threads.com/@research/post/example';
+  await postUrl.fill(exampleUrl);
+  await expect(postUrl).toHaveValue(exampleUrl);
+  await submit.focus();
+  await expect(submit).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
 test('reflows at 320 CSS pixels with compact verification and readable reduced motion', async ({
   page,
 }) => {
