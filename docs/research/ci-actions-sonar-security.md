@@ -134,6 +134,38 @@ personal-account-owned，而不是 organization-owned。這是由官方 metadata
 repository 不需要。故本案目前不應建立或要求 `GITLEAKS_LICENSE` secret；使用
 action 仍表示接受其 EULA，不能把「不需 key」解讀為 MIT 授權或沒有使用條款。
 
+## Gitleaks 失敗輸出與 redaction
+
+### 查證過程與證據
+
+2026-07-26 先依專案規則使用以下 exact 參數向 ask-bridge 查證失敗輸出行為：
+
+```text
+ask-bridge --provider chatgpt --model high --timeout 1500 --headless=true <focused-prompt>
+```
+
+該次呼叫在 1500 秒逾時，沒有收到回覆，因此不可作為任何結論的證據。後續未使用
+Web Search，改為直接讀取鎖定 commit
+`e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e` 的官方原始碼：
+
+- [官方 `action.yml`](https://raw.githubusercontent.com/gitleaks/gitleaks-action/e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e/action.yml)
+- [官方 `src/gitleaks.js`](https://raw.githubusercontent.com/gitleaks/gitleaks-action/e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e/src/gitleaks.js)
+- [官方 `src/index.js`](https://raw.githubusercontent.com/gitleaks/gitleaks-action/e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e/src/index.js)
+
+### 結論
+
+該 commit 執行 `gitleaks detect` 時會固定加入 `--redact`。本專案 workflow 又關閉
+comments、job summary 與 artifact 上傳，所以 findings 不會經由這三個管道輸出
+raw secret。這不代表 Gitleaks process 完全靜默：執行期間仍可能出現一般 command、
+debug 與失敗狀態訊息；可確認的是 findings 的 secret 內容由 `--redact` 遮蔽，且
+三個額外發佈管道均停用。
+
+### 適用範圍與未確認事項
+
+本結論只適用於上述鎖定 commit 及其內建 Gitleaks `8.24.3`。本次沒有驗證供應鏈
+遭竄改時的行為，也不能把結論推廣到未來 commit、其他 Gitleaks action 版本或其他
+Gitleaks binary 版本；升級任一項目前都必須重新查證。
+
 ## SonarQube Cloud Quality Gate
 
 固定 v8.2.1 SHA 的
@@ -153,12 +185,59 @@ action 仍表示接受其 EULA，不能把「不需 key」解讀為 MIT 授權�
 選擇 `sonar.qualitygate.timeout=600`，那是專案對等待上限的顯式決策，不是官方
 預設值。Scanner step 不得使用 `continue-on-error` 或其他方式略過 Gate 失敗。
 
+## SonarQube Cloud 精確分析與零未結案檢查
+
+### 查證過程
+
+2026-07-26 針對「如何把分析結果綁定到 `GITHUB_SHA`，並確認所有指定 findings
+為零」另以專案規定的參數執行兩次 ask-bridge：
+
+```text
+ask-bridge --provider chatgpt --model high --timeout 1500 --headless=true <focused-prompt>
+```
+
+兩次回覆分別混入無關的 Cloudflare Routes 與 Durable Objects 內容，研判是並行
+工作共用瀏覽器 session 造成回覆錯置；兩份回覆均作廢，沒有當成 Sonar 證據。
+因此 ask-bridge 對這個細項不可用。後續沒有執行 Web Search，而是直接讀取
+SonarQube Cloud 官方 `/api/webservices/list?include_internals=false` metadata，並對
+公開專案 `Willseed_ThreadsDownloader` 重現下列官方 API 回應：
+
+- `/api/ce/component?component=Willseed_ThreadsDownloader`：`queue` 可判斷是否仍有
+  未完成工作，`current` 提供成功分析的 `analysisId`、`componentKey`、`branch` 與
+  `status`。
+- `/api/project_analyses/search?project=Willseed_ThreadsDownloader&branch=main`：分頁
+  `analyses` 的 `key` 可與 `analysisId` 對應，`revision` 可與 40 字元
+  `GITHUB_SHA` 做精確比對。
+- `/api/qualitygates/project_status?analysisId=<analysisId>`：可用指定分析 ID 查詢
+  `projectStatus.status`；只有 `OK` 可通過。
+- `/api/issues/search?componentKeys=Willseed_ThreadsDownloader&branch=main&resolved=false`：
+  `total` 與 `paging.total` 可交叉確認未結案 issue 數量。
+- `/api/measures/component?component=Willseed_ThreadsDownloader&branch=main&metricKeys=...`：
+  可查 `bugs`、`vulnerabilities`、`code_smells`、`security_hotspots`、
+  `duplicated_lines` 與 `duplicated_lines_density`。
+- `/api/hotspots/search?projectKey=Willseed_ThreadsDownloader&status=TO_REVIEW`：可查
+  尚待 review 的 security hotspots；官方 metadata 沒有提供 branch 參數。
+
+issues、measures 與 hotspots 是 current-state endpoint，不能傳入 `analysisId`。
+因此實作會在所有 current-state 檢查前後各讀一次 CE current analysis，並要求
+`analysisId` 維持不變；若分析在檢查期間切換則 fail closed，避免把舊 SHA 與新
+metrics 拼成錯誤的成功結果。所有 API response 都會驗證 HTTP 狀態、JSON content
+type、回應大小、欄位型別、分頁一致性與預期 project/branch，且錯誤輸出只包含
+固定 rule ID。
+
+查證當下公開專案仍指向舊分析：Quality Gate 為 `NONE`，未結案 issue 為 17，且
+部分 zero-metric 不為零；這只是正式 workflow 上線前的現況證據，不是可接受的
+baseline。CI 不會降低門檻或豁免既有問題，必須由同一個 `GITHUB_SHA` 的新分析
+實際達到 Quality Gate `OK` 與全部零值後才能部署。
+
 ## 適用範圍
 
 - 版本與 latest 判定是 2026-07-26 的快照；完整 SHA 可重現當時來源，但未來
   latest release 仍會改變。
 - Token 結論適用於 GitHub.com、GitHub-hosted runner、當前 repository、同一個
   workflow run 的 artifact 傳遞，以及 SonarQube Cloud。
+- Sonar 精確分析檢查適用於公開專案的 `main` branch 與查證當下官方 API schema；
+  若專案改為 private，匿名 API 讀取會失敗並使 gate fail closed。
 - Gitleaks 判定只適用於目前由 `Willseed` personal account 擁有的
   `Willseed/ThreadsDownloader`。
 - 本紀錄核對 action metadata、官方使用文件與授權條款，沒有審計各 action
@@ -178,3 +257,6 @@ action 仍表示接受其 EULA，不能把「不需 key」解讀為 MIT 授權�
    action 的最低 runner 版本為 `2.327.1`。
 5. 六個 tag 未來是否被維護者移動無法保證；正式 workflow 必須用上表完整 SHA，
    不能退回浮動 tag。
+6. `qualitygates/project_status` 與 `hotspots/search` 在查證當下已由官方 metadata
+   標示 deprecated，但尚未提供能同時滿足本案「指定 analysis gate」與
+   `TO_REVIEW` 計數契約的已確認替代 endpoint；API 移除前必須重新查證並更新。

@@ -1,0 +1,125 @@
+import { lstat, readFile, readdir } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import process from 'node:process';
+import { fileURLToPath, pathToFileURL, URL } from 'node:url';
+
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+const defaultBundleRoot = resolve(repositoryRoot, 'dist/web/browser');
+
+const pendingLegalStatusPatterns = Object.freeze([
+  /data-legal-status\s*=\s*["']pending[-_a-z0-9]*["']/iu,
+  /["']data-legal-status["']\s*[:,]\s*["']pending[-_a-z0-9]*["']/iu,
+]);
+const approvedLegalStatusPatterns = Object.freeze([
+  /data-legal-status\s*=\s*["']approved-for-production["']/iu,
+  /["']data-legal-status["']\s*[:,]\s*["']approved-for-production["']/iu,
+]);
+
+export const DEPLOY_READINESS_RULES = Object.freeze({
+  argumentInvalid: 'DEPLOY_ARGUMENT_INVALID',
+  approvalMissing: 'DEPLOY_LEGAL_STATUS_APPROVAL_MISSING',
+  bundleEmpty: 'DEPLOY_BUNDLE_EMPTY',
+  bundleMissing: 'DEPLOY_BUNDLE_MISSING',
+  bundleNotDirectory: 'DEPLOY_BUNDLE_NOT_DIRECTORY',
+  entryReadFailed: 'DEPLOY_ENTRY_READ_FAILED',
+  entryStatFailed: 'DEPLOY_ENTRY_STAT_FAILED',
+  entrySymlink: 'DEPLOY_ENTRY_SYMLINK_FORBIDDEN',
+  entryType: 'DEPLOY_ENTRY_TYPE_FORBIDDEN',
+  legalPending: 'DEPLOY_LEGAL_STATUS_PENDING',
+});
+
+function classifyLegalStatus(bytes) {
+  const contents = bytes.toString('latin1');
+  return {
+    approved: approvedLegalStatusPatterns.some((pattern) => pattern.test(contents)),
+    pending: pendingLegalStatusPatterns.some((pattern) => pattern.test(contents)),
+  };
+}
+
+async function inspectEntry(entryPath, state) {
+  let stat;
+  try {
+    stat = await lstat(entryPath);
+  } catch {
+    state.rules.add(DEPLOY_READINESS_RULES.entryStatFailed);
+    return;
+  }
+
+  if (stat.isSymbolicLink()) {
+    state.rules.add(DEPLOY_READINESS_RULES.entrySymlink);
+    return;
+  }
+  if (stat.isDirectory()) {
+    let entries;
+    try {
+      entries = await readdir(entryPath);
+    } catch {
+      state.rules.add(DEPLOY_READINESS_RULES.entryReadFailed);
+      return;
+    }
+    entries.sort((left, right) => left.localeCompare(right, 'en'));
+    await Promise.all(entries.map((entry) => inspectEntry(resolve(entryPath, entry), state)));
+    return;
+  }
+  if (!stat.isFile()) {
+    state.rules.add(DEPLOY_READINESS_RULES.entryType);
+    return;
+  }
+
+  state.fileCount += 1;
+  try {
+    const legalStatus = classifyLegalStatus(await readFile(entryPath));
+    state.approved ||= legalStatus.approved;
+    if (legalStatus.pending) {
+      state.rules.add(DEPLOY_READINESS_RULES.legalPending);
+    }
+  } catch {
+    state.rules.add(DEPLOY_READINESS_RULES.entryReadFailed);
+  }
+}
+
+export async function checkDeployReadiness(bundleRoot = defaultBundleRoot) {
+  const root = resolve(bundleRoot);
+  let stat;
+  try {
+    stat = await lstat(root);
+  } catch {
+    return [DEPLOY_READINESS_RULES.bundleMissing];
+  }
+  if (stat.isSymbolicLink()) {
+    return [DEPLOY_READINESS_RULES.entrySymlink];
+  }
+  if (!stat.isDirectory()) {
+    return [DEPLOY_READINESS_RULES.bundleNotDirectory];
+  }
+
+  const state = { approved: false, fileCount: 0, rules: new Set() };
+  await inspectEntry(root, state);
+  if (state.fileCount === 0) {
+    state.rules.add(DEPLOY_READINESS_RULES.bundleEmpty);
+  } else if (!state.approved) {
+    state.rules.add(DEPLOY_READINESS_RULES.approvalMissing);
+  }
+  return [...state.rules].sort((left, right) => left.localeCompare(right, 'en'));
+}
+
+async function main() {
+  if (process.argv.length > 3) {
+    process.stderr.write(`${DEPLOY_READINESS_RULES.argumentInvalid} <web-bundle>\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  const rules = await checkDeployReadiness(process.argv[2] ?? defaultBundleRoot);
+  if (rules.length === 0) {
+    return;
+  }
+  for (const rule of rules) {
+    process.stderr.write(`${rule} <web-bundle>\n`);
+  }
+  process.exitCode = 1;
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}
