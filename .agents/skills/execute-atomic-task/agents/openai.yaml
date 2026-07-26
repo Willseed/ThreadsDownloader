@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Atomic Task Worker'
+  short_description: 'Implement and commit one independently verified change'
+  default_prompt: 'Use $execute-atomic-task to implement one scoped change, verify it directly, and create one Conventional Commit.'
