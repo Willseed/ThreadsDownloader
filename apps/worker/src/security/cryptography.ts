@@ -37,7 +37,7 @@ function operationFailed(message: string): Error {
 function domainSeparatedIdentifier(context: string, value: string): Uint8Array<ArrayBuffer> {
   const contextBytes = encoder.encode(context);
   const valueBytes = encoder.encode(value);
-  if (contextBytes.byteLength > 0xffff_ffff || valueBytes.byteLength > 0xffff_ffff) {
+  if (contextBytes.byteLength > 0xff_ff_ff_ff || valueBytes.byteLength > 0xff_ff_ff_ff) {
     throw operationFailed('Identifier could not be keyed.');
   }
   const message = new Uint8Array(9 + contextBytes.byteLength + valueBytes.byteLength);
@@ -70,7 +70,7 @@ function decodeKeyMaterial(encodedKey: string): Uint8Array<ArrayBuffer> {
 
   const bytes = new Uint8Array(keyBytes);
   for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
+    bytes[index] = binary.codePointAt(index)!;
   }
 
   return bytes;

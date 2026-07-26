@@ -69,6 +69,16 @@ describe('cryptographic key import', () => {
     expect(encryptionKey.usages).toEqual(['encrypt', 'decrypt']);
   });
 
+  it('preserves high-byte key material through binary decoding', async () => {
+    const valueSigner = createOpaqueValueSigner(
+      await importSigningKey(encodeBase64(bytes(32, 240))),
+    );
+    const opaqueValue = encodeBase64Url(bytes(16, 128));
+    const signedValue = await valueSigner.sign(opaqueValue);
+
+    await expect(valueSigner.verify(signedValue)).resolves.toBe(opaqueValue);
+  });
+
   it.each([importSigningKey, importEncryptionKey])(
     'rejects non-32-byte, malformed, and non-canonical key material',
     async (importer) => {
