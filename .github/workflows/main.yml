@@ -41,6 +41,9 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: 'false'
           GITLEAKS_ENABLE_SUMMARY: 'false'
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+      - name: Remove Gitleaks runner report
+        if: always()
+        run: rm -f -- results.sarif
       - name: Install locked dependencies
         run: npm ci
       - name: Audit dependency vulnerabilities

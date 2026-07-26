@@ -166,6 +166,27 @@ debug 與失敗狀態訊息；可確認的是 findings 的 secret 內容由 `--r
 遭竄改時的行為，也不能把結論推廣到未來 commit、其他 Gitleaks action 版本或其他
 Gitleaks binary 版本；升級任一項目前都必須重新查證。
 
+### 遠端重現：runner scratch SARIF
+
+遠端 GitHub Actions run `30183171075` 的 `verify` job 在 `Check formatting` 重現：
+雖然 workflow 已設定 `GITLEAKS_ENABLE_UPLOAD_ARTIFACT=false`，前一個固定版本的
+Gitleaks step 仍在 checkout 根目錄留下 `results.sarif`；接續的
+`prettier --check .` 掃描到這份 generated JSON，因而使 formatting gate 失敗，
+Sonar 與 deploy 隨後 skipped。
+
+上述鎖定 commit 的官方 `src/gitleaks.js` 顯示，執行參數固定包含
+`--report-path=results.sarif`；停用 artifact upload 只停用上傳，不會阻止報告建立。
+因此 workflow 在 Gitleaks step 緊鄰後使用 `if: always()`，只執行
+`rm -f -- results.sarif`。即使掃描失敗也會先移除 runner ephemeral report，原掃描
+失敗仍會使 job 失敗；cleanup 不讀取或輸出報告內容、不上傳 artifact，也不以
+`.prettierignore` 或 formatter exclusion 掩蓋 runner scratch file。
+
+此修復只適用於 action commit
+`e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`、其內建 Gitleaks `8.24.3` 與該
+workflow checkout 工作目錄中的 `results.sarif`。升級 action 或 binary、變更 report
+path 或 runner 工作目錄時必須重新查證。這項補充沿用前述官方鎖定原始碼證據與遠端
+run 重現資料，沒有使用 Web Search。
+
 ## SonarQube Cloud Quality Gate
 
 固定 v8.2.1 SHA 的

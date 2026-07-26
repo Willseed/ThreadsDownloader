@@ -7,6 +7,7 @@ const workflowsRoot = fileURLToPath(new URL('../.github/workflows/', import.meta
 const workflowPath = fileURLToPath(new URL('../.github/workflows/main.yml', import.meta.url));
 const sonarPropertiesPath = fileURLToPath(new URL('../sonar-project.properties', import.meta.url));
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url));
+const prettierIgnorePath = fileURLToPath(new URL('../.prettierignore', import.meta.url));
 
 const expectedSonarProperties = [
   ['sonar.projectKey', 'Willseed_ThreadsDownloader'],
@@ -114,6 +115,36 @@ describe('main workflow policy', () => {
     expect(
       references.filter((reference) => reference?.[1] === 'actions/download-artifact'),
     ).toHaveLength(4);
+  });
+
+  it('removes only the Gitleaks scratch report immediately after scanning', async () => {
+    const [source, packageDocument, prettierIgnore] = await Promise.all([
+      workflow(),
+      readFile(packagePath, 'utf8').then((contents) => JSON.parse(contents)),
+      readFile(prettierIgnorePath, 'utf8'),
+    ]);
+    const scanAndCleanup = [
+      '      - name: Scan repository history for secrets',
+      '        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0',
+      '        env:',
+      '          GITHUB_TOKEN: ${{ github.token }}',
+      "          GITLEAKS_ENABLE_COMMENTS: 'false'",
+      "          GITLEAKS_ENABLE_SUMMARY: 'false'",
+      "          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'",
+      '      - name: Remove Gitleaks runner report',
+      '        if: always()',
+      '        run: rm -f -- results.sarif',
+      '      - name: Install locked dependencies',
+    ].join('\n');
+
+    expect(source).toContain(scanAndCleanup);
+    expect([...source.matchAll(/\brm(?:\s|$)[^\n]*/gu)].map((match) => match[0])).toEqual([
+      'rm -f -- results.sarif',
+    ]);
+    expect(source.match(/results\.sarif/gu)).toHaveLength(1);
+    expect(source).not.toMatch(/\.prettierignore|--ignore-(?:path|pattern)|prettier-ignore/iu);
+    expect(packageDocument['scripts']?.['format:check']).toBe('prettier --check .');
+    expect(prettierIgnore).not.toMatch(/sarif|results\.|\*\.json/iu);
   });
 
   it('runs only main through verify, sonar, and deploy in strict dependency order', async () => {
