@@ -118,8 +118,11 @@ export class DownloaderWorkflow {
 
   private session: SessionResponse | null = null;
   private resolveId: string | null = null;
-  private pendingHandoff: { readonly candidateId: string; readonly downloadUrl: string } | null =
-    null;
+  private pendingHandoff: {
+    readonly candidateId: string;
+    readonly downloadUrl: string;
+    readonly expiresAt: number;
+  } | null = null;
   private challenge: DownloaderChallengeHandle | null = null;
   private generation = 0;
   private destroyed = false;
@@ -264,7 +267,9 @@ export class DownloaderWorkflow {
 
     const generation = this.invalidatePending();
     const retryUrl =
-      this.pendingHandoff?.candidateId === candidateId ? this.pendingHandoff.downloadUrl : null;
+      this.pendingHandoff?.candidateId === candidateId && this.pendingHandoff.expiresAt > Date.now()
+        ? this.pendingHandoff.downloadUrl
+        : null;
     if (retryUrl === null) {
       this.pendingHandoff = null;
     }
@@ -288,9 +293,14 @@ export class DownloaderWorkflow {
           return;
         }
         downloadUrl = response.downloadUrl;
-        this.pendingHandoff = { candidateId, downloadUrl };
+        this.pendingHandoff = {
+          candidateId,
+          downloadUrl,
+          expiresAt: Date.parse(response.startExpiresAt),
+        };
       }
       this.handoff.handoff(downloadUrl);
+      this.pendingHandoff = null;
       if (!this.isCurrent(generation)) {
         return;
       }

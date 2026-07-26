@@ -76,6 +76,10 @@ describe('DownloaderWorkflow', () => {
   let createDownloadSession: ReturnType<typeof vi.fn>;
   let handoff: ReturnType<typeof vi.fn>;
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     getSession = vi.fn(() => of(sessionResponse));
     resolve = vi.fn(() => of(resolveResponse));
@@ -263,9 +267,16 @@ describe('DownloaderWorkflow', () => {
   });
 
   it('creates a session before handoff and exposes only the fixed browser message', async () => {
+    const nextDownloadResponse = {
+      ...downloadResponse,
+      downloadId: OTHER_DOWNLOAD_ID,
+      downloadUrl: `/api/download/${OTHER_DOWNLOAD_ID}`,
+    } as const;
     await candidates();
     const issuance = new Subject<typeof downloadResponse>();
-    createDownloadSession.mockReturnValueOnce(issuance.asObservable());
+    createDownloadSession
+      .mockReturnValueOnce(issuance.asObservable())
+      .mockReturnValueOnce(of(nextDownloadResponse));
     handoff.mockReturnValueOnce('檔案已成功儲存');
 
     const pending = workflow.download(CANDIDATE_ID);
@@ -295,12 +306,13 @@ describe('DownloaderWorkflow', () => {
     expect(serialized).not.toContain(RESOLVE_ID);
     expect(serialized).not.toContain(DOWNLOAD_ID);
     expect(serialized).not.toContain(CSRF_TOKEN);
+    expect(serialized).not.toContain(downloadResponse.startExpiresAt);
 
     await workflow.download(CANDIDATE_ID);
 
-    expect(createDownloadSession).toHaveBeenCalledOnce();
+    expect(createDownloadSession).toHaveBeenCalledTimes(2);
     expect(handoff).toHaveBeenCalledTimes(2);
-    expect(handoff).toHaveBeenLastCalledWith(downloadResponse.downloadUrl);
+    expect(handoff).toHaveBeenLastCalledWith(nextDownloadResponse.downloadUrl);
     expect(workflow.state()).toMatchObject({ kind: 'handed-off' });
   });
 
@@ -372,6 +384,7 @@ describe('DownloaderWorkflow', () => {
   });
 
   it('issues a new session when a different resolved candidate is selected', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-25T08:31:00.000Z'));
     const otherCandidate = {
       candidateId: OTHER_CANDIDATE_ID,
       filename: 'threads_Abcde_2.mp4',
@@ -387,6 +400,9 @@ describe('DownloaderWorkflow', () => {
         downloadUrl: `/api/download/${OTHER_DOWNLOAD_ID}`,
       }),
     );
+    handoff.mockImplementationOnce(() => {
+      throw new Error('browser handoff failed');
+    });
     await candidates();
 
     await workflow.download(CANDIDATE_ID);
@@ -445,6 +461,7 @@ describe('DownloaderWorkflow', () => {
   });
 
   it('converts a handoff failure to a fixed safe error', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-25T08:31:00.000Z'));
     await candidates();
     handoff.mockImplementationOnce(() => {
       throw new Error('https://video.cdninstagram.com/private.mp4?token=secret');
@@ -464,6 +481,38 @@ describe('DownloaderWorkflow', () => {
     await workflow.download(CANDIDATE_ID);
     expect(createDownloadSession).toHaveBeenCalledOnce();
     expect(handoff).toHaveBeenCalledTimes(2);
+    expect(workflow.state()).toMatchObject({ kind: 'handed-off' });
+  });
+
+  it('issues a fresh session when a failed handoff URL expires', async () => {
+    let now = Date.parse('2026-07-25T08:31:00.000Z');
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const nextDownloadResponse = {
+      ...downloadResponse,
+      downloadId: OTHER_DOWNLOAD_ID,
+      downloadUrl: `/api/download/${OTHER_DOWNLOAD_ID}`,
+      startExpiresAt: '2026-07-25T08:34:00.000Z',
+    } as const;
+    createDownloadSession
+      .mockReturnValueOnce(of(downloadResponse))
+      .mockReturnValueOnce(of(nextDownloadResponse));
+    handoff.mockImplementationOnce(() => {
+      throw new Error('browser handoff failed');
+    });
+    await candidates();
+
+    await workflow.download(CANDIDATE_ID);
+    now = Date.parse(downloadResponse.startExpiresAt);
+    await workflow.download(CANDIDATE_ID);
+
+    expect(createDownloadSession).toHaveBeenCalledTimes(2);
+    expect(createDownloadSession).toHaveBeenLastCalledWith({
+      resolveId: RESOLVE_ID,
+      candidateId: CANDIDATE_ID,
+      csrfToken: CSRF_TOKEN,
+    });
+    expect(handoff).toHaveBeenCalledTimes(2);
+    expect(handoff).toHaveBeenLastCalledWith(nextDownloadResponse.downloadUrl);
     expect(workflow.state()).toMatchObject({ kind: 'handed-off' });
   });
 
