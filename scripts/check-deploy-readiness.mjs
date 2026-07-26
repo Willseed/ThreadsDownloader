@@ -1,7 +1,11 @@
-import { lstat, readFile, readdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
+
+import { resolvePathWithinRoot } from './path-containment.mjs';
+
+export { resolvePathWithinRoot };
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const defaultBundleRoot = resolve(repositoryRoot, 'dist/web/browser');
@@ -21,6 +25,8 @@ export const DEPLOY_READINESS_RULES = Object.freeze({
   bundleEmpty: 'DEPLOY_BUNDLE_EMPTY',
   bundleMissing: 'DEPLOY_BUNDLE_MISSING',
   bundleNotDirectory: 'DEPLOY_BUNDLE_NOT_DIRECTORY',
+  bundleOutsideRoot: 'DEPLOY_BUNDLE_OUTSIDE_ALLOWED_ROOT',
+  entryOutsideRoot: 'DEPLOY_ENTRY_OUTSIDE_BUNDLE_ROOT',
   entryReadFailed: 'DEPLOY_ENTRY_READ_FAILED',
   entryStatFailed: 'DEPLOY_ENTRY_STAT_FAILED',
   entrySymlink: 'DEPLOY_ENTRY_SYMLINK_FORBIDDEN',
@@ -36,10 +42,17 @@ function classifyLegalStatus(bytes) {
   };
 }
 
-async function inspectEntry(entryPath, state) {
+async function inspectEntry(bundleRoot, entryPath, state) {
+  const containedEntry = resolve(entryPath);
+  const entryFromRoot = relative(resolve(bundleRoot), containedEntry);
+  if (isAbsolute(entryFromRoot) || entryFromRoot.split(sep).includes('..')) {
+    state.rules.add(DEPLOY_READINESS_RULES.entryOutsideRoot);
+    return;
+  }
+
   let stat;
   try {
-    stat = await lstat(entryPath);
+    stat = await lstat(containedEntry);
   } catch {
     state.rules.add(DEPLOY_READINESS_RULES.entryStatFailed);
     return;
@@ -49,16 +62,32 @@ async function inspectEntry(entryPath, state) {
     state.rules.add(DEPLOY_READINESS_RULES.entrySymlink);
     return;
   }
+
+  let canonicalEntry;
+  try {
+    canonicalEntry = await realpath(containedEntry);
+  } catch {
+    state.rules.add(DEPLOY_READINESS_RULES.entryReadFailed);
+    return;
+  }
+  const canonicalFromRoot = relative(resolve(bundleRoot), canonicalEntry);
+  if (isAbsolute(canonicalFromRoot) || canonicalFromRoot.split(sep).includes('..')) {
+    state.rules.add(DEPLOY_READINESS_RULES.entryOutsideRoot);
+    return;
+  }
+
   if (stat.isDirectory()) {
     let entries;
     try {
-      entries = await readdir(entryPath);
+      entries = await readdir(canonicalEntry);
     } catch {
       state.rules.add(DEPLOY_READINESS_RULES.entryReadFailed);
       return;
     }
     entries.sort((left, right) => left.localeCompare(right, 'en'));
-    await Promise.all(entries.map((entry) => inspectEntry(resolve(entryPath, entry), state)));
+    await Promise.all(
+      entries.map((entry) => inspectEntry(bundleRoot, resolve(canonicalEntry, entry), state)),
+    );
     return;
   }
   if (!stat.isFile()) {
@@ -68,7 +97,7 @@ async function inspectEntry(entryPath, state) {
 
   state.fileCount += 1;
   try {
-    const legalStatus = classifyLegalStatus(await readFile(entryPath));
+    const legalStatus = classifyLegalStatus(await readFile(canonicalEntry));
     state.approved ||= legalStatus.approved;
     if (legalStatus.pending) {
       state.rules.add(DEPLOY_READINESS_RULES.legalPending);
@@ -78,8 +107,17 @@ async function inspectEntry(entryPath, state) {
   }
 }
 
-export async function checkDeployReadiness(bundleRoot = defaultBundleRoot) {
+export async function checkDeployReadiness(
+  bundleRoot = defaultBundleRoot,
+  allowedDirectory = bundleRoot,
+) {
+  const allowedRoot = resolve(allowedDirectory);
   const root = resolve(bundleRoot);
+  const rootFromAllowed = relative(allowedRoot, root);
+  if (isAbsolute(rootFromAllowed) || rootFromAllowed.split(sep).includes('..')) {
+    return [DEPLOY_READINESS_RULES.bundleOutsideRoot];
+  }
+
   let stat;
   try {
     stat = await lstat(root);
@@ -93,8 +131,21 @@ export async function checkDeployReadiness(bundleRoot = defaultBundleRoot) {
     return [DEPLOY_READINESS_RULES.bundleNotDirectory];
   }
 
+  let allowedRealRoot;
+  let bundleRealRoot;
+  try {
+    [allowedRealRoot, bundleRealRoot] = await Promise.all([realpath(allowedRoot), realpath(root)]);
+  } catch {
+    return [DEPLOY_READINESS_RULES.bundleMissing];
+  }
+  const canonicalFromAllowed = relative(allowedRealRoot, bundleRealRoot);
+  if (isAbsolute(canonicalFromAllowed) || canonicalFromAllowed.split(sep).includes('..')) {
+    return [DEPLOY_READINESS_RULES.bundleOutsideRoot];
+  }
+  const canonicalRoot = bundleRealRoot;
+
   const state = { approved: false, fileCount: 0, rules: new Set() };
-  await inspectEntry(root, state);
+  await inspectEntry(canonicalRoot, canonicalRoot, state);
   if (state.fileCount === 0) {
     state.rules.add(DEPLOY_READINESS_RULES.bundleEmpty);
   } else if (!state.approved) {
@@ -110,7 +161,7 @@ async function main() {
     return;
   }
 
-  const rules = await checkDeployReadiness(process.argv[2] ?? defaultBundleRoot);
+  const rules = await checkDeployReadiness(process.argv[2] ?? defaultBundleRoot, process.cwd());
   if (rules.length === 0) {
     return;
   }

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, URL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -104,6 +104,7 @@ describe('bundle secret gate', () => {
   it('fails closed for missing, non-directory, empty, binary-only, and symlink roots', async () => {
     const parent = await fixture();
     const missing = join(parent, 'missing');
+    const missingParent = join(parent, 'missing-parent', 'missing');
     const fileRoot = await writeFixture(parent, 'not-a-directory', 'safe');
     const emptyRoot = join(parent, 'empty');
     const binaryRoot = join(parent, 'binary');
@@ -113,11 +114,25 @@ describe('bundle secret gate', () => {
     await writeFixture(binaryRoot, 'asset.bin', Buffer.from([0xff, 0xfe]));
     await symlink(emptyRoot, symlinkRoot);
 
-    expect(ruleIds(await scanBundle(missing))).toEqual(['BUNDLE_ROOT_MISSING']);
-    expect(ruleIds(await scanBundle(fileRoot))).toEqual(['BUNDLE_ROOT_NOT_DIRECTORY']);
-    expect(ruleIds(await scanBundle(emptyRoot))).toEqual(['BUNDLE_NO_NONEMPTY_TEXT']);
-    expect(ruleIds(await scanBundle(binaryRoot))).toEqual(['BUNDLE_NO_NONEMPTY_TEXT']);
-    expect(ruleIds(await scanBundle(symlinkRoot))).toEqual(['BUNDLE_ROOT_SYMLINK_FORBIDDEN']);
+    expect(ruleIds(await scanBundle(missing, parent))).toEqual(['BUNDLE_ROOT_MISSING']);
+    expect(ruleIds(await scanBundle(missingParent, parent))).toEqual(['BUNDLE_ROOT_MISSING']);
+    expect(ruleIds(await scanBundle(fileRoot, parent))).toEqual(['BUNDLE_ROOT_NOT_DIRECTORY']);
+    expect(ruleIds(await scanBundle(emptyRoot, parent))).toEqual(['BUNDLE_NO_NONEMPTY_TEXT']);
+    expect(ruleIds(await scanBundle(binaryRoot, parent))).toEqual(['BUNDLE_NO_NONEMPTY_TEXT']);
+    expect(ruleIds(await scanBundle(symlinkRoot, parent))).toEqual([
+      'BUNDLE_ROOT_SYMLINK_FORBIDDEN',
+    ]);
+  });
+
+  it('rejects a root whose intermediate symlink escapes the allowed root', async () => {
+    const allowedRoot = await fixture();
+    const outsideRoot = await fixture();
+    await writeFixture(outsideRoot, 'bundle/index.html', '<main>safe</main>');
+    await symlink(outsideRoot, join(allowedRoot, 'escape'));
+
+    expect(ruleIds(await scanBundle(join(allowedRoot, 'escape', 'bundle'), allowedRoot))).toEqual([
+      'BUNDLE_ROOT_OUTSIDE_ALLOWED_ROOT',
+    ]);
   });
 
   it('fails closed for nested symlinks without following their target', async () => {
@@ -140,7 +155,10 @@ describe('bundle secret gate', () => {
     await writeFixture(failingRoot, `nested/${unsafeFilename}`, privateTokenMarker);
     await writeFixture(safeRoot, 'main.js', 'TURNSTILE_SITE_KEY https://threads.pylot.dev');
 
-    const failure = spawnSync(process.execPath, [scriptPath, failingRoot], { encoding: 'utf8' });
+    const failure = spawnSync(process.execPath, [scriptPath, '.'], {
+      cwd: failingRoot,
+      encoding: 'utf8',
+    });
     expect(failure.status).toBe(1);
     expect(failure.stdout).toBe('');
     expect(failure.stderr).toBe('BUNDLE_PRIVATE_TOKEN_MARKER <bundle-entry>\n');
@@ -148,9 +166,30 @@ describe('bundle secret gate', () => {
     expect(failure.stderr).not.toContain(failingRoot);
     expect(failure.stderr).not.toContain(unsafeFilename);
 
-    const success = spawnSync(process.execPath, [scriptPath, safeRoot], { encoding: 'utf8' });
+    const success = spawnSync(process.execPath, [scriptPath, '.'], {
+      cwd: safeRoot,
+      encoding: 'utf8',
+    });
     expect(success.status).toBe(0);
     expect(success.stdout).toBe('');
     expect(success.stderr).toBe('');
+  });
+
+  it('rejects CLI traversal and absolute paths outside the invocation root', async () => {
+    const invocationRoot = await fixture();
+    const outsideRoot = await fixture();
+    await writeFixture(outsideRoot, 'index.html', '<main>safe</main>');
+
+    for (const candidate of [relative(invocationRoot, outsideRoot), outsideRoot]) {
+      const result = spawnSync(process.execPath, [scriptPath, candidate], {
+        cwd: invocationRoot,
+        encoding: 'utf8',
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('BUNDLE_ROOT_OUTSIDE_ALLOWED_ROOT <bundle-entry>\n');
+      expect(result.stderr).not.toContain(invocationRoot);
+      expect(result.stderr).not.toContain(outsideRoot);
+    }
   });
 });

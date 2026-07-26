@@ -1,9 +1,13 @@
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
-import { extname, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath, pathToFileURL, URL } from 'node:url';
+
+import { resolvePathWithinRoot } from './path-containment.mjs';
+
+export { resolvePathWithinRoot };
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const defaultBundleRoot = resolve(repositoryRoot, 'dist/web/browser');
@@ -129,28 +133,46 @@ function isArchiveArtifact(entryPath, bytes) {
 }
 
 async function walkDirectory(bundleRoot, directoryPath, state) {
+  const containedDirectory = resolve(directoryPath);
+  const directoryFromRoot = relative(resolve(bundleRoot), containedDirectory);
+  if (isAbsolute(directoryFromRoot) || directoryFromRoot.split(sep).includes('..')) {
+    state.issues.push(issue('BUNDLE_ENTRY_OUTSIDE_ROOT'));
+    return;
+  }
+
   let entries;
   try {
-    entries = await readdir(directoryPath);
+    entries = await readdir(containedDirectory);
   } catch {
     state.issues.push(
-      issue('BUNDLE_DIRECTORY_READ_FAILED', sanitizeLabel(bundleRoot, directoryPath)),
+      issue('BUNDLE_DIRECTORY_READ_FAILED', sanitizeLabel(bundleRoot, containedDirectory)),
     );
     return;
   }
 
   entries.sort((left, right) => left.localeCompare(right, 'en'));
   for (const entry of entries) {
-    const entryPath = resolve(directoryPath, entry);
+    const entryPath = resolvePathWithinRoot(bundleRoot, resolve(containedDirectory, entry));
+    if (entryPath === undefined) {
+      state.issues.push(issue('BUNDLE_ENTRY_OUTSIDE_ROOT'));
+      continue;
+    }
     const label = sanitizeLabel(bundleRoot, entryPath);
     await inspectEntry(bundleRoot, entryPath, label, state);
   }
 }
 
 async function inspectEntry(bundleRoot, entryPath, label, state) {
+  const containedEntry = resolve(entryPath);
+  const entryFromRoot = relative(resolve(bundleRoot), containedEntry);
+  if (isAbsolute(entryFromRoot) || entryFromRoot.split(sep).includes('..')) {
+    state.issues.push(issue('BUNDLE_ENTRY_OUTSIDE_ROOT'));
+    return;
+  }
+
   let entryStat;
   try {
-    entryStat = await lstat(entryPath);
+    entryStat = await lstat(containedEntry);
   } catch {
     state.issues.push(issue('BUNDLE_ENTRY_STAT_FAILED', label));
     return;
@@ -159,18 +181,37 @@ async function inspectEntry(bundleRoot, entryPath, label, state) {
     state.issues.push(issue('BUNDLE_SYMLINK_FORBIDDEN', label));
     return;
   }
-  if (entryStat.isDirectory()) {
-    await walkDirectory(bundleRoot, entryPath, state);
+  if (!entryStat.isDirectory() && !entryStat.isFile()) {
+    state.issues.push(issue('BUNDLE_ENTRY_TYPE_FORBIDDEN', label));
     return;
   }
-  if (!entryStat.isFile()) {
-    state.issues.push(issue('BUNDLE_ENTRY_TYPE_FORBIDDEN', label));
+
+  let canonicalEntry;
+  try {
+    canonicalEntry = await realpath(containedEntry);
+  } catch {
+    state.issues.push(
+      issue(
+        entryStat.isDirectory() ? 'BUNDLE_DIRECTORY_READ_FAILED' : 'BUNDLE_FILE_READ_FAILED',
+        label,
+      ),
+    );
+    return;
+  }
+  const canonicalFromRoot = relative(resolve(bundleRoot), canonicalEntry);
+  if (isAbsolute(canonicalFromRoot) || canonicalFromRoot.split(sep).includes('..')) {
+    state.issues.push(issue('BUNDLE_ENTRY_OUTSIDE_ROOT'));
+    return;
+  }
+
+  if (entryStat.isDirectory()) {
+    await walkDirectory(bundleRoot, canonicalEntry, state);
     return;
   }
 
   let result;
   try {
-    result = await readRegularFile(entryPath);
+    result = await readRegularFile(canonicalEntry);
   } catch {
     state.issues.push(issue('BUNDLE_FILE_READ_FAILED', label));
     return;
@@ -191,8 +232,17 @@ async function inspectEntry(bundleRoot, entryPath, label, state) {
   state.issues.push(...inspectBytes(result.bytes, label));
 }
 
-export async function scanBundle(bundleDirectory = defaultBundleRoot) {
+export async function scanBundle(
+  bundleDirectory = defaultBundleRoot,
+  allowedDirectory = bundleDirectory,
+) {
+  const allowedRoot = resolve(allowedDirectory);
   const requestedRoot = resolve(bundleDirectory);
+  const requestedFromAllowed = relative(allowedRoot, requestedRoot);
+  if (isAbsolute(requestedFromAllowed) || requestedFromAllowed.split(sep).includes('..')) {
+    return [issue('BUNDLE_ROOT_OUTSIDE_ALLOWED_ROOT')];
+  }
+
   let rootStat;
   try {
     rootStat = await lstat(requestedRoot);
@@ -206,12 +256,21 @@ export async function scanBundle(bundleDirectory = defaultBundleRoot) {
     return [issue('BUNDLE_ROOT_NOT_DIRECTORY')];
   }
 
-  let bundleRoot;
+  let allowedRealRoot;
+  let requestedRealRoot;
   try {
-    bundleRoot = await realpath(requestedRoot);
+    [allowedRealRoot, requestedRealRoot] = await Promise.all([
+      realpath(allowedRoot),
+      realpath(requestedRoot),
+    ]);
   } catch {
     return [issue('BUNDLE_ROOT_REALPATH_FAILED')];
   }
+  const canonicalFromAllowed = relative(allowedRealRoot, requestedRealRoot);
+  if (isAbsolute(canonicalFromAllowed) || canonicalFromAllowed.split(sep).includes('..')) {
+    return [issue('BUNDLE_ROOT_OUTSIDE_ALLOWED_ROOT')];
+  }
+  const bundleRoot = requestedRealRoot;
 
   const state = { issues: [], nonemptyTextFiles: 0 };
   await walkDirectory(bundleRoot, bundleRoot, state);
@@ -232,7 +291,7 @@ async function main() {
     return;
   }
 
-  const issues = await scanBundle(process.argv[2] ?? defaultBundleRoot);
+  const issues = await scanBundle(process.argv[2] ?? defaultBundleRoot, process.cwd());
   if (issues.length === 0) {
     return;
   }
