@@ -1,7 +1,7 @@
 # Turnstile Angular SPA 與 CSP 研究紀錄
 
 - 查證日期：2026-07-25；窄版 reflow 追加查證：2026-07-25；Web Analytics CSP
-  追加查證：2026-07-27
+  與 production lifecycle 故障追加查證：2026-07-27
 - 狀態：完成
 - 適用專案：Threads Downloader 的 Angular SPA、同源 Worker API 與回應 CSP
 
@@ -115,6 +115,53 @@ automatic Web Analytics。它不適用於 manual setup、自訂 beacon、不同 
 beacon 重新驗證。未確認事項是 Cloudflare 未來 beacon 版本是否會改變傳輸來源，
 所以本案不寫死 beacon 版本，也不預先放寬 `connect-src`。
 
+## 2026-07-27 production lifecycle 故障追加查證
+
+本次先依研究原則使用 ask-bridge，沿用本文開頭記錄的 provider、model、timeout
+與 headless 參數。研究完成後，再以 production 可重現現象、當時的官方 script
+內容與 Cloudflare 官方文件交叉驗證；沒有執行 Web Search query。
+
+Production `https://threads.pylot.dev/` 的 `/api/session` 成功，頁面工作階段狀態為
+ready，且瀏覽器已載入精確的
+`https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit`，但頁面沒有
+Turnstile iframe，並顯示「安全驗證無法使用」。Console 同時出現：
+
+```text
+[Cloudflare Turnstile] turnstile.ready() would break if called *before* the Turnstile api.js script is loaded by visitors.
+```
+
+直接取得當時官方 `v0/api.js?render=explicit` 並跟隨 redirect 到版本化 script 後，
+可重現檢查確認 `ready` 實作會在內部 `scriptWasLoadedAsync` 為真時先警告，再拋出
+錯誤碼 `3857` 與下列錯誤：
+
+```text
+Remove async/defer from the Turnstile api.js script tag before using turnstile.ready().
+```
+
+這項 script 內容只證明故障當下的官方版本快照；專案仍使用 `v0` 動態 URL，不能
+固定、proxy 或快取該版本化內容。
+
+接著交叉驗證 Cloudflare 官方的
+[client-side rendering](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/)、
+[widget configurations](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/widget-configurations/)、
+[client-side errors](https://developers.cloudflare.com/turnstile/troubleshooting/client-side-errors/)
+與 [CSP](https://developers.cloudflare.com/turnstile/reference/content-security-policy/)
+文件。Explicit rendering 的基本與 onload 範例都是在 script 可用後直接呼叫
+`turnstile.render()`；`turnstile.ready()` 只出現在同步 classic script 的 SPA 範例，
+官方沒有提供動態 `async`／`defer` loader 再呼叫 `ready` 的契約。
+
+故障實作以動態 script 的 `load` event 確認載入完成，卻在 event 後又呼叫
+`turnstile.ready()`。script 本身明確設定 `defer = true`，因此命中上述 guard，
+例外被前端 fail closed 轉成安全驗證無法使用。最小且有官方證據支持的修正是保留
+既有 script `load`／`error`／timeout、API shape 驗證與 fail-closed 行為，在 `load`
+完成後直接 `render`，不再使用 `ready` 或額外的 ready timeout。這不需要 inline
+onload、query-string global callback、全域 callback 或 CSP 放寬。
+
+同一 loader 的 concurrent pending 契約也必須先於早期 `window.turnstile` 偵測：
+第一個 mount 正在等 script `load` 時，即使 API object 暫時已出現在 window，後續
+mount 仍應共用 pending promise，不能在 load 前提早 render。這是同一載入完成邊界
+的 race 修正，並由直接單元測試保護。
+
 ## 結論與專案決策
 
 ### Script 與 widget lifecycle
@@ -130,11 +177,13 @@ beacon 重新驗證。未確認事項是 Cloudflare 未來 beacon 版本是否�
 
 - `api.js` 必須由 Cloudflare 官方 URL 直接取得，不得 proxy、self-host、打包或
   固定快取。
-- API 可用後以 `ready` 呼叫 `render`，並保存其回傳的 `widgetId`；需要新 token
-  時以該 ID 呼叫 `reset`，widget 不再需要時呼叫 `remove`。
-- Angular 實作必須防止元件已銷毀、延遲的 `ready` callback 卻再次 render 的
-  race。這是把官方 SPA lifecycle 映射到 Angular 的本地安全措施，不是
-  Cloudflare 的 Angular 專屬規範。
+- Angular 動態 loader 監聽 script `load`、`error` 並設置 timeout；`load` 後驗證
+  API shape 並直接呼叫 `render`，不使用 `turnstile.ready()`。保存 `render` 回傳的
+  `widgetId`；需要新 token 時以該 ID 呼叫 `reset`，widget 不再需要時呼叫
+  `remove`。
+- Loader 有 pending 時必須先共用 pending，再檢查 window 上的 API；widget 已
+  移除或容器已中斷連線時不得 render。這些是把官方 script 載入與 widget lifecycle
+  映射到 Angular 的本地 race 防護，不是 Cloudflare 的 Angular 專屬規範。
 
 ### Token 與 callback
 
@@ -224,10 +273,11 @@ connect-src 'self';
    SRI hash；這是保守推論，不宣稱是官方禁令。
 2. Cloudflare 沒有 Angular-specific hook 契約；`ngAfterViewInit`、
    `ngOnDestroy` 與 destroyed guard 的具體安排必須由本地測試確認。
-3. 官方 explicit rendering 範例使用 `defer`，但沒有證據證明 `async` 是必要或
-   禁止；本案沿用官方 `defer` 範例。
-4. 官方只示範 `turnstile.ready(callback)` 的用途，未完整定義 callback 取消、
-   script 永久載入失敗或排程順序；實作需以 timeout/error 狀態 fail closed。
+3. 官方 explicit rendering 範例使用 `defer`；當時官方 script 另明確拒絕以
+   `async`／`defer` 載入後呼叫 `ready`。本案沿用官方 `defer` 範例，但不再呼叫
+   `ready`；未確認未來 script 內部實作是否會改變。
+4. 官方沒有提供動態 loader 搭配 `ready` 的 callback 取消或排程契約；本案不依賴
+   該 seam，script 永久載入失敗仍由既有 timeout/error 狀態 fail closed。
 5. Turnstile 標準模式與 automatic Web Analytics 都沒有額外第三方 `connect-src`
    需求；若新增 pre-clearance、manual Web Analytics、WebSocket 或其他外部連線，
    必須針對新增範圍另行查證。

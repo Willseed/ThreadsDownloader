@@ -4,7 +4,6 @@ import {
   BrowserTurnstileChallenge,
   TURNSTILE_ACTION,
   TURNSTILE_CHALLENGE,
-  TURNSTILE_READY_TIMEOUT_MS,
   TURNSTILE_SCRIPT_TIMEOUT_MS,
   TURNSTILE_SCRIPT_URL,
   type TurnstileWidgetHandle,
@@ -47,9 +46,10 @@ function attachedContainer(): HTMLElement {
 
 function fakeBrowserApi() {
   let rendered = 0;
-  const readyCallbacks: Array<() => void> = [];
-  const ready = vi.fn((callback: () => void) => {
-    readyCallbacks.push(callback);
+  const ready = vi.fn<(_callback: () => void) => void>(() => {
+    throw new Error(
+      'Remove async/defer from the Turnstile api.js script tag before using turnstile.ready().',
+    );
   });
   const render = vi.fn<(container: HTMLElement, options: unknown) => string>(() => {
     rendered += 1;
@@ -58,16 +58,7 @@ function fakeBrowserApi() {
   const reset = vi.fn<(widgetId: string) => void>();
   const remove = vi.fn<(widgetId: string) => void>();
   const api = { ready, render, reset, remove };
-  return { api, readyCallbacks, ready, render, reset, remove };
-}
-
-function invokeReady(callbacks: Array<() => void>): void {
-  const callback = callbacks.shift();
-  expect(callback).toBeDefined();
-  if (callback === undefined) {
-    throw new Error('Expected a Turnstile ready callback.');
-  }
-  callback();
+  return { api, ready, render, reset, remove };
 }
 
 function renderOptions(render: ReturnType<typeof fakeBrowserApi>['render']): CapturedRenderOptions {
@@ -97,7 +88,6 @@ async function loadAndRender(
   Reflect.set(window, 'turnstile', fake.api);
   onlyScript().dispatchEvent(new Event('load'));
   await flushPromises();
-  invokeReady(fake.readyCallbacks);
   return { handle, fake, options: renderOptions(fake.render) };
 }
 
@@ -137,10 +127,30 @@ describe('BrowserTurnstileChallenge', () => {
     Reflect.set(window, 'turnstile', fake.api);
     script.dispatchEvent(new Event('load'));
     await flushPromises();
-    expect(fake.readyCallbacks).toHaveLength(2);
-    invokeReady(fake.readyCallbacks);
-    invokeReady(fake.readyCallbacks);
+    expect(fake.ready).not.toHaveBeenCalled();
     expect(fake.render).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps every mount pending when the browser API appears before script load', async () => {
+    const first = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
+    const script = onlyScript();
+    const fake = fakeBrowserApi();
+    Reflect.set(window, 'turnstile', fake.api);
+
+    const second = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
+    await flushPromises();
+
+    expect(first.status()).toBe('loading');
+    expect(second.status()).toBe('loading');
+    expect(fake.render).not.toHaveBeenCalled();
+
+    script.dispatchEvent(new Event('load'));
+    await flushPromises();
+
+    expect(fake.ready).not.toHaveBeenCalled();
+    expect(fake.render).toHaveBeenCalledTimes(2);
+    expect(first.status()).toBe('ready');
+    expect(second.status()).toBe('ready');
   });
 
   it('reuses an existing exact script instead of inserting a duplicate', async () => {
@@ -154,9 +164,9 @@ describe('BrowserTurnstileChallenge', () => {
     Reflect.set(window, 'turnstile', fake.api);
     existing.dispatchEvent(new Event('load'));
     await flushPromises();
-    invokeReady(fake.readyCallbacks);
 
     expect(onlyScript()).toBe(existing);
+    expect(fake.ready).not.toHaveBeenCalled();
     expect(fake.render).toHaveBeenCalledTimes(1);
     expect(handle.status()).toBe('ready');
   });
@@ -164,7 +174,7 @@ describe('BrowserTurnstileChallenge', () => {
   it('renders with the fixed policy, keeps the token in state, and resets or removes by ID', async () => {
     const { handle, fake, options } = await loadAndRender(challenge);
 
-    expect(fake.ready).toHaveBeenCalledTimes(1);
+    expect(fake.ready).not.toHaveBeenCalled();
     expect(fake.render.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
     expect(options).toMatchObject({
       sitekey: 'public-site-key',
@@ -234,60 +244,44 @@ describe('BrowserTurnstileChallenge', () => {
     Reflect.set(window, 'turnstile', fake.api);
     onlyScript().dispatchEvent(new Event('load'));
     await flushPromises();
-    invokeReady(fake.readyCallbacks);
 
     expect(fake.render.mock.calls[0]?.[0]).toBe(originalContainer);
     expect(renderOptions(fake.render).sitekey).toBe('original-site-key');
     expect(handle.status()).toBe('ready');
   });
 
-  it('does not render when remove wins the delayed ready callback race', async () => {
-    vi.useFakeTimers();
+  it('does not render when remove wins the script load race', async () => {
     const handle = challenge.mount({
       siteKey: 'public-site-key',
       container: attachedContainer(),
     });
     const fake = fakeBrowserApi();
     Reflect.set(window, 'turnstile', fake.api);
+
+    handle.remove();
     onlyScript().dispatchEvent(new Event('load'));
     await flushPromises();
 
-    handle.remove();
-    invokeReady(fake.readyCallbacks);
-    await vi.advanceTimersByTimeAsync(TURNSTILE_READY_TIMEOUT_MS);
-
+    expect(fake.ready).not.toHaveBeenCalled();
     expect(fake.render).not.toHaveBeenCalled();
     expect(fake.remove).not.toHaveBeenCalled();
     expect(handle.status()).toBe('removed');
     expect(handle.token()).toBeNull();
   });
 
-  it('fails closed when the browser API never invokes its ready callback', async () => {
-    vi.useFakeTimers();
-    const handle = challenge.mount({
+  it('fails closed and permits a clean retry after a script error', async () => {
+    const first = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
+    const concurrent = challenge.mount({
       siteKey: 'public-site-key',
       container: attachedContainer(),
     });
-    const fake = fakeBrowserApi();
-    Reflect.set(window, 'turnstile', fake.api);
-    onlyScript().dispatchEvent(new Event('load'));
-    await flushPromises();
-
-    await vi.advanceTimersByTimeAsync(TURNSTILE_READY_TIMEOUT_MS);
-
-    expect(handle.status()).toBe('error');
-    expect(handle.token()).toBeNull();
-    invokeReady(fake.readyCallbacks);
-    expect(fake.render).not.toHaveBeenCalled();
-  });
-
-  it('fails closed and permits a clean retry after a script error', async () => {
-    const first = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
     onlyScript().dispatchEvent(new Event('error'));
     await flushPromises();
 
     expect(first.status()).toBe('error');
     expect(first.token()).toBeNull();
+    expect(concurrent.status()).toBe('error');
+    expect(concurrent.token()).toBeNull();
     expect(turnstileScripts()).toHaveLength(0);
 
     const second = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
@@ -301,12 +295,19 @@ describe('BrowserTurnstileChallenge', () => {
   it('fails closed and removes a script that does not load before the timeout', async () => {
     vi.useFakeTimers();
     const handle = challenge.mount({ siteKey: 'public-site-key', container: attachedContainer() });
+    const script = onlyScript();
 
     await vi.advanceTimersByTimeAsync(TURNSTILE_SCRIPT_TIMEOUT_MS);
 
     expect(handle.status()).toBe('error');
     expect(handle.token()).toBeNull();
     expect(turnstileScripts()).toHaveLength(0);
+
+    const fake = fakeBrowserApi();
+    Reflect.set(window, 'turnstile', fake.api);
+    script.dispatchEvent(new Event('load'));
+    await flushPromises();
+    expect(fake.render).not.toHaveBeenCalled();
   });
 
   it('fails without loading the script when mount input is unusable', () => {

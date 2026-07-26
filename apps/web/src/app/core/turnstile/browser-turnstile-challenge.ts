@@ -4,7 +4,6 @@ import { inject, Injectable, InjectionToken, signal, type Signal } from '@angula
 export const TURNSTILE_SCRIPT_URL =
   'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 export const TURNSTILE_SCRIPT_TIMEOUT_MS = 15_000;
-export const TURNSTILE_READY_TIMEOUT_MS = 10_000;
 export const TURNSTILE_ACTION = 'resolve';
 
 const maximumTokenLength = 2_048;
@@ -42,7 +41,6 @@ interface TurnstileRenderOptions {
 }
 
 interface TurnstileBrowserApi {
-  ready(callback: () => void): void;
   render(container: HTMLElement, options: TurnstileRenderOptions): unknown;
   reset(widgetId: string): void;
   remove(widgetId: string): void;
@@ -61,7 +59,6 @@ function isTurnstileBrowserApi(value: unknown): value is TurnstileBrowserApi {
   }
   const record = value as Record<string, unknown>;
   return (
-    typeof record['ready'] === 'function' &&
     typeof record['render'] === 'function' &&
     typeof record['reset'] === 'function' &&
     typeof record['remove'] === 'function'
@@ -87,12 +84,12 @@ class TurnstileScriptLoader {
   private pending: Promise<TurnstileBrowserApi> | undefined;
 
   load(): Promise<TurnstileBrowserApi> {
+    if (this.pending !== undefined) {
+      return this.pending;
+    }
     const loaded = browserApi(this.document);
     if (loaded !== null) {
       return Promise.resolve(loaded);
-    }
-    if (this.pending !== undefined) {
-      return this.pending;
     }
 
     const existing = this.findScript();
@@ -190,7 +187,6 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
   private readonly tokenValue = signal<string | null>(null);
   private api: TurnstileBrowserApi | null = null;
   private widgetId: string | null = null;
-  private readyTimeout: ReturnType<typeof setTimeout> | undefined;
   private removed = false;
 
   readonly status = this.statusValue.asReadonly();
@@ -207,15 +203,7 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
       return;
     }
     this.api = api;
-    this.readyTimeout = setTimeout(() => {
-      this.readyTimeout = undefined;
-      this.failClosed();
-    }, TURNSTILE_READY_TIMEOUT_MS);
-    try {
-      api.ready(() => this.renderIfActive(api));
-    } catch {
-      this.failClosed();
-    }
+    this.renderIfActive(api);
   }
 
   unavailable(): void {
@@ -240,7 +228,6 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
       return;
     }
     this.removed = true;
-    this.clearReadyTimeout();
     this.tokenValue.set(null);
     this.statusValue.set('removed');
 
@@ -259,7 +246,6 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
   }
 
   private renderIfActive(api: TurnstileBrowserApi): void {
-    this.clearReadyTimeout();
     if (this.removed || this.widgetId !== null || this.statusValue() !== 'loading') {
       return;
     }
@@ -310,17 +296,8 @@ class BrowserTurnstileWidget implements TurnstileWidgetHandle {
     if (this.removed) {
       return;
     }
-    this.clearReadyTimeout();
     this.tokenValue.set(null);
     this.statusValue.set('error');
-  }
-
-  private clearReadyTimeout(): void {
-    if (this.readyTimeout === undefined) {
-      return;
-    }
-    clearTimeout(this.readyTimeout);
-    this.readyTimeout = undefined;
   }
 }
 
