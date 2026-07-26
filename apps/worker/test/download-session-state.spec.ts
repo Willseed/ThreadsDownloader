@@ -277,16 +277,16 @@ describe('download stream acquisition', () => {
     );
   });
 
-  it('parses one exact range and returns a cloned representation pin', () => {
+  it('canonicalizes one satisfiable range and returns a cloned representation pin', () => {
     const result = acquireDownloadStream(issued(), {
       now: NOW,
       holderId: holder('holder_range'),
-      rangeHeader: 'bytes=10-19',
+      rangeHeader: 'bytes=10-999',
       ifRangeHeader: '"v1"',
     });
 
     expect(result.request).toEqual({
-      requestedInterval: { start: 10, end: 19, total: 100 },
+      requestedInterval: { start: 10, end: 99, total: 100 },
       representationPin: { total: 100, validator: ETAG },
     });
     expect(result.request.representationPin?.validator).not.toBe(ETAG);
@@ -341,7 +341,7 @@ describe('download stream acquisition', () => {
     ).toEqual({ requestedInterval: null, representationPin: null });
   });
 
-  it.each(['not-a-range', 'bytes=0-1,2-3', 'bytes=100-'])(
+  it.each(['not-a-range', 'bytes=0-1,2-3', 'bytes=100-', 'bytes=0-999'])(
     'ignores Range %s when If-Range mismatches',
     (rangeHeader) => {
       expect(
