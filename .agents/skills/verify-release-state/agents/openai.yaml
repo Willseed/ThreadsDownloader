@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Release State Verifier'
+  short_description: 'Verify one main revision across remote and final gates'
+  default_prompt: 'Use $verify-release-state to verify the exact main revision across remote CI, Sonar, final local gates, and production evidence.'
