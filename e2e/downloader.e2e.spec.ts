@@ -133,3 +133,31 @@ test('exposes a safe API error through an alert without duplicate busy submissio
   await expect(page.getByText('操作未完成，請依錯誤訊息處理。')).toBeVisible();
   expect(mockApi.calls.resolve).toBe(1);
 });
+
+test('keeps legal documents optional while preserving direct shareable routes', async ({
+  page,
+  mockApi,
+}) => {
+  await page.goto('/');
+  await waitForVerifiedChallenge(page);
+
+  const termsTrigger = page.locator('.site-nav').getByRole('link', { name: '條款', exact: true });
+  await expect(page.getByText('本服務不授予任何第三方內容權利')).toHaveCount(0);
+  await termsTrigger.click();
+
+  const dialog = page.getByRole('dialog', { name: '使用條款' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('本服務不授予任何第三方內容權利')).toBeVisible();
+  await expect(page).toHaveURL('/');
+  expect(mockApi.calls.resolve).toBe(0);
+  expect(mockApi.calls.downloadSessions).toBe(0);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(termsTrigger).toBeFocused();
+  await expect(page.getByText('本服務不授予任何第三方內容權利')).toHaveCount(0);
+
+  await page.goto('/privacy');
+  await expect(page.getByRole('heading', { level: 1, name: '隱私與資料處理說明' })).toBeVisible();
+  await expect(page).toHaveURL('/privacy');
+});

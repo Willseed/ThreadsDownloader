@@ -101,4 +101,47 @@ describe('AppComponent routing', () => {
     expect(headerLinks).toEqual(['/', '/terms', '/privacy', '/copyright']);
     expect(footerLinks).toEqual(['/terms', '/privacy', '/copyright']);
   });
+
+  it('loads legal copy only after a modal trigger and restores focus on Escape', async () => {
+    await router.navigateByUrl('/');
+    fixture.detectChanges();
+    expect(failPendingSessionRequests()).toBe(1);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const trigger = root.querySelector<HTMLAnchorElement>('.site-nav a[href="/privacy"]');
+    expect(root.textContent).not.toContain('__Host-td_session');
+    expect(root.querySelector('.legal-modal[open]')).toBeNull();
+
+    trigger?.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const dialog = root.querySelector<HTMLDialogElement>('.legal-modal');
+    expect(router.url).toBe('/');
+    expect(dialog?.hasAttribute('open')).toBe(true);
+    expect(dialog?.getAttribute('aria-labelledby')).toBe('legal-modal-privacy-title');
+    expect(dialog?.querySelector('#legal-modal-privacy-title')?.textContent?.trim()).toBe(
+      '隱私與資料處理說明',
+    );
+    await vi.waitFor(() => {
+      fixture.detectChanges();
+      expect(dialog?.textContent).toContain('__Host-td_session');
+    });
+    expect(root.querySelectorAll('#main-content')).toHaveLength(1);
+    expect(root.ownerDocument.activeElement).toBe(
+      dialog?.querySelector<HTMLButtonElement>('.legal-modal-close'),
+    );
+
+    dialog?.dispatchEvent(new Event('cancel', { cancelable: true }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(dialog?.hasAttribute('open')).toBe(false);
+    expect(dialog?.textContent).not.toContain('__Host-td_session');
+    expect(root.ownerDocument.activeElement).toBe(trigger);
+  });
 });

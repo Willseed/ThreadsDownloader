@@ -131,4 +131,18 @@ describe('legal pages', () => {
     expect(contact?.getAttribute('aria-label')).toContain('著作權或下架通知');
     expect(text).toContain('不聲稱適用任何特定國家或地區的通知與下架、安全港或反通知制度');
   });
+
+  it.each([TermsPageComponent, PrivacyPageComponent, CopyrightPageComponent])(
+    'renders reusable legal copy without a second page landmark in modal mode',
+    (component) => {
+      const fixture = render(component);
+      fixture.componentRef.setInput('modal', true);
+      fixture.detectChanges();
+      const root = fixture.nativeElement as HTMLElement;
+
+      expect(root.querySelector('main')).toBeNull();
+      expect(root.querySelector('.legal-modal-document')).not.toBeNull();
+      expect(normalizedText(root)).toContain('營運者顯示名稱為 Pony');
+    },
+  );
 });

@@ -1,19 +1,29 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
 
 @Component({
   selector: 'app-terms-page',
-  imports: [ResearchPurposeNoticeComponent],
+  imports: [NgTemplateOutlet, ResearchPurposeNoticeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main id="main-content" class="legal-page" aria-labelledby="page-title">
-      <header class="legal-hero">
-        <p class="eyebrow">LEGAL / TERMS</p>
-        <h1 id="page-title">使用條款</h1>
-        <p>使用本服務前，請閱讀本服務的技術範圍、權利要求與法律界線。</p>
-      </header>
+    @if (modal()) {
+      <div class="legal-modal-document">
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </div>
+    } @else {
+      <main id="main-content" class="legal-page" aria-labelledby="page-title">
+        <header class="legal-hero">
+          <p class="eyebrow">LEGAL / TERMS</p>
+          <h1 id="page-title">使用條款</h1>
+          <p>使用本服務前，請閱讀本服務的技術範圍、權利要求與法律界線。</p>
+        </header>
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </main>
+    }
 
+    <ng-template #legalContent>
       <app-research-purpose-notice />
 
       <article class="legal-article">
@@ -61,7 +71,9 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
           </p>
         </section>
       </article>
-    </main>
+    </ng-template>
   `,
 })
-export class TermsPageComponent {}
+export class TermsPageComponent {
+  readonly modal = input(false);
+}

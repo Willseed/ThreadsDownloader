@@ -442,19 +442,17 @@ describe('DownloaderPageComponent', () => {
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.error-panel'));
   });
 
-  it('states the research purpose and adjacent service boundaries without affiliation claims', () => {
+  it('keeps legal copy out of the page while retaining direct modal fallbacks', () => {
     const root = fixture.nativeElement as HTMLElement;
     const paragraphs = [...root.querySelectorAll<HTMLParagraphElement>('.boundary-copy > p')].map(
       (paragraph) => paragraph.textContent?.trim(),
     );
 
-    expect(paragraphs).toEqual([
+    expect(paragraphs).toEqual(['法務與資料處理全文採需要時載入，不會增加主要下載流程的操作。']);
+    expect(root.textContent).not.toContain(
       '本服務之設置與營運目的僅為技術及學術研究，營運者不藉提供本服務獲取任何商業或經濟利益。',
-      '上述目的與非商業聲明不代表營運者或使用者已取得任何內容授權，不表示特定下載、保存或其他使用必然合法或符合著作權限制或例外，也不免除任何人依適用法律應負的責任。',
-      '公開可見、研究或非商業目的不等於授權；使用者必須擁有內容、取得有效授權，或依實際適用法律確實得為預定使用。',
-      '本服務僅處理無需登入即可存取的公開內容，不繞過登入、存取控制、付費牆或其他技術限制。',
-      '本服務並非 Meta、Instagram、Threads 或 SpaceX 的官方產品，亦未獲其背書或授權。',
-    ]);
+    );
+    expect(root.textContent).not.toContain('__Host-td_session');
     expect(
       [...root.querySelectorAll<HTMLAnchorElement>('.boundary-links a')].map((link) =>
         link.getAttribute('href'),

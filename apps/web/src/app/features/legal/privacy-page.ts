@@ -1,16 +1,27 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 @Component({
   selector: 'app-privacy-page',
+  imports: [NgTemplateOutlet],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main id="main-content" class="legal-page" aria-labelledby="page-title">
-      <header class="legal-hero">
-        <p class="eyebrow">LEGAL / PRIVACY</p>
-        <h1 id="page-title">隱私與資料處理說明</h1>
-        <p>本頁依目前程式碼所實作的資料流，說明本服務處理的資料、用途、接收者與邏輯保存期限。</p>
-      </header>
+    @if (modal()) {
+      <div class="legal-modal-document">
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </div>
+    } @else {
+      <main id="main-content" class="legal-page" aria-labelledby="page-title">
+        <header class="legal-hero">
+          <p class="eyebrow">LEGAL / PRIVACY</p>
+          <h1 id="page-title">隱私與資料處理說明</h1>
+          <p>本頁依目前程式碼所實作的資料流，說明本服務處理的資料、用途、接收者與邏輯保存期限。</p>
+        </header>
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </main>
+    }
 
+    <ng-template #legalContent>
       <article class="legal-article">
         <section aria-labelledby="privacy-data-title">
           <h2 id="privacy-data-title">處理的資料</h2>
@@ -137,7 +148,9 @@ import { ChangeDetectionStrategy, Component } from '@angular/core';
           </p>
         </section>
       </article>
-    </main>
+    </ng-template>
   `,
 })
-export class PrivacyPageComponent {}
+export class PrivacyPageComponent {
+  readonly modal = input(false);
+}

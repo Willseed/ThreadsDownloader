@@ -47,6 +47,10 @@ body {
   background: var(--canvas);
 }
 
+body:has(.legal-modal[open]) {
+  overflow: hidden;
+}
+
 button,
 input {
   min-height: var(--control-size);
@@ -439,6 +443,79 @@ h3 {
   justify-content: flex-end;
 }
 
+.legal-modal {
+  width: min(calc(100% - 2rem), 64rem);
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--canvas);
+  border: 1px solid var(--ink);
+}
+
+.legal-modal::backdrop {
+  background: rgb(0 0 0 / 82%);
+}
+
+.legal-modal-frame {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100dvh - 2rem);
+}
+
+.legal-modal-header {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--canvas);
+  border-block-end: 1px solid var(--ink);
+}
+
+.legal-modal-header > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.legal-modal-header h2 {
+  font-size: clamp(1.75rem, 5vw, 3rem);
+  letter-spacing: -0.025em;
+}
+
+.legal-modal-close {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.legal-modal-body {
+  min-height: 8rem;
+  padding-inline: var(--space-4);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.legal-modal-status,
+.legal-modal-error {
+  margin-block: var(--space-5);
+}
+
+.legal-modal-error {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  padding-inline-start: var(--space-3);
+  border-inline-start: 3px solid var(--ink);
+  font-weight: 700;
+}
+
+.legal-modal-document {
+  padding-block-end: var(--space-3);
+}
+
 .legal-page {
   width: min(100%, var(--content-width));
   margin-inline: auto;
@@ -593,6 +670,24 @@ h3 {
     justify-content: flex-start;
   }
 
+  .legal-modal {
+    width: calc(100% - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .legal-modal-frame {
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .legal-modal-header {
+    align-items: flex-start;
+    padding: var(--space-3);
+  }
+
+  .legal-modal-body {
+    padding-inline: var(--space-3);
+  }
+
   .downloader-page,
   .legal-page {
     padding-inline: var(--space-3);
@@ -654,6 +749,8 @@ h3 {
   .legal-article > section,
   .legal-status,
   .retention-list > div,
+  .legal-modal,
+  .legal-modal-header,
   .site-footer {
     forced-color-adjust: auto;
   }

@@ -1,19 +1,29 @@
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
 
 @Component({
   selector: 'app-copyright-page',
-  imports: [ResearchPurposeNoticeComponent],
+  imports: [NgTemplateOutlet, ResearchPurposeNoticeComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <main id="main-content" class="legal-page" aria-labelledby="page-title">
-      <header class="legal-hero">
-        <p class="eyebrow">LEGAL / COPYRIGHT</p>
-        <h1 id="page-title">著作權與下架通知</h1>
-        <p>公開於網路的內容仍可能受到著作權及其他權利保護。</p>
-      </header>
+    @if (modal()) {
+      <div class="legal-modal-document">
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </div>
+    } @else {
+      <main id="main-content" class="legal-page" aria-labelledby="page-title">
+        <header class="legal-hero">
+          <p class="eyebrow">LEGAL / COPYRIGHT</p>
+          <h1 id="page-title">著作權與下架通知</h1>
+          <p>公開於網路的內容仍可能受到著作權及其他權利保護。</p>
+        </header>
+        <ng-container [ngTemplateOutlet]="legalContent" />
+      </main>
+    }
 
+    <ng-template #legalContent>
       <app-research-purpose-notice />
 
       <article class="legal-article">
@@ -72,7 +82,9 @@ import { ResearchPurposeNoticeComponent } from './research-purpose-notice.js';
           </p>
         </section>
       </article>
-    </main>
+    </ng-template>
   `,
 })
-export class CopyrightPageComponent {}
+export class CopyrightPageComponent {
+  readonly modal = input(false);
+}

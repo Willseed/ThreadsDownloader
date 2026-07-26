@@ -65,6 +65,25 @@ test('offers visible keyboard focus in a logical entry sequence', async ({ page 
   expect(Number.parseFloat(focusStyle.outlineWidth)).toBeGreaterThan(0);
 });
 
+test('contains focus in an on-demand legal dialog and restores its trigger', async ({ page }) => {
+  await waitForReadyPage(page);
+
+  const trigger = page.locator('.site-nav').getByRole('link', { name: '隱私', exact: true });
+  await trigger.focus();
+  await page.keyboard.press('Enter');
+
+  const dialog = page.getByRole('dialog', { name: '隱私與資料處理說明' });
+  const close = dialog.getByRole('button', { name: '關閉', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(close).toBeFocused();
+  const results = await new AxeBuilder({ page }).include('.legal-modal').analyze();
+  expect(results.violations).toEqual([]);
+
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test('reflows at 320 CSS pixels with compact verification and readable reduced motion', async ({
   page,
 }) => {
@@ -109,4 +128,12 @@ test('reflows at 320 CSS pixels with compact verification and readable reduced m
   });
   expect(cssTimeToMilliseconds(motionStyle.animationDuration)).toBeLessThanOrEqual(0.001);
   expect(cssTimeToMilliseconds(motionStyle.transitionDuration)).toBeLessThanOrEqual(0.001);
+
+  await page.locator('.site-nav').getByRole('link', { name: '著作權', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '著作權與下架通知' });
+  await expect(dialog).toBeVisible();
+  const dialogBox = await dialog.boundingBox();
+  expect(dialogBox).not.toBeNull();
+  expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+  expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(viewport.innerWidth);
 });
