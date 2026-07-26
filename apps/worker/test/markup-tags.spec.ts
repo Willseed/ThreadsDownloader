@@ -31,6 +31,21 @@ describe('extractMediaTags', () => {
     ]);
   });
 
+  it('handles non-BMP entities while rejecting surrogate name boundaries', () => {
+    const markup =
+      '<meta property="og:video" content="https://cdninstagram.com/emoji.mp4?label=&#x1F600;">';
+
+    expect(urls(markup)).toEqual(['https://cdninstagram.com/emoji.mp4?label=%F0%9F%98%80']);
+    expectMarkupError(
+      '<meta😀 property="og:video" content="https://cdninstagram.com/non-bmp.mp4">',
+      'MARKUP_STRUCTURE_LIMIT',
+    );
+    expectMarkupError(
+      '<meta\uD800 property="og:video" content="https://cdninstagram.com/surrogate.mp4">',
+      'MARKUP_STRUCTURE_LIMIT',
+    );
+  });
+
   it('collects source tags only while nested within a video', () => {
     const markup = [
       '<source src="https://cdninstagram.com/outside-before.mp4">',
