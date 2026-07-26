@@ -13,6 +13,7 @@ const REQUIRED_SECRETS = Object.freeze([
   'SESSION_SIGNING_KEY',
   'TURNSTILE_SECRET',
 ]);
+const REQUIRED_SECRET_ORDER = new Map(REQUIRED_SECRETS.map((name, index) => [name, index]));
 
 const EXPECTED_ASSETS = Object.freeze({
   directory: './dist/web/browser',
@@ -51,12 +52,24 @@ function isObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function compareNames(left, right) {
+  return left.localeCompare(right, 'en');
+}
+
+function compareRequiredSecrets(left, right) {
+  const fallbackOrder = REQUIRED_SECRETS.length;
+  return (
+    (REQUIRED_SECRET_ORDER.get(left) ?? fallbackOrder) -
+    (REQUIRED_SECRET_ORDER.get(right) ?? fallbackOrder)
+  );
+}
+
 function hasExactProperties(value, expected) {
   if (!isObject(value)) {
     return false;
   }
-  const actualKeys = Object.keys(value).sort();
-  const expectedKeys = Object.keys(expected).sort();
+  const actualKeys = Object.keys(value).sort(compareNames);
+  const expectedKeys = Object.keys(expected).sort(compareNames);
   return (
     actualKeys.length === expectedKeys.length &&
     actualKeys.every((key, index) => key === expectedKeys[index] && value[key] === expected[key])
@@ -152,17 +165,20 @@ function hasExactRequiredSecrets(value) {
   if (actual.length !== REQUIRED_SECRETS.length || new Set(actual).size !== actual.length) {
     return false;
   }
-  return [...actual].sort().every((name, index) => name === [...REQUIRED_SECRETS].sort()[index]);
+  return [...actual]
+    .sort(compareRequiredSecrets)
+    .every((name, index) => name === REQUIRED_SECRETS[index]);
 }
 
 function hasExactVars(value) {
   if (!isObject(value)) {
     return false;
   }
-  const actualKeys = Object.keys(value).sort();
+  const actualKeys = Object.keys(value).sort(compareNames);
+  const expectedKeys = [...EXPECTED_VAR_KEYS].sort(compareNames);
   return (
     actualKeys.length === EXPECTED_VAR_KEYS.length &&
-    actualKeys.every((key, index) => key === [...EXPECTED_VAR_KEYS].sort()[index])
+    actualKeys.every((key, index) => key === expectedKeys[index])
   );
 }
 
