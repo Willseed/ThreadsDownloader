@@ -406,7 +406,7 @@ export class DownloaderPageComponent implements OnDestroy {
       return;
     }
     this.removeWidget();
-    if (siteKey === null || container === null || !container.isConnected) {
+    if (siteKey === null || !container?.isConnected) {
       return;
     }
     let widget: TurnstileWidgetHandle;

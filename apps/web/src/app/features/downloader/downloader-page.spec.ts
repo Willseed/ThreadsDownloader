@@ -168,6 +168,19 @@ describe('DownloaderPageComponent', () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
+  it('removes the widget without remounting into a disconnected container', async () => {
+    const container = (fixture.nativeElement as HTMLElement).querySelector('.turnstile-container');
+    expect(container).not.toBeNull();
+    container?.remove();
+
+    state.set({ kind: 'ready', siteKey: OTHER_SITE_KEY });
+    await render();
+
+    expect(widgets[0]?.remove).toHaveBeenCalledOnce();
+    expect(mount).toHaveBeenCalledOnce();
+    expect(attachChallenge).toHaveBeenCalledOnce();
+  });
+
   it('fails closed when mounting fails and still destroys after widget removal throws', async () => {
     widgets[0]?.remove.mockImplementationOnce(() => {
       throw new Error('fixture remove failure');
