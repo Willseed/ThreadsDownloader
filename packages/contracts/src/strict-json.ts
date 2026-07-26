@@ -11,10 +11,10 @@ export function decodeExactRecord<const Keys extends readonly string[]>(
   }
 
   const record = value as Record<string, unknown>;
-  const actualKeys = Object.keys(record).sort();
-  const sortedExpectedKeys = [...expectedKeys].sort();
-  return actualKeys.length === sortedExpectedKeys.length &&
-    actualKeys.every((key, index) => key === sortedExpectedKeys[index])
+  const actualKeys = Object.keys(record);
+  const expectedKeySet = new Set<string>(expectedKeys);
+  return actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key) => expectedKeySet.has(key))
     ? (record as Record<Keys[number], unknown>)
     : null;
 }

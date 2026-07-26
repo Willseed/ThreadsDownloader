@@ -17,6 +17,8 @@ describe('decodeExactRecord', () => {
     const input = { [composed]: 'composed', [decomposed]: 'decomposed' };
 
     expect(decodeExactRecord(input, [decomposed, composed] as const)).toBe(input);
+    expect(decodeExactRecord({ [composed]: true }, [decomposed] as const)).toBeNull();
+    expect(decodeExactRecord({ [decomposed]: true }, [composed] as const)).toBeNull();
   });
 
   it.each([
@@ -48,10 +50,13 @@ describe('decodeExactRecord', () => {
     expect(decodeExactRecord(input, ['hidden', 'own'])).toBeNull();
   });
 
-  it('does not mutate the expected-key list', () => {
+  it('does not mutate expected-key lists and rejects duplicate expected keys', () => {
     const expectedKeys = ['second', 'first'] as const;
+    const duplicateExpectedKeys = ['first', 'first'] as const;
 
     expect(decodeExactRecord({ first: 1, second: 2 }, expectedKeys)).not.toBeNull();
+    expect(decodeExactRecord({ first: 1 }, duplicateExpectedKeys)).toBeNull();
     expect(expectedKeys).toEqual(['second', 'first']);
+    expect(duplicateExpectedKeys).toEqual(['first', 'first']);
   });
 });
