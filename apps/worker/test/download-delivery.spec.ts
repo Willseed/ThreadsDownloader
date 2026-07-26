@@ -340,6 +340,27 @@ describe('download delivery setup', () => {
     expect(response.headers.get('content-length')).toBe('2');
   });
 
+  it('forwards and returns the canonical clamped range selected by the session', async () => {
+    const harness = sessionHarness({
+      requestedInterval: { start: 1, end: 3, total: 4 },
+    });
+    let upstream: Request | undefined;
+    const response = await delivery(harness, async (request) => {
+      upstream = request;
+      return videoResponse(bytes(3), {
+        status: 206,
+        headers: { 'content-length': '3', 'content-range': 'bytes 1-3/4' },
+      });
+    })({ ...input, rangeHeader: 'bytes=1-999', ifRangeHeader: '"v1"' });
+
+    await expect(response.arrayBuffer()).resolves.toHaveProperty('byteLength', 3);
+    expect(upstream!.headers.get('range')).toBe('bytes=1-3');
+    expect(upstream!.headers.get('if-range')).toBe('"v1"');
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 1-3/4');
+    expect(response.headers.get('content-length')).toBe('3');
+  });
+
   it('forwards a range without If-Range when the representation has no reliable pin', async () => {
     const acquiredMedia = media({
       completionReliable: false,

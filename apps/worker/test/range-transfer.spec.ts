@@ -33,9 +33,12 @@ describe('parseSingleByteRange', () => {
   it.each([
     ['bytes=0-4', 10, { start: 0, end: 4, total: 10 }],
     ['bytes=5-', 10, { start: 5, end: 9, total: 10 }],
+    ['bytes=0-', 10, { start: 0, end: 9, total: 10 }],
     ['bytes=-3', 10, { start: 7, end: 9, total: 10 }],
     ['bytes=-99', 10, { start: 0, end: 9, total: 10 }],
     ['bytes=0-0', 1, { start: 0, end: 0, total: 1 }],
+    ['bytes=0-10', 10, { start: 0, end: 9, total: 10 }],
+    ['bytes=5-999', 10, { start: 5, end: 9, total: 10 }],
   ])('resolves a single byte range', (value, total, expected) => {
     expect(parseSingleByteRange(value, total)).toEqual(expected);
   });
@@ -47,7 +50,8 @@ describe('parseSingleByteRange', () => {
     ['bytes=-0', 10, 'RANGE_INVALID'],
     ['bytes=8-2', 10, 'RANGE_INVALID'],
     ['bytes=10-', 10, 'RANGE_NOT_SATISFIABLE'],
-    ['bytes=0-10', 10, 'RANGE_NOT_SATISFIABLE'],
+    ['bytes=10-10', 10, 'RANGE_NOT_SATISFIABLE'],
+    ['bytes=20-30', 10, 'RANGE_NOT_SATISFIABLE'],
     ['bytes=9007199254740992-', 10, 'RANGE_INVALID'],
     ['bytes=0-9007199254740992', 10, 'RANGE_INVALID'],
   ])('rejects unsafe or unsatisfiable ranges', (value, total, code) => {

@@ -218,10 +218,7 @@ export function parseSingleByteRange(value: string, total: number): ByteInterval
   if (end === null || start > end) {
     return fail('RANGE_INVALID', total);
   }
-  if (end >= total) {
-    return fail('RANGE_NOT_SATISFIABLE', total);
-  }
-  return { start, end, total };
+  return { start, end: Math.min(end, total - 1), total };
 }
 
 export function decideIfRange(
