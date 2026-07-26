@@ -216,9 +216,12 @@ describe('ResolvedMediaGrantCodec authenticated binding', () => {
   );
 
   it.each([
-    ['session hash', binding({ sessionHash: 'A'.repeat(42) })],
-    ['resolve id', binding({ resolveId: 'A'.repeat(31) })],
-    ['candidate id', binding({ candidateId: 'A'.repeat(33) })],
+    ['short session hash', binding({ sessionHash: encodeBase64Url(bytes(31)) })],
+    ['long session hash', binding({ sessionHash: encodeBase64Url(bytes(33)) })],
+    ['short resolve id', binding({ resolveId: encodeBase64Url(bytes(23)) })],
+    ['long resolve id', binding({ resolveId: encodeBase64Url(bytes(25)) })],
+    ['short candidate id', binding({ candidateId: encodeBase64Url(bytes(23)) })],
+    ['long candidate id', binding({ candidateId: encodeBase64Url(bytes(25)) })],
     ['zero ordinal', binding({ ordinal: 0 })],
     ['large ordinal', binding({ ordinal: 11 })],
     ['fractional ordinal', binding({ ordinal: 1.5 })],

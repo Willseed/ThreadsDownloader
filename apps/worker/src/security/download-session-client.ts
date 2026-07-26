@@ -1,7 +1,7 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import type { ProbedMedia } from '../resolver/media-probe.js';
-import { decodeBase64Url } from '../utils/base64url.js';
+import { isCanonicalBase64UrlWithExactBytes } from '../utils/base64url.js';
 import { createOpaqueId } from './cryptography.js';
 import {
   DOWNLOAD_ABSOLUTE_LIFETIME_MS,
@@ -24,11 +24,8 @@ import {
   type ProbedMediaWire,
 } from './resolve-vault.js';
 
-const DOWNLOAD_ID_CHARACTERS = 32;
 const DOWNLOAD_ID_BYTES = 24;
-const HOLDER_ID_CHARACTERS = 32;
 const HOLDER_ID_BYTES = 24;
-const SESSION_HASH_CHARACTERS = 43;
 const SESSION_HASH_BYTES = 32;
 const MAX_FILENAME_CHARACTERS = 128;
 const MAX_FORWARDED_HEADER_CHARACTERS = 512;
@@ -183,27 +180,16 @@ export class DownloadSessionClientError extends Error {
   }
 }
 
-function hasCanonicalBytes(value: unknown, characters: number, bytes: number): value is string {
-  if (typeof value !== 'string' || value.length !== characters) {
-    return false;
-  }
-  try {
-    return decodeBase64Url(value).byteLength === bytes;
-  } catch {
-    return false;
-  }
-}
-
 function isDownloadId(value: unknown): value is string {
-  return hasCanonicalBytes(value, DOWNLOAD_ID_CHARACTERS, DOWNLOAD_ID_BYTES);
+  return isCanonicalBase64UrlWithExactBytes(value, DOWNLOAD_ID_BYTES);
 }
 
 function isSessionHash(value: unknown): value is string {
-  return hasCanonicalBytes(value, SESSION_HASH_CHARACTERS, SESSION_HASH_BYTES);
+  return isCanonicalBase64UrlWithExactBytes(value, SESSION_HASH_BYTES);
 }
 
 function isHolderId(value: unknown): value is string {
-  return hasCanonicalBytes(value, HOLDER_ID_CHARACTERS, HOLDER_ID_BYTES);
+  return isCanonicalBase64UrlWithExactBytes(value, HOLDER_ID_BYTES);
 }
 
 function isSafeNonNegativeInteger(value: unknown): value is number {

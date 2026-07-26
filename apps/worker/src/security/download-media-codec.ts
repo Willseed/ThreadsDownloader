@@ -1,13 +1,20 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import type { ProbedMedia } from '../resolver/media-probe.js';
-import { decodeBase64Url, encodeBase64Url } from '../utils/base64url.js';
+import {
+  decodeBase64Url,
+  encodeBase64Url,
+  isCanonicalBase64UrlWithExactBytes,
+  isCanonicalBase64UrlWithMinimumBytes,
+} from '../utils/base64url.js';
 import { decodeProbedMediaWire, encodeProbedMediaWire } from './resolve-vault.js';
 
 export const DOWNLOAD_MEDIA_MAX_TTL_MS = 3_600_000;
 
 const DOWNLOAD_MEDIA_VERSION = 1;
 const KEY_BYTES = 32;
+const SESSION_HASH_BYTES = 32;
+const MINIMUM_DOWNLOAD_ID_BYTES = 16;
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 const MAX_PLAINTEXT_CHARACTERS = 8_192;
@@ -53,22 +60,6 @@ function fail(code: DownloadMediaCodecErrorCode): never {
   throw new DownloadMediaCodecError(code);
 }
 
-function hasCanonicalBytes(
-  value: unknown,
-  minimumBytes: number,
-  exactBytes?: number,
-): value is string {
-  if (typeof value !== 'string') {
-    return false;
-  }
-  try {
-    const length = decodeBase64Url(value).byteLength;
-    return exactBytes === undefined ? length >= minimumBytes : length === exactBytes;
-  } catch {
-    return false;
-  }
-}
-
 function isSafeTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -84,8 +75,8 @@ function normalizeBinding(value: unknown): DownloadMediaBinding {
   ]);
   if (
     record === null ||
-    !hasCanonicalBytes(record['sessionHash'], KEY_BYTES, KEY_BYTES) ||
-    !hasCanonicalBytes(record['downloadId'], 16) ||
+    !isCanonicalBase64UrlWithExactBytes(record['sessionHash'], SESSION_HASH_BYTES) ||
+    !isCanonicalBase64UrlWithMinimumBytes(record['downloadId'], MINIMUM_DOWNLOAD_ID_BYTES) ||
     typeof record['filename'] !== 'string' ||
     record['filename'].length > MAX_FILENAME_CHARACTERS ||
     !SAFE_FILENAME.test(record['filename']) ||
@@ -198,8 +189,8 @@ function deserializeEnvelope(sealedMedia: string): {
   if (
     record === null ||
     record['v'] !== DOWNLOAD_MEDIA_VERSION ||
-    !hasCanonicalBytes(record['iv'], IV_BYTES, IV_BYTES) ||
-    !hasCanonicalBytes(record['ciphertext'], TAG_BYTES) ||
+    !isCanonicalBase64UrlWithExactBytes(record['iv'], IV_BYTES) ||
+    !isCanonicalBase64UrlWithMinimumBytes(record['ciphertext'], TAG_BYTES) ||
     JSON.stringify({
       v: record['v'],
       iv: record['iv'],

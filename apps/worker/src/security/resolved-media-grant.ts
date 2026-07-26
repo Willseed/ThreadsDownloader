@@ -1,12 +1,14 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.js';
-import { decodeBase64Url } from '../utils/base64url.js';
+import { isCanonicalBase64UrlWithExactBytes } from '../utils/base64url.js';
 import type { AesGcmSealer } from './cryptography.js';
 
 export const RESOLVED_MEDIA_GRANT_MAX_TTL_MS = 300_000;
 
 const RESOLVED_MEDIA_GRANT_VERSION = 1;
+const SESSION_HASH_BYTES = 32;
+const OPAQUE_ID_BYTES = 24;
 const MAX_SEALED_GRANT_CHARACTERS = 8_192;
 const MAX_FILENAME_CHARACTERS = 128;
 const AAD_DOMAIN = 'threads-downloader:resolved-media-grant:v1';
@@ -57,17 +59,6 @@ function fail(code: ResolvedMediaGrantCodecErrorCode): never {
   throw new ResolvedMediaGrantCodecError(code);
 }
 
-function hasCanonicalBytes(value: unknown, characters: number, bytes: number): value is string {
-  if (typeof value !== 'string' || value.length !== characters) {
-    return false;
-  }
-  try {
-    return decodeBase64Url(value).byteLength === bytes;
-  } catch {
-    return false;
-  }
-}
-
 function isSafeTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -90,9 +81,9 @@ function normalizeBinding(value: unknown): NormalizedBinding {
   ]);
   if (
     record === null ||
-    !hasCanonicalBytes(record['sessionHash'], 43, 32) ||
-    !hasCanonicalBytes(record['resolveId'], 32, 24) ||
-    !hasCanonicalBytes(record['candidateId'], 32, 24) ||
+    !isCanonicalBase64UrlWithExactBytes(record['sessionHash'], SESSION_HASH_BYTES) ||
+    !isCanonicalBase64UrlWithExactBytes(record['resolveId'], OPAQUE_ID_BYTES) ||
+    !isCanonicalBase64UrlWithExactBytes(record['candidateId'], OPAQUE_ID_BYTES) ||
     typeof record['ordinal'] !== 'number' ||
     !Number.isSafeInteger(record['ordinal']) ||
     record['ordinal'] < 1 ||

@@ -195,6 +195,32 @@ describe('download session exact request decoders', () => {
     ).toBeNull();
   });
 
+  it('rejects canonical IDs and hashes on either side of their exact byte lengths', () => {
+    for (const byteLength of [23, 25]) {
+      const invalidId = encodeBase64Url(bytes(byteLength));
+      expect(
+        decodeDownloadSessionIdentityRequest({ ...identity, downloadId: invalidId }),
+      ).toBeNull();
+      expect(
+        decodeDownloadSessionRenewRequest({
+          ...identity,
+          holderId: invalidId,
+          sequence: 1,
+          progress: true,
+        }),
+      ).toBeNull();
+    }
+
+    for (const byteLength of [31, 33]) {
+      expect(
+        decodeDownloadSessionIdentityRequest({
+          ...identity,
+          sessionHash: encodeBase64Url(bytes(byteLength)),
+        }),
+      ).toBeNull();
+    }
+  });
+
   it('enforces exact acquire headers and finish evidence boundaries', () => {
     const acquire = { ...identity, rangeHeader: 'bytes=0-9', ifRangeHeader: '"v1"' };
     expect(decodeDownloadSessionAcquireRequest(acquire)).toEqual(acquire);

@@ -52,3 +52,40 @@ export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
     throw new InvalidBase64UrlError();
   }
 }
+
+function canonicalBase64UrlByteLength(value: unknown): number | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  try {
+    return decodeBase64Url(value).byteLength;
+  } catch {
+    return null;
+  }
+}
+
+function isValidByteThreshold(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isCanonicalBase64UrlWithExactBytes(
+  value: unknown,
+  expectedBytes: number,
+): value is string {
+  return (
+    isValidByteThreshold(expectedBytes) && canonicalBase64UrlByteLength(value) === expectedBytes
+  );
+}
+
+export function isCanonicalBase64UrlWithMinimumBytes(
+  value: unknown,
+  minimumBytes: number,
+): value is string {
+  if (!isValidByteThreshold(minimumBytes)) {
+    return false;
+  }
+
+  const byteLength = canonicalBase64UrlByteLength(value);
+  return byteLength !== null && byteLength >= minimumBytes;
+}

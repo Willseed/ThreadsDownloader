@@ -185,19 +185,25 @@ function legacyBinding(): ResolvedMediaGrantBinding {
 }
 
 describe('DownloadMediaCodec round trips', () => {
-  it('round-trips a strict ProbedMedia target for exactly one hour', async () => {
-    const subject = await createDownloadMediaCodec(firstKey);
-    const target = media();
-    const targetBinding = binding();
-    const sealed = await subject.seal(target, targetBinding, NOW);
+  it.each([
+    ['minimum-length', downloadId],
+    ['longer', otherDownloadId],
+  ])(
+    'round-trips a strict target with a %s download ID for exactly one hour',
+    async (_case, id) => {
+      const subject = await createDownloadMediaCodec(firstKey);
+      const target = media();
+      const targetBinding = binding({ downloadId: id });
+      const sealed = await subject.seal(target, targetBinding, NOW);
 
-    await expect(subject.open(sealed, targetBinding, NOW)).resolves.toEqual(target);
-    await expect(
-      subject.open(sealed, targetBinding, targetBinding.absoluteExpiresAt - 1),
-    ).resolves.toEqual(target);
-    expect(sealed).not.toContain(PRIVATE_URL);
-    expect(sealed).not.toContain('private-download-target');
-  });
+      await expect(subject.open(sealed, targetBinding, NOW)).resolves.toEqual(target);
+      await expect(
+        subject.open(sealed, targetBinding, targetBinding.absoluteExpiresAt - 1),
+      ).resolves.toEqual(target);
+      expect(sealed).not.toContain(PRIVATE_URL);
+      expect(sealed).not.toContain('private-download-target');
+    },
+  );
 
   it('uses a fresh canonical 96-bit IV for every envelope', async () => {
     const subject = await createDownloadMediaCodec(firstKey);
@@ -287,6 +293,7 @@ describe('DownloadMediaCodec time and binding policy', () => {
 
   it.each([
     ['short session hash', binding({ sessionHash: encodeBase64Url(bytes(31)) })],
+    ['long session hash', binding({ sessionHash: encodeBase64Url(bytes(33)) })],
     ['non-canonical session hash', binding({ sessionHash: `${sessionHash}=` })],
     ['short download ID', binding({ downloadId: encodeBase64Url(bytes(15)) })],
     ['non-canonical download ID', binding({ downloadId: `${downloadId}=` })],
