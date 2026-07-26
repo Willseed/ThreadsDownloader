@@ -103,6 +103,13 @@ function downloadableCandidates(
   return state.kind === 'error' ? (state.candidates ?? null) : null;
 }
 
+function invalidatesSession(reason: unknown): boolean {
+  return (
+    reason instanceof DownloaderApiError &&
+    (reason.code === 'SESSION_INVALID' || reason.code === 'SESSION_EXPIRED')
+  );
+}
+
 @Injectable()
 export class DownloaderWorkflow {
   private readonly api = inject(DownloaderApi);
@@ -132,10 +139,7 @@ export class DownloaderWorkflow {
       return;
     }
     const generation = this.invalidatePending();
-    this.resetChallenge();
-    this.session = null;
-    this.resolveId = null;
-    this.pendingHandoff = null;
+    this.clearSessionOwnedState();
     this.stateValue.set({ kind: 'bootstrapping' });
 
     try {
@@ -229,7 +233,7 @@ export class DownloaderWorkflow {
       if (!this.isCurrent(generation)) {
         return;
       }
-      this.stateValue.set(safeError(reason, session.turnstileSiteKey));
+      this.setOperationError(reason, session.turnstileSiteKey);
     }
   }
 
@@ -300,7 +304,7 @@ export class DownloaderWorkflow {
       if (!this.isCurrent(generation)) {
         return;
       }
-      this.stateValue.set(safeError(reason, session.turnstileSiteKey, candidates));
+      this.setOperationError(reason, session.turnstileSiteKey, candidates);
     }
   }
 
@@ -310,11 +314,7 @@ export class DownloaderWorkflow {
     }
     this.destroyed = true;
     this.generation += 1;
-    this.resetChallenge();
-    this.challenge = null;
-    this.session = null;
-    this.resolveId = null;
-    this.pendingHandoff = null;
+    this.clearSessionOwnedState();
     this.stateValue.set({ kind: 'idle' });
   }
 
@@ -337,6 +337,34 @@ export class DownloaderWorkflow {
       requestId: null,
       ...(candidates === undefined ? {} : { candidates }),
     });
+  }
+
+  private setOperationError(
+    reason: unknown,
+    siteKey: string,
+    candidates?: readonly ResolveCandidate[],
+  ): void {
+    if (!invalidatesSession(reason)) {
+      this.stateValue.set(safeError(reason, siteKey, candidates));
+      return;
+    }
+
+    const generation = this.invalidatePending();
+    this.clearSessionOwnedState();
+    if (this.isCurrent(generation)) {
+      this.stateValue.set(safeError(reason, null));
+    }
+  }
+
+  private clearSessionOwnedState(): void {
+    const challenge = this.challenge;
+    this.challenge = null;
+    this.session = null;
+    this.resolveId = null;
+    this.pendingHandoff = null;
+    if (challenge !== null) {
+      this.tryReset(challenge);
+    }
   }
 
   private resetChallenge(): boolean {

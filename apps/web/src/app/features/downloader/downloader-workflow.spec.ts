@@ -19,11 +19,19 @@ const DOWNLOAD_ID = 'D'.repeat(32);
 const OTHER_DOWNLOAD_ID = 'F'.repeat(32);
 const REQUEST_ID = 'Q'.repeat(32);
 const SITE_KEY = '0x4AAAAAAD9Gx9nArUYJAkKJ';
+const NEXT_CSRF_TOKEN = `${'n'.repeat(42)}Q`;
+const NEXT_SITE_KEY = '0x4AAAAAAD9Gx9nArUYJAkLJ';
 
 const sessionResponse: SessionResponse = {
   csrfToken: CSRF_TOKEN,
   expiresAt: '2026-07-25T08:30:00.000Z',
   turnstileSiteKey: SITE_KEY,
+};
+
+const nextSessionResponse: SessionResponse = {
+  csrfToken: NEXT_CSRF_TOKEN,
+  expiresAt: '2026-07-25T09:30:00.000Z',
+  turnstileSiteKey: NEXT_SITE_KEY,
 };
 
 const resolveResponse = {
@@ -152,6 +160,37 @@ describe('DownloaderWorkflow', () => {
     });
   });
 
+  it('clears session ownership when resolve reports an invalid session', async () => {
+    resolve.mockReturnValueOnce(
+      throwError(
+        () => new DownloaderApiError('SESSION_INVALID', '工作階段無效，請重新建立。', REQUEST_ID),
+      ),
+    );
+    const challenge = challengeFixture('single-use-token');
+    await ready();
+    workflow.attachChallenge(challenge.handle);
+
+    await workflow.resolve('https://threads.com/@alice/post/Abcde', true);
+
+    expect(challenge.reset).toHaveBeenCalledTimes(2);
+    expect(workflow.state()).toEqual({
+      kind: 'error',
+      siteKey: null,
+      code: 'SESSION_INVALID',
+      message: '工作階段無效，請重新建立。',
+      requestId: REQUEST_ID,
+    });
+
+    await workflow.resolve('https://threads.com/@alice/post/Abcde', true);
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(challenge.reset).toHaveBeenCalledTimes(2);
+    expect(workflow.state()).toMatchObject({
+      kind: 'error',
+      siteKey: null,
+      code: 'CLIENT_REQUEST_INVALID',
+    });
+  });
+
   it('rejects incomplete resolve requirements without transport', async () => {
     await ready();
     for (const { rightsConfirmed, token, url } of [
@@ -263,6 +302,73 @@ describe('DownloaderWorkflow', () => {
     expect(handoff).toHaveBeenCalledTimes(2);
     expect(handoff).toHaveBeenLastCalledWith(downloadResponse.downloadUrl);
     expect(workflow.state()).toMatchObject({ kind: 'handed-off' });
+  });
+
+  it('clears resolved state when download issuance reports an expired session', async () => {
+    createDownloadSession.mockReturnValueOnce(
+      throwError(
+        () => new DownloaderApiError('SESSION_EXPIRED', '工作階段已過期，請重新建立。', REQUEST_ID),
+      ),
+    );
+    const challenge = challengeFixture('single-use-token');
+    await candidates(challenge);
+
+    await workflow.download(CANDIDATE_ID);
+
+    expect(challenge.reset).toHaveBeenCalledTimes(2);
+    expect(handoff).not.toHaveBeenCalled();
+    expect(workflow.state()).toEqual({
+      kind: 'error',
+      siteKey: null,
+      code: 'SESSION_EXPIRED',
+      message: '工作階段已過期，請重新建立。',
+      requestId: REQUEST_ID,
+    });
+
+    await workflow.download(CANDIDATE_ID);
+    expect(createDownloadSession).toHaveBeenCalledOnce();
+    expect(handoff).not.toHaveBeenCalled();
+  });
+
+  it('bootstraps one fresh session after session ownership is invalidated', async () => {
+    resolve.mockReturnValueOnce(
+      throwError(
+        () => new DownloaderApiError('SESSION_INVALID', '工作階段無效，請重新建立。', REQUEST_ID),
+      ),
+    );
+    getSession.mockReturnValueOnce(of(sessionResponse));
+    const refreshedSession = new Subject<SessionResponse>();
+    getSession.mockReturnValueOnce(refreshedSession.asObservable());
+    const staleChallenge = challengeFixture('stale-token');
+    await ready();
+    workflow.attachChallenge(staleChallenge.handle);
+    await workflow.resolve('https://threads.com/@alice/post/Abcde', true);
+
+    const first = workflow.bootstrap();
+    const repeated = workflow.bootstrap();
+    expect(getSession).toHaveBeenCalledTimes(2);
+    expect(workflow.state()).toEqual({ kind: 'bootstrapping' });
+
+    refreshedSession.next(nextSessionResponse);
+    refreshedSession.complete();
+    await Promise.all([first, repeated]);
+
+    expect(workflow.state()).toEqual({ kind: 'ready', siteKey: NEXT_SITE_KEY });
+    expect(staleChallenge.reset).toHaveBeenCalledTimes(2);
+
+    const freshChallenge = challengeFixture('fresh-token');
+    workflow.attachChallenge(freshChallenge.handle);
+    await workflow.resolve('https://threads.com/@alice/post/NextPost', true);
+
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve).toHaveBeenLastCalledWith({
+      postUrl: 'https://threads.com/@alice/post/NextPost',
+      csrfToken: NEXT_CSRF_TOKEN,
+      turnstileToken: 'fresh-token',
+      rightsConfirmed: true,
+    });
+    expect(freshChallenge.reset).toHaveBeenCalledOnce();
+    expect(workflow.state()).toMatchObject({ kind: 'candidates', siteKey: NEXT_SITE_KEY });
   });
 
   it('issues a new session when a different resolved candidate is selected', async () => {
