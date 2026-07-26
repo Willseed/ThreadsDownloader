@@ -12,6 +12,12 @@ describe('base64url codec', () => {
     expect(decodeBase64Url('')).toEqual(new Uint8Array());
   });
 
+  it('preserves every byte value across the code-point conversion boundary', () => {
+    const bytes = Uint8Array.from({ length: 256 }, (_, value) => value);
+
+    expect(decodeBase64Url(encodeBase64Url(bytes))).toEqual(bytes);
+  });
+
   it.each(['a', 'abc=', 'abc+', 'abc/', 'abc\n', 'AB'])(
     'rejects malformed or non-canonical input: %s',
     (value) => {

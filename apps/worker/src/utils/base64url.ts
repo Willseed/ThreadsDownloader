@@ -12,7 +12,7 @@ export function encodeBase64Url(value: ArrayBuffer | Uint8Array): string {
   let binary = '';
 
   for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+    binary += String.fromCodePoint(byte);
   }
 
   const encoded = btoa(binary).replaceAll('+', '-').replaceAll('/', '_');
@@ -36,7 +36,7 @@ export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
     const bytes = new Uint8Array(binary.length);
 
     for (let index = 0; index < binary.length; index += 1) {
-      bytes[index] = binary.charCodeAt(index);
+      bytes[index] = binary.codePointAt(index)!;
     }
 
     if (encodeBase64Url(bytes) !== value) {
