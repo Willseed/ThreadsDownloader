@@ -68,10 +68,11 @@ export interface Env {
 const securityHeaders = {
   'content-security-policy': [
     "default-src 'self'",
-    "base-uri 'none'",
+    "base-uri 'self'",
     "frame-ancestors 'none'",
     "form-action 'self'",
     "script-src 'self' https://challenges.cloudflare.com",
+    "style-src 'self'",
     'frame-src https://challenges.cloudflare.com',
     "connect-src 'self'",
   ].join('; '),
