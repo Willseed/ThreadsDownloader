@@ -31,7 +31,7 @@ function ipv6SectionCount(value: string, mayContainIpv4: boolean): number | null
     return 0;
   }
   const sections = value.split(':');
-  if (sections.some((section) => section === '')) {
+  if (sections.includes('')) {
     return null;
   }
   const last = sections.at(-1)!;
