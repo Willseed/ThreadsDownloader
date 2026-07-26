@@ -121,6 +121,22 @@ expectations. The final handoff is a same-origin download anchor; it avoids
 opening or displaying the CDN location. Legal notices, acceptable-use text,
 and a reporting path are part of handoff and error surfaces.
 
+### Primary success-path interaction budget
+
+From a ready page through browser download handoff, the application-controlled
+happy path must require no more than ten high-level user actions. The MVP uses
+five: fill the post URL, confirm content rights, complete Turnstile at a high
+level, submit resolution, and choose a candidate for browser download. Page
+loading, session bootstrap, and browser download-manager behavior are not user
+actions.
+
+The Turnstile completion counts as one high-level action even when the E2E fake
+completes automatically. Interactions inside a real third-party challenge are
+externally controlled and therefore cannot be guaranteed by this application.
+The application must not add wizard pages or redundant confirmations to this
+path; any necessary application-owned gate must preserve the ten-action limit
+and update the semantic E2E action list.
+
 ## Test matrix
 
 | Layer | Primary checks |

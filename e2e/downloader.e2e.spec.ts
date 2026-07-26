@@ -10,6 +10,25 @@ import {
   test,
 } from './fixtures/downloader-mock.js';
 
+const MAX_PRIMARY_SUCCESS_ACTIONS = 10;
+const PRIMARY_SUCCESS_ACTIONS = [
+  'fill-post-url',
+  'confirm-content-rights',
+  'complete-turnstile',
+  'submit-resolution',
+  'handoff-candidate-download',
+] as const;
+type PrimarySuccessAction = (typeof PRIMARY_SUCCESS_ACTIONS)[number];
+
+async function performPrimarySuccessAction(
+  completedActions: PrimarySuccessAction[],
+  action: PrimarySuccessAction,
+  operation: () => Promise<unknown>,
+): Promise<void> {
+  await operation();
+  completedActions.push(action);
+}
+
 async function waitForVerifiedChallenge(page: Page): Promise<void> {
   await expect(page.getByText('安全驗證已通過，可提交解析。')).toBeVisible();
 }
@@ -23,17 +42,31 @@ test('hands a resolved candidate to the browser without claiming download comple
   page,
   mockApi,
 }) => {
+  const completedActions: PrimarySuccessAction[] = [];
   await page.goto('/');
-  await waitForVerifiedChallenge(page);
-  await completeResolveForm(page);
 
-  await page.getByRole('button', { name: '解析影片候選' }).click();
+  await performPrimarySuccessAction(completedActions, 'fill-post-url', () =>
+    page.getByRole('textbox', { name: 'Threads 公開貼文網址' }).fill(THREADS_POST_URL),
+  );
+  await performPrimarySuccessAction(completedActions, 'confirm-content-rights', () =>
+    page.getByRole('checkbox', { name: /我確認我擁有內容/u }).check(),
+  );
+  // The fake completes automatically, but the external challenge remains one semantic user action.
+  await performPrimarySuccessAction(completedActions, 'complete-turnstile', () =>
+    waitForVerifiedChallenge(page),
+  );
+
+  await performPrimarySuccessAction(completedActions, 'submit-resolution', () =>
+    page.getByRole('button', { name: '解析影片候選' }).click(),
+  );
   await expect(page.getByRole('heading', { name: 'research-video-01.mp4' })).toBeVisible();
   expect(mockApi.calls.session).toBe(1);
   expect(mockApi.calls.resolve).toBe(1);
 
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: '交給瀏覽器下載' }).click();
+  await performPrimarySuccessAction(completedActions, 'handoff-candidate-download', () =>
+    page.getByRole('button', { name: '交給瀏覽器下載' }).click(),
+  );
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe('research-video-01.mp4');
   await download.cancel();
@@ -48,6 +81,9 @@ test('hands a resolved candidate to the browser without claiming download comple
     expect(dom).not.toContain(privateValue);
   }
   expect(dom).not.toContain(CANDIDATE_ID);
+
+  expect(completedActions).toEqual(PRIMARY_SUCCESS_ACTIONS);
+  expect(completedActions.length).toBeLessThanOrEqual(MAX_PRIMARY_SUCCESS_ACTIONS);
 });
 
 test('rejects invalid URL and missing rights before resolve is requested', async ({
