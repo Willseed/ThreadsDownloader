@@ -209,30 +209,52 @@ not establish any undocumented upstream Threads API semantics.
   destructive lifecycle operation; this task does not perform that operation.
 - Unconfirmed: documentation consistency for `wrangler versions upload` remains
   unconfirmed and this implementation does not depend on that command. Real
-  `DOWNLOAD_ENCRYPTION_KEY` secret provisioning is also unconfirmed and remains
-  a deployment item; tests inject an ephemeral key through Miniflare.
+  runtime secret presence and values are outside repository evidence; the
+  current Wrangler configuration records only their required names, while tests
+  inject controlled ephemeral values through Miniflare.
 
 ## Deployment inventory and decisions
 
-GitHub is public with default branch `main`, zero open pull requests, no rules,
-workflows, or secrets. Pages has had its custom CNAME removed; its source
-remains and HTTPS enforcement changed automatically from false to true.
+Repository evidence as of 2026-07-26 establishes the following deployment
+model:
 
-Cloudflare is active on Free. The `threads` CNAME continues to target
-`willseed.github.io` and remains proxied. Existing wildcard header-rule and
-tools link-header routes are preserved. There is no target Worker, public
-endpoint, custom domain, Pages deployment, Turnstile configuration, or
-dedicated token. Durable Objects are available.
+- `.github/workflows/main.yml` is the sole workflow. Pushes to `main` and manual
+  dispatches run the ordered `verify -> sonar -> deploy` jobs against an
+  immutable commit SHA. `verify` performs the pinned secret scan, dependency
+  audit, formatting, lint, type checks, coverage, Durable Object, Range,
+  security, end-to-end and accessibility tests, production builds, bundle and
+  Wrangler exposure scans, and a Wrangler dry run.
+- `sonar` consumes the four LCOV artifacts from that same SHA, runs the
+  SonarQube Cloud scan with the repository secret named `SONAR_TOKEN`, waits for
+  the Quality Gate, and runs `security:sonar` to require the exact revision and
+  zero open findings. Remote Automatic Analysis and Quality Gate administration
+  are not inferred from repository files.
+- `deploy` depends on both preceding jobs and targets the GitHub `production`
+  environment. It rebuilds the web bundle, repeats the bundle and Wrangler
+  exposure scans, requires the approved legal production marker, verifies that
+  the event SHA is still remote `main`, deploys with the repository secret names
+  `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, then probes the production
+  homepage and health endpoint.
+- `wrangler.jsonc` disables `workers_dev` and preview URLs, omits route and
+  custom-domain declarations, binds the production static assets, declares the
+  expected host and origin, and exports four SQLite Durable Objects. It requires
+  exactly the Worker secret names `DOWNLOAD_ENCRYPTION_KEY`,
+  `RESOLVED_MEDIA_GRANT_KEY`, `SESSION_SIGNING_KEY`, and `TURNSTILE_SECRET`; no
+  secret value is stored in the file.
+- Turnstile configuration keeps the public `TURNSTILE_SITE_KEY` variable
+  separate from the `TURNSTILE_SECRET` Worker binding. The Worker verifier
+  requires the configured hostname, fixed `resolve` action, bounded challenge
+  age, and one-time use through `TURNSTILE_REPLAYS`. The repository does not
+  establish the remote widget mode, remote hostname allowlist, credential
+  values, DNS state, or whether a credential is currently provisioned.
 
-SonarCloud has project `Willseed_ThreadsDownloader` in organization
-`uukbr6yqj4o8tuefbjxkmceuwcvkyrdk`, bound to GitHub. Automatic analysis is
-off; its quality gate is Sonar way, baseline is `previous_version`, and only
-`main` is configured. No analysis, token, or workflow exists.
-
-Approved changes: Pages unlinking is complete; preserve wildcard routes and add
-any future exact `threads` route without replacing them; introduce initial
-SQLite lifecycle exports with fixed storage; do not automatically roll back
-across lifecycle transitions. No secret or private account alias is stored.
+Evidence sources for this snapshot are `.github/workflows/main.yml`,
+`wrangler.jsonc`, `package.json`, `scripts/check-bundle-secrets.mjs`,
+`scripts/check-wrangler-exposure.mjs`, `scripts/check-deploy-readiness.mjs`,
+`scripts/check-sonar-open-issues.mjs`, and
+`apps/worker/src/security/turnstile.ts`. These sources define configuration and
+gates, not remote control-plane state. No secret value, account identifier, or
+token is recorded here.
 
 ## Atomic implementation order
 
