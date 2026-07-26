@@ -60,7 +60,7 @@ function fail(code: BrowserSessionErrorCode): never {
 }
 
 function isCookieNameCharacter(character: string): boolean {
-  const code = character.charCodeAt(0);
+  const code = character.codePointAt(0) ?? -1;
   return (
     (code >= 48 && code <= 57) ||
     (code >= 65 && code <= 90) ||
@@ -70,13 +70,22 @@ function isCookieNameCharacter(character: string): boolean {
 }
 
 function isCookieValueCharacter(character: string): boolean {
-  const code = character.charCodeAt(0);
+  const code = character.codePointAt(0) ?? -1;
   return (
     code === 33 ||
     (code >= 35 && code <= 43) ||
     (code >= 45 && code <= 58) ||
     (code >= 60 && code <= 126)
   );
+}
+
+function everyCharacter(value: string, predicate: (character: string) => boolean): boolean {
+  for (const character of value) {
+    if (!predicate(character)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function parseSessionCookie(cookieHeader: string | null): string {
@@ -94,8 +103,8 @@ function parseSessionCookie(cookieHeader: string | null): string {
     if (
       separator <= 0 ||
       separator !== part.lastIndexOf('=') ||
-      ![...part.slice(0, separator)].every(isCookieNameCharacter) ||
-      ![...part.slice(separator + 1)].every(isCookieValueCharacter)
+      !everyCharacter(part.slice(0, separator), isCookieNameCharacter) ||
+      !everyCharacter(part.slice(separator + 1), isCookieValueCharacter)
     ) {
       return fail('SESSION_COOKIE_INVALID');
     }
@@ -121,7 +130,7 @@ function parseContentLength(value: string | null): number | null {
 
   let length = 0;
   for (const character of value) {
-    const code = character.charCodeAt(0);
+    const code = character.codePointAt(0) ?? -1;
     if (code < 48 || code > 57) {
       return fail('CONTENT_LENGTH_INVALID');
     }

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BrowserSessionError,
   createBrowserSession,
+  type HeaderSource,
   MAX_COOKIE_HEADER_BYTES,
   MAX_JSON_BODY_BYTES,
   readBoundedJson,
@@ -19,6 +20,15 @@ import {
 } from '../src/security/cryptography.js';
 
 const encoder = new TextEncoder();
+
+function mutationHeaders(contentLength: string): HeaderSource {
+  const values = new Map([
+    ['origin', 'https://threads.example'],
+    ['content-type', 'application/json'],
+    ['content-length', contentLength],
+  ]);
+  return { get: (name) => values.get(name) ?? null };
+}
 
 async function signer(): Promise<OpaqueValueSigner> {
   return createOpaqueValueSigner(
@@ -89,6 +99,9 @@ describe('browser session material', () => {
     `${SESSION_COOKIE_NAME}=one; ${SESSION_COOKIE_NAME}=two`,
     `${SESSION_COOKIE_NAME}`,
     `${SESSION_COOKIE_NAME}=bad=value`,
+    SESSION_COOKIE_NAME + '=😀',
+    'emoji😀=value; ' + SESSION_COOKIE_NAME + '=signed',
+    SESSION_COOKIE_NAME + '=\uD800',
   ])('rejects missing, malformed, duplicate, or tampered cookies', async (cookie) => {
     await expectSafeAsyncError(
       () => resumeBrowserSession(cookie, awaitableSigner),
@@ -184,6 +197,8 @@ describe('mutation request policy', () => {
       }),
       'BODY_TOO_LARGE',
     ],
+    [mutationHeaders('42😀'), 'CONTENT_LENGTH_INVALID'],
+    [mutationHeaders('42\uD800'), 'CONTENT_LENGTH_INVALID'],
   ])('rejects unsafe mutation headers', (requestHeaders, code) => {
     expectSafeError(() => validateMutationHeaders(requestHeaders, 'https://threads.example'), code);
   });
