@@ -19,6 +19,11 @@ import {
   DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS,
   downloadHeaderEvidenceSource,
   DownloadSessionClientError,
+  encodeDownloadSessionAcquireRequest,
+  encodeDownloadSessionFinishRequest,
+  encodeDownloadSessionIdentityRequest,
+  encodeDownloadSessionInterruptRequest,
+  encodeDownloadSessionRenewRequest,
   encodeDownloadHeaderEvidence,
   finishDownloadSessionStream,
   initializeDownloadSession,
@@ -253,6 +258,26 @@ describe('download session exact request decoders', () => {
     expect(decodeDownloadSessionInterruptRequest(interruption)).toEqual(interruption);
     expect(decodeDownloadSessionInterruptRequest(renewal)).toBeNull();
   });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['zero', 0],
+    ['false', false],
+  ] as const)('rejects %s across every exact request encoder', (_name, value) => {
+    const encoders = [
+      encodeDownloadSessionIdentityRequest,
+      encodeDownloadSessionAcquireRequest,
+      encodeDownloadSessionRenewRequest,
+      encodeDownloadSessionFinishRequest,
+      encodeDownloadSessionInterruptRequest,
+    ] as const;
+
+    for (const encode of encoders) {
+      expect(() => encode(value as never)).toThrowError('DOWNLOAD_SESSION_REQUEST_INVALID');
+    }
+  });
 });
 
 describe('download session strict response decoders', () => {
@@ -364,6 +389,19 @@ describe('download session strict response decoders', () => {
       decodeDownloadSessionAcquireResponse({
         ...acquireResponse,
         request: { ...acquireResponse.request, representationPin: null },
+      }),
+    ).toBeNull();
+    expect(
+      decodeDownloadSessionAcquireResponse({
+        ...acquireResponse,
+        media: encodeProbedMediaWire(
+          media({
+            strongEtag: null,
+            lastModified: null,
+            validator: null,
+            completionReliable: false,
+          }),
+        ),
       }),
     ).toBeNull();
     expect(

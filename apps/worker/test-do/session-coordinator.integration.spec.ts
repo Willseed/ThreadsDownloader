@@ -537,6 +537,22 @@ describe('SessionCoordinator in workerd', () => {
     expect(stored).not.toContain(csrfToken);
   });
 
+  it('keeps permit mutations unauthorized when the session record is absent', async () => {
+    const stub = sessionStub('missing-permit-session');
+    const sessionHash = await hashIdentifier('missing-permit-session');
+    const downloadId = createOpaqueId();
+    const permitId = createOpaqueId();
+
+    for (const [operation, request] of [
+      ['acquire', { sessionHash, downloadId, permitId }],
+      ['renew', { sessionHash, downloadId, permitId, sequence: 1 }],
+      ['release', { sessionHash, downloadId, permitId }],
+    ] as const) {
+      expect((await sessionDownloadPermit(stub, operation, request)).status).toBe(401);
+    }
+    expect((await releasePermit(stub, sessionHash, permitId, Date.now())).status).toBe(401);
+  });
+
   it('authorizes exact hashes, preserves expiry, and survives a new stub handle', async () => {
     const rawId = 'restartable-object';
     const sessionHash = await hashIdentifier(rawId);

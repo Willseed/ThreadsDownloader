@@ -67,6 +67,13 @@ function permitResponse(body: Record<string, unknown>, sequence: number): Respon
   );
 }
 
+function primitiveJsonResponse(value: unknown, status: number): Response {
+  return new Response(value === undefined ? null : JSON.stringify(value), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
 describe('session download admission client', () => {
   it('keeps raw session identity out of wire payloads and serializes capability mutations', async () => {
     const harness = namespaceHarness(({ path, body }) => {
@@ -161,6 +168,47 @@ describe('session download admission client', () => {
       '/download-permits/release',
     ]);
     expect(harness.requests[1]!.body['permitId']).toBe(harness.requests[0]!.body['permitId']);
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['zero', 0],
+    ['false', false],
+  ] as const)('rejects %s success bodies on acquire and renew', async (_name, value) => {
+    for (const invalidOperation of ['acquire', 'renew'] as const) {
+      const harness = namespaceHarness(({ path, body }) => {
+        if (path === '/download-permits/acquire') {
+          return invalidOperation === 'acquire'
+            ? primitiveJsonResponse(value, 201)
+            : permitResponse(body, 0);
+        }
+        if (path === '/download-permits/renew') {
+          return primitiveJsonResponse(value, 200);
+        }
+        return Response.json({ ok: true });
+      });
+
+      if (invalidOperation === 'acquire') {
+        await expect(
+          acquireSessionDownloadAdmission(harness.namespace, input, clock),
+        ).rejects.toMatchObject({ code: 'SESSION_DOWNLOAD_UNAVAILABLE' });
+        expect(harness.requests.map((request) => request.path)).toEqual([
+          '/download-permits/acquire',
+          '/download-permits/release',
+        ]);
+      } else {
+        const admission = await acquireSessionDownloadAdmission(harness.namespace, input, clock);
+        await expect(admission.renew()).rejects.toMatchObject({
+          code: 'SESSION_DOWNLOAD_UNAVAILABLE',
+        });
+        expect(harness.requests.map((request) => request.path)).toEqual([
+          '/download-permits/acquire',
+          '/download-permits/renew',
+        ]);
+      }
+    }
   });
 
   it.each([receivedAt, receivedAt + 44_999, receivedAt + 90_001])(

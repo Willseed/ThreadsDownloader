@@ -693,9 +693,8 @@ export function decodeDownloadSessionAcquireResponse(
     (pin !== null) !== hasReliableRepresentation ||
     (pin !== null &&
       (pin.total !== media.contentLength ||
-        media.validator === null ||
-        pin.validator.kind !== media.validator.kind ||
-        pin.validator.value !== media.validator.value)) ||
+        media.validator?.kind !== pin.validator.kind ||
+        media.validator?.value !== pin.validator.value)) ||
     (request.requestedInterval !== null && request.requestedInterval.total !== media.contentLength)
   ) {
     return null;
@@ -768,35 +767,35 @@ export function encodeDownloadSessionIdentityRequest(
   input: DownloadSessionIdentityRequest,
 ): DownloadSessionIdentityRequest {
   const decoded = decodeDownloadSessionIdentityRequest(input);
-  return decoded === null ? invalidRequest() : decoded;
+  return decoded ?? invalidRequest();
 }
 
 export function encodeDownloadSessionAcquireRequest(
   input: DownloadSessionAcquireRequest,
 ): DownloadSessionAcquireRequest {
   const decoded = decodeDownloadSessionAcquireRequest(input);
-  return decoded === null ? invalidRequest() : decoded;
+  return decoded ?? invalidRequest();
 }
 
 export function encodeDownloadSessionRenewRequest(
   input: DownloadSessionRenewRequest,
 ): DownloadSessionRenewRequest {
   const decoded = decodeDownloadSessionRenewRequest(input);
-  return decoded === null ? invalidRequest() : decoded;
+  return decoded ?? invalidRequest();
 }
 
 export function encodeDownloadSessionFinishRequest(
   input: DownloadSessionFinishRequest,
 ): DownloadSessionFinishRequest {
   const decoded = decodeDownloadSessionFinishRequest(input);
-  return decoded === null ? invalidRequest() : decoded;
+  return decoded ?? invalidRequest();
 }
 
 export function encodeDownloadSessionInterruptRequest(
   input: DownloadSessionInterruptRequest,
 ): DownloadSessionInterruptRequest {
   const decoded = decodeDownloadSessionInterruptRequest(input);
-  return decoded === null ? invalidRequest() : decoded;
+  return decoded ?? invalidRequest();
 }
 
 function decodeUnsatisfiedContentRange(value: string | null): string | null {

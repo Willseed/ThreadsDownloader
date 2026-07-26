@@ -157,7 +157,7 @@ function inspectRepresentationValidators(
 }
 
 function parseContentRange(value: string | null): ByteInterval {
-  if (value === null || !value.startsWith('bytes ')) {
+  if (!value?.startsWith('bytes ')) {
     return fail('UPSTREAM_RANGE_INVALID');
   }
   const payload = value.slice('bytes '.length);

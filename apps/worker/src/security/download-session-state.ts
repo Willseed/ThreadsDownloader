@@ -507,7 +507,7 @@ function resolveRequestedInterval(
 
 function findLease(state: DownloadSessionState, holderId: string): DownloadStreamLease {
   const lease = state.leases.find((candidate) => candidate.holderId === holderId);
-  return lease === undefined ? fail('DOWNLOAD_LEASE_INVALID') : lease;
+  return lease ?? fail('DOWNLOAD_LEASE_INVALID');
 }
 
 export function issueDownloadSession(input: IssueDownloadSessionInput): DownloadSessionState {

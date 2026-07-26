@@ -188,6 +188,7 @@ describe('createTransferPlan', () => {
 
   it.each([
     [{ 'content-range': 'bytes 2-5/*' }],
+    [{ 'content-range': '' }],
     [{ 'content-range': 'bytes 2-4/10' }],
     [{ 'content-range': 'bytes 2-5/10', 'content-length': '3' }],
     [{ 'content-range': 'bytes 2-5/11' }],

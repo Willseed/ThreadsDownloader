@@ -266,11 +266,7 @@ class RemoteSessionDownloadAdmission implements SessionDownloadAdmission {
       } catch {
         decoded = null;
       }
-      if (
-        decoded === null ||
-        decoded.permitId !== this.binding.permitId ||
-        decoded.sequence !== sequence
-      ) {
+      if (decoded?.permitId !== this.binding.permitId || decoded?.sequence !== sequence) {
         throw unavailable();
       }
       this.sequence = decoded.sequence;
@@ -338,7 +334,7 @@ export async function acquireSessionDownloadAdmission(
   } catch {
     decoded = null;
   }
-  if (decoded === null || decoded.permitId !== permitId || decoded.sequence !== 0) {
+  if (decoded?.permitId !== permitId || decoded?.sequence !== 0) {
     await bestEffortRelease(stub, binding);
     throw unavailable();
   }

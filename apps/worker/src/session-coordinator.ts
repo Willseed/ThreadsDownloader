@@ -913,7 +913,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       }
       this.pruneResolveStorage(reservedAt);
       const row = this.readVaultCandidate(input.resolveId, input.candidateId);
-      if (row === undefined || row['state'] !== 'ready') {
+      if (row?.['state'] !== 'ready') {
         return { status: 404 } as const;
       }
       if (row['session_hash'] !== input.sessionHash) {
@@ -1031,7 +1031,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       }
       this.pruneResolveStorage(confirmedAt);
       const current = this.readVaultCandidate(input.resolveId, input.candidateId);
-      if (current === undefined || current['state'] !== 'ready') {
+      if (current?.['state'] !== 'ready') {
         return 404;
       }
       if (current['session_hash'] !== input.sessionHash) {
@@ -1374,8 +1374,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       result = this.ctx.storage.transactionSync(() => {
         const record = this.readRecord();
         if (
-          record === null ||
-          record.sessionHash !== input.sessionHash ||
+          record?.sessionHash !== input.sessionHash ||
           record.expiresAt - acquiredAt < SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS
         ) {
           return { status: 401 } as const;
@@ -1468,8 +1467,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       result = this.ctx.storage.transactionSync(() => {
         const record = this.readRecord();
         if (
-          record === null ||
-          record.sessionHash !== input.sessionHash ||
+          record?.sessionHash !== input.sessionHash ||
           record.expiresAt - renewedAt < SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS
         ) {
           return { status: 401 } as const;
@@ -1554,7 +1552,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     try {
       result = this.ctx.storage.transactionSync(() => {
         const record = this.readRecord();
-        if (record === null || record.sessionHash !== input.sessionHash) {
+        if (record?.sessionHash !== input.sessionHash) {
           return { status: 401 } as const;
         }
         try {
@@ -1641,8 +1639,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     const result = this.ctx.storage.transactionSync(() => {
       const record = this.readRecord();
       if (
-        record === null ||
-        record.sessionHash !== input.sessionHash ||
+        record?.sessionHash !== input.sessionHash ||
         !Number.isSafeInteger(input.now) ||
         input.now < 0 ||
         input.now >= record.expiresAt
