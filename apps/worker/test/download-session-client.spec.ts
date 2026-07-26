@@ -316,6 +316,9 @@ describe('download session strict response decoders', () => {
     expect(
       decodeDownloadSessionStatusResponse({ ...statusResponse, activeStreams: 0.5 }),
     ).toBeNull();
+    for (const strongEtag of ['"😀"', '"\uD800"']) {
+      expect(decodeDownloadSessionStatusResponse({ ...statusResponse, strongEtag })).toBeNull();
+    }
     expect(decodeDownloadSessionStatusResponse({ ...statusResponse, contentLength: 0 })).toBeNull();
     expect(decodeDownloadSessionStatusResponse({ ...statusResponse, activeStreams: 5 })).toBeNull();
     expect(

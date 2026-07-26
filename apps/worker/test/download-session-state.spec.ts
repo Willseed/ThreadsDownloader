@@ -176,6 +176,17 @@ describe('download session issue and inspection', () => {
         }),
       'DOWNLOAD_STATE_INVALID',
     );
+    for (const value of ['"😀"', '"\uD800"']) {
+      expectStateError(
+        () =>
+          issueDownloadSession({
+            now: NOW,
+            total: 100,
+            validator: { kind: 'etag', value },
+          }),
+        'DOWNLOAD_STATE_INVALID',
+      );
+    }
   });
 
   it('projects exact start expiry without mutating durable state', () => {

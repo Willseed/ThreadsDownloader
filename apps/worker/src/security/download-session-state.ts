@@ -178,7 +178,7 @@ function isStrongEtag(value: unknown): value is string {
     return false;
   }
   for (let index = 1; index < value.length - 1; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index)!;
     if (code < 33 || code > 126 || code === 34) {
       return false;
     }

@@ -13,10 +13,18 @@ import {
   RangeTransferError,
   representationsMatch,
   type ByteInterval,
+  type HeaderSource,
 } from '../src/security/range-transfer.js';
 
 function headers(entries: Record<string, string>): Headers {
   return new Headers(entries);
+}
+
+function rawHeaders(entries: Record<string, string>): HeaderSource {
+  const normalized = new Map(
+    Object.entries(entries).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  return { get: (name) => normalized.get(name.toLowerCase()) ?? null };
 }
 
 function expectRangeError(action: () => unknown, code: string): void {
@@ -56,6 +64,10 @@ describe('parseSingleByteRange', () => {
     ['bytes=0-9007199254740992', 10, 'RANGE_INVALID'],
   ])('rejects unsafe or unsatisfiable ranges', (value, total, code) => {
     expectRangeError(() => parseSingleByteRange(value, total), code);
+  });
+
+  it.each(['😀', '\uD800'])('rejects non-ASCII numeric code points: %s', (value) => {
+    expectRangeError(() => parseSingleByteRange('bytes=0-' + value, 10), 'RANGE_INVALID');
   });
 
   it('returns a 416-safe Content-Range for range errors', () => {
@@ -163,6 +175,16 @@ describe('validators and If-Range', () => {
   it('keeps validator extraction independent from unrelated invalid length metadata', () => {
     const source = headers({ 'content-length': 'private-invalid', etag: '"v1"' });
     expect(extractRepresentationValidator(source)).toEqual({ kind: 'etag', value: '"v1"' });
+    expectRangeError(() => inspectRepresentationHeaders(source), 'UPSTREAM_RANGE_INVALID');
+  });
+
+  it.each(['😀', '\uD800'])('rejects non-ASCII header grammar code points: %s', (value) => {
+    const source = rawHeaders({
+      'content-length': '1' + value,
+      etag: '"' + value + '"',
+    });
+
+    expect(extractRepresentationValidator(source)).toBeNull();
     expectRangeError(() => inspectRepresentationHeaders(source), 'UPSTREAM_RANGE_INVALID');
   });
 });

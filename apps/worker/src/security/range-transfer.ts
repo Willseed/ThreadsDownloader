@@ -89,7 +89,7 @@ function parseDecimal(value: string): number | null {
 
   let parsed = 0;
   for (const character of value) {
-    const code = character.charCodeAt(0);
+    const code = character.codePointAt(0)!;
     if (code < 48 || code > 57) {
       return null;
     }
@@ -121,7 +121,7 @@ function parseStrongEtag(value: string | null): StrongEtagValidator | null {
     return null;
   }
   for (let index = 1; index < value.length - 1; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index)!;
     if (code < 33 || code > 126 || code === 34) {
       return null;
     }
