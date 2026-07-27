@@ -21,7 +21,7 @@ export const MESSAGE_CATALOGS = {
 } as const satisfies Readonly<Record<SupportedLocale, MessageCatalog>>;
 
 function isSupportedLocale(value: unknown): value is SupportedLocale {
-  return typeof value === 'string' && SUPPORTED_LOCALES.some((locale) => locale === value);
+  return typeof value === 'string' && SUPPORTED_LOCALES.includes(value as SupportedLocale);
 }
 
 @Injectable({ providedIn: 'root' })
