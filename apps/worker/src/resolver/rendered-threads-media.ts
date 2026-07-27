@@ -15,7 +15,6 @@ const MAX_ATTRIBUTE_NAME_LENGTH = 128;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 4096;
 const MAX_HTML_LENGTH = 32 * 1024;
 const MAX_TEXT_LENGTH = 16 * 1024;
-const MAX_CANDIDATES = 1;
 const MAX_LAYOUT_MAGNITUDE = 10_000_000;
 const CANONICAL_CONTENT_LENGTH = /^(?:0|[1-9]\d*)$/u;
 const JSON_MEDIA_TYPE = 'application/json';
@@ -416,9 +415,6 @@ function collectCandidates(
       continue;
     }
     candidates.set(candidate.value.url.href, candidates.get(candidate.value.url.href) ?? candidate);
-    if (candidates.size > MAX_CANDIDATES) {
-      return fail('RENDERED_RESPONSE_INVALID');
-    }
   }
 }
 
@@ -459,7 +455,7 @@ function decodeCandidates(
       collectCandidates(elements, target, candidates);
     }
   }
-  return [...candidates.values()];
+  return [...candidates.values()].slice(0, 1);
 }
 
 async function decodeResponse(

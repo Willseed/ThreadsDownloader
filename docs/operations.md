@@ -190,8 +190,9 @@ production binding 改成 remote development 設定。
    可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在每次既有六秒 action
    limit 內。第一次只有在 exact `RENDERED_MEDIA_NOT_FOUND` 且仍有 38 秒租約時，才能對
    相同 canonical post 再做一次；第二次之後不再重試。
-4. 只接受 canonical 與 Open Graph identity 都吻合、且恰好一個允許 CDN 候選的結果；
-   候選仍須通過既有 media probe、vault 與同源下載流程。
+4. 只接受 canonical 與 Open Graph identity 都吻合、且至少一個允許 CDN 候選的結果；
+   多個候選依 scrape／DOM 順序穩定選第一個。候選仍須通過既有 media probe、vault 與
+   同源下載流程。
 
 Browser Run 是按用量計費且受平台 quota 限制。部署前後要在 Cloudflare Browser Run
 的 **Overview** 與 **Runs** 檢查總 sessions、browser hours、Quick Action requests、
@@ -211,7 +212,8 @@ carousel、圖片、私人／已刪除貼文、登入／challenge 頁、跨貼�
 remote proof 已成功，這個 typed transport failure 納入 bounded fallback。這不是
 access-control bypass：兩條路徑都只匿名存取同一個公開 Threads origin，不傳 Cookie、
 client headers 或 credentials；renderer 仍只使用 server 建立的 canonical `/media`
-網址，要求 canonical 與 Open Graph identity 一致且只有一個候選，並繼續通過既有
+網址，要求 canonical 與 Open Graph identity 一致且至少一個允許候選，依 scrape／DOM
+順序選第一個，並繼續通過既有
 media probe、encrypted vault 與 same-origin download。login、access-denied、rate-limited、
 bot-blocked、redirect 與 policy failure 仍不得進入 Browser Run。
 
@@ -225,8 +227,9 @@ code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `vid
 同日 exact production resolver 的重複 remote-dev 診斷，在相同匿名公開貼文上觀察到
 第一次零候選、後續一次單一有效候選，也另觀察到 canonical／Open Graph identity 皆
 吻合但有三個不同候選的結果。工作流程因此只吸收第一次 exact
-`RENDERED_MEDIA_NOT_FOUND` 的瞬時波動；首試成功不重試，多候選、identity、provider、
-transport、格式或 policy failure 都不重試。重試前至少須剩餘 38 秒，涵蓋第二次最多
+`RENDERED_MEDIA_NOT_FOUND` 的瞬時波動；首試成功不重試，多候選依順序取第一個，
+identity、provider、transport、格式或 policy failure 都不重試。重試前至少須剩餘 38
+秒，涵蓋第二次最多
 12 秒 rendered resolver、8 秒 probe、兩次各 8 秒 vault 與 2 秒 margin，總流程不超過
 既有 60 秒 permit；失敗路徑最多消耗兩次 Browser Run 計費請求。兩次獨立的 fresh
 production request 都曾得到零候選，因此這個重試只降低瞬時失敗機率，不保證不同執行

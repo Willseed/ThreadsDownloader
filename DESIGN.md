@@ -292,9 +292,11 @@ not establish any undocumented upstream Threads API semantics.
   `content` must both equal the normalized canonical post. Candidates come only
   from full-page `video[src]` and
   `video source[src]`; zero canonically deduplicated CDN candidates is not found
-  and more than one fails closed rather than guessing among post and
-  recommendation videos. These upstream-authored DOM identity declarations are
-  not described as proof of the browser's final location.
+  and one or more candidates deterministically select the first allowed URL in
+  scrape/DOM order. This ordering is an explicit download-first MVP tradeoff,
+  not proof that the selected video belongs to the post. These upstream-authored
+  DOM identity declarations are not described as proof of the browser's final
+  location.
 - Downstream enforcement: the observed FNA hostname shape was added to the one
   central CDN parser without allowing the `fbcdn.net` apex, broad subdomains,
   extra labels, non-default ports, credentials, fragments, or lookalikes.
@@ -333,8 +335,8 @@ not establish any undocumented upstream Threads API semantics.
   remain. The worst case after that gate is twelve seconds for the second
   rendered response plus the existing 26-second probe, vault, and margin
   budget, so it remains within the fixed 60-second permit. A successful first
-  render and every unavailable, invalid-identity, multiple-candidate, or other
-  invalid response are never retried. Compared with the former 30-second
+  render and every unavailable, invalid-identity, or other invalid response are
+  never retried. Compared with the former 30-second
   lease, a crashed resolve can occupy its session/IP concurrency slot for at
   most 30 additional seconds; successful and handled failures still release
   immediately.
@@ -374,7 +376,7 @@ not establish any undocumented upstream Threads API semantics.
   bounded fallback allowset. This is not an access-control bypass: both paths
   access the same public Threads origin without cookies, forwarded headers, or
   credentials; the server still constructs the canonical `/media` URL, requires
-  matching canonical and Open Graph identity with exactly one candidate, and
+  matching canonical and Open Graph identity with at least one allowed candidate, and
   applies the existing media probe, encrypted vault, and same-origin download
   boundary. Login, access-denied, rate-limited, bot-blocked, redirect, and policy
   failures remain non-fallback.
@@ -392,11 +394,13 @@ not establish any undocumented upstream Threads API semantics.
   candidates and a later single valid candidate; a separate run produced three
   distinct allowed candidates while canonical and Open Graph identity still
   matched. The retry therefore handles only the observed transient zero-result
-  state. It does not select among multiple videos or retry provider, transport,
-  identity, malformed-response, or policy failures. No competitor backend
-  behavior is inferred from browser timing observations. Two independent fresh
-  production requests also returned zero candidates, so one retry is not
-  claimed to guarantee recovery in every execution region.
+  state. At the user's explicit direction, one or more allowed candidates now
+  select the first scrape/DOM result to prioritize a usable download; provider,
+  transport, identity, malformed-response, and policy failures are still not
+  retried. No competitor backend behavior is inferred from browser timing
+  observations. Two independent fresh production requests also returned zero
+  candidates, so one retry is not claimed to guarantee recovery in every
+  execution region.
 - Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or
@@ -406,9 +410,9 @@ not establish any undocumented upstream Threads API semantics.
   evidence, not a direct final-location proof. `quickAction()` exposes no final
   URL or redirect chain and accepts no AbortSignal; request patterns contain
   each browser request's origin but do not prove every redirect hop. With no
-  stable post-scoped selector, canonical identity plus a unique full-page video
-  cannot completely exclude a recommendation video; this remains a stated
-  limitation of the single-video MVP rather than an inferred guarantee. A late
+  stable post-scoped selector, canonical identity plus the first allowed
+  full-page video cannot exclude a recommendation video; this remains a stated
+  limitation of the download-first MVP rather than an inferred guarantee. A late
   provider response is rejected by the subsequent lease deadline gate, not
   locally hard-cancelled. Activation changes only the reviewed binding and
   exposure gate; failure must not cause automatic host, cookie, header, or

@@ -800,7 +800,7 @@ describe('resolve public media workflow', () => {
     },
   );
 
-  it('fails closed before probing when rendering returns two distinct valid videos', async () => {
+  it('probes only the first rendered result when rendering returns multiple valid videos', async () => {
     const secondUrl = 'https://video.cdninstagram.com/related.mp4?token=private-related-token';
     const harness = createHarness({
       markupResponse: () =>
@@ -826,11 +826,12 @@ describe('resolve public media workflow', () => {
 
     const result = await execute(harness);
 
-    expect(result.response.status).toBe(503);
-    expectError(result.body, 'RESOLVE_UNAVAILABLE');
+    expect(result.response.status).toBe(200);
     expect(harness.controls.rendererCalls).toHaveLength(1);
-    expect(harness.controls.probeRequests).toEqual([]);
-    expect(harness.controls.vaultBodies).toEqual([]);
+    expect(harness.controls.probeRequests.map(({ url }) => url)).toEqual([RENDERED_PRIVATE_URL]);
+    expect(harness.controls.vaultBodies[0]!['candidates']).toEqual([
+      expect.objectContaining({ finalUrl: RENDERED_PRIVATE_URL }),
+    ]);
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, secondUrl, 'private-related-token']);
   });
 

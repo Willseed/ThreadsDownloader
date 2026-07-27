@@ -287,20 +287,25 @@ describe('rendered Threads media resolver response contract', () => {
     );
   });
 
-  it('fails closed on multiple unique videos instead of guessing post provenance', async () => {
-    const results = Array.from({ length: 2 }, (_, index) =>
-      element([
-        {
-          name: 'src',
-          value: `https://video.cdninstagram.com/${String(index)}.mp4?token=private-${String(index)}`,
-        },
-      ]),
-    );
-    await expectResolverError(
-      resolver(browserReturning(() => jsonResponse(successBody(results)))).resolve(post),
-      'RENDERED_RESPONSE_INVALID',
-      ['private-1'],
-    );
+  it('selects the first allowed video deterministically from multiple unique results', async () => {
+    const results = [
+      element([{ name: 'src', value: 'https://attacker.example/blocked.mp4' }]),
+      ...Array.from({ length: 2 }, (_, index) =>
+        element([
+          {
+            name: 'src',
+            value: `https://video.cdninstagram.com/${String(index)}.mp4?token=private-${String(index)}`,
+          },
+        ]),
+      ),
+    ];
+    const result = await resolver(
+      browserReturning(() => jsonResponse(successBody(results))),
+    ).resolve(post);
+
+    expect(result.candidates.map(({ value }) => value.url.href)).toEqual([
+      'https://video.cdninstagram.com/0.mp4?token=private-0',
+    ]);
   });
 
   it.each([
