@@ -139,8 +139,20 @@ const oauthDiscovery = {
   authorization_endpoint: 'https://threads.pylot.dev/oauth/authorize',
   token_endpoint: 'https://threads.pylot.dev/oauth/token',
   jwks_uri: 'https://threads.pylot.dev/.well-known/jwks.json',
+  registration_endpoint: 'https://threads.pylot.dev/auth/agent/register',
   response_types_supported: ['code'],
   grant_types_supported: ['authorization_code', 'refresh_token'],
+  code_challenge_methods_supported: ['S256'],
+  identity_types_supported: ['agent_uri'],
+  id_token_signing_alg_values_supported: ['RS256'],
+  identity_assertion: 'https://threads.pylot.dev/.well-known/agent-card.json',
+  agent_auth: {
+    register_uri: 'https://threads.pylot.dev/auth/agent/register',
+    identity_endpoint: 'https://threads.pylot.dev/.well-known/agent-card.json',
+    claim_endpoint: 'https://threads.pylot.dev/.well-known/agent-skills/index.json',
+    revocation_endpoint: 'https://threads.pylot.dev/oauth/revoke',
+    identity_types_supported: ['agent_uri'],
+  },
 };
 
 const oauthProtectedResource = {
@@ -168,6 +180,13 @@ const agentCard = {
   name: 'Threads Downloader',
   version: '1.0.0',
   description: 'Agent discovery and media download capabilities for Threads public posts.',
+  skills: [
+    {
+      id: 'threads-public-download',
+      name: 'threads-public-download',
+      description: 'Resolve and download public Threads post media.',
+    },
+  ],
   supportedInterfaces: [
     {
       url: 'https://threads.pylot.dev',
@@ -340,7 +359,23 @@ app.get('/sitemap.xml', () => sitemapResponse());
 app.get('/auth.md', () =>
   markdownResponse(
     `# auth.md\n\nThis site supports manual agent registration discovery metadata.\n\n` +
-      `## Resource\n\nUse the OAuth endpoint set in /.well-known/oauth-authorization-server.\n`,
+      `## Agent registration\n\n` +
+      `This service supports AI agent registration via the endpoint metadata below.\n\n` +
+      `## Discovery metadata\n` +
+      `- Agent card: https://threads.pylot.dev/.well-known/agent-card.json\n` +
+      `- A2A card: https://threads.pylot.dev/.well-known/agent-skills/index.json\n` +
+      `- OAuth discovery: https://threads.pylot.dev/.well-known/oauth-authorization-server\n\n` +
+      '```json\n' +
+      '{\n' +
+      '  "agent_auth": {\n' +
+      '    "register_uri": "https://threads.pylot.dev/auth/agent/register",\n' +
+      '    "identity_endpoint": "https://threads.pylot.dev/.well-known/agent-card.json",\n' +
+      '    "claim_endpoint": "https://threads.pylot.dev/.well-known/agent-skills/index.json",\n' +
+      '    "identity_types_supported": ["agent_uri"],\n' +
+      '    "identity_assertion": "https://threads.pylot.dev/.well-known/agent-card.json"\n' +
+      '  }\n' +
+      '}\n' +
+      '```\n',
   ),
 );
 app.get('/.well-known/api-catalog', () => Response.json(apiCatalog));

@@ -6,6 +6,7 @@ import { provideRouter, TitleStrategy } from '@angular/router';
 import { AppComponent } from './app/app.js';
 import { appRoutes } from './app/app.routes.js';
 import { LocalizedTitleStrategy } from './app/core/i18n/i18n.js';
+import './agent-webmcp.js';
 
 void bootstrapApplication(AppComponent, {
   providers: [

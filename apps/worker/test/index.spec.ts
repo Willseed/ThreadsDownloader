@@ -294,6 +294,8 @@ describe('worker entry policy', () => {
     const apiCatalog = await fetchWorker('/.well-known/api-catalog', env);
     const mcpServerCard = await fetchWorker('/.well-known/mcp.json', env);
     const agentSkills = await fetchWorker('/.well-known/agent-skills/index.json', env);
+    const agentCard = await fetchWorker('/.well-known/agent-card.json', env);
+    const authMd = await fetchWorker('/auth.md', env);
 
     expect(robots.status).toBe(200);
     expect(robots.headers.get('content-type')).toBe('text/plain');
@@ -327,6 +329,27 @@ describe('worker entry policy', () => {
     expect(await agentSkills.json()).toMatchObject({
       $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
     });
+    expect(agentSkills.status).toBe(200);
+
+    const agentCardJson = await agentCard.json();
+    expect(agentCardJson).toMatchObject({
+      name: 'Threads Downloader',
+      skills: [
+        {
+          id: 'threads-public-download',
+          name: 'threads-public-download',
+        },
+      ],
+    });
+    expect(agentCard.headers.get('content-type')).toBe('application/json');
+    expect(agentCard.status).toBe(200);
+
+    const authMdBody = await authMd.text();
+    expect(authMdBody).toContain('## Agent registration');
+    expect(authMdBody).toContain('agent_auth');
+    expect(authMd.status).toBe(200);
+    expect(authMd.headers.get('content-type')).toBe('text/markdown');
+
     expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
