@@ -11,7 +11,10 @@ import { SESSION_COOKIE_NAME } from '../src/security/browser-session.js';
 import { createOpaqueValueSigner, importSigningKey } from '../src/security/cryptography.js';
 import type { IpRateLimitNamespace } from '../src/security/resolve-limits.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
-import { RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
+import {
+  RESOLVE_VAULT_MAX_BATCH_CANDIDATES,
+  RESOLVE_VAULT_TTL_MS,
+} from '../src/security/resolve-vault.js';
 import type { TurnstileReplayNamespace } from '../src/security/turnstile.js';
 import type { RenderedThreadsPagePort } from '../src/resolver/rendered-threads-media.js';
 import { IP_RESOLVE_PERMIT_LEASE_MS, RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
@@ -166,6 +169,9 @@ function sessionNamespace(options: HarnessOptions, controls: HarnessControls): S
               return options.vaultResponse(body);
             }
             const candidates = body['candidates'] as readonly Record<string, unknown>[];
+            if (candidates.length > RESOLVE_VAULT_MAX_BATCH_CANDIDATES) {
+              return jsonResponse({ ok: false }, 400);
+            }
             return jsonResponse(
               {
                 ok: true,
@@ -841,6 +847,46 @@ describe('resolve public media workflow', () => {
     ]);
     expect(harness.controls.failureEvents).toEqual([]);
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, 'private rendered probe transport']);
+  });
+
+  it('bounds the rendered transport fallback to the same eight probed candidates', async () => {
+    const urls = defaultUrls(16);
+    const transportSecret = 'private rendered batch probe transport';
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      rendererResponse: (url) => renderedPage(url, urls),
+      probeResponse: () => Promise.reject(new Error(transportSecret)),
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(200);
+    const probedUrls = urls.slice(0, 8);
+    expect(
+      harness.controls.probeRequests
+        .filter((request) => request.method === 'HEAD')
+        .map((request) => request.url),
+    ).toEqual(probedUrls);
+    expect(
+      harness.controls.probeRequests
+        .filter((request) => request.method === 'GET')
+        .map((request) => request.url),
+    ).toEqual(probedUrls);
+    const stored = harness.controls.vaultBodies[0]!['candidates'] as readonly Record<
+      string,
+      unknown
+    >[];
+    expect(stored).toHaveLength(8);
+    expect(stored.map((candidate) => candidate['finalUrl'])).toEqual(probedUrls);
+    expect(stored.map((candidate) => candidate['probeMethod'])).toEqual(
+      Array.from({ length: 8 }, () => 'unverified'),
+    );
+    expect((JSON.parse(result.body) as { candidates: unknown[] }).candidates).toHaveLength(8);
+    expect(harness.controls.failureEvents).toEqual([]);
+    expectPublicBodySafe(result.body, [...urls, transportSecret]);
   });
 
   it.each([

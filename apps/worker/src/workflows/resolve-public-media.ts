@@ -443,12 +443,17 @@ function transientProbeFailure(error: MediaProbeError): boolean {
   return error.code === 'MEDIA_PROBE_ABORTED' || error.code === 'MEDIA_PROBE_UNAVAILABLE';
 }
 
-async function probeCandidates(
+function selectProbeCandidates(
   postCandidates: readonly MediaCandidate[],
+): readonly MediaCandidate[] {
+  return postCandidates.slice(0, MAX_PROBE_CANDIDATES);
+}
+
+async function probeCandidates(
+  candidates: readonly MediaCandidate[],
   runtime: ResolvePublicMediaRuntime,
 ): Promise<readonly ProbedMedia[]> {
   const probe = createMediaProbe({ fetch: (request) => runtime.fetcher(request) });
-  const candidates = postCandidates.slice(0, MAX_PROBE_CANDIDATES);
   const settled = await Promise.allSettled(
     candidates.map((candidate) => probe.probe(candidate.value)),
   );
@@ -584,9 +589,10 @@ async function resolveWithLease(
   );
 
   const resolved = await resolveCandidates(prepared.post, lease, bindings, runtime);
+  const selectedCandidates = selectProbeCandidates(resolved.candidates);
   let candidates: readonly ProbedMedia[];
   try {
-    candidates = await probeCandidates(resolved.candidates, runtime);
+    candidates = await probeCandidates(selectedCandidates, runtime);
   } catch (error: unknown) {
     if (
       !resolved.rendered ||
@@ -595,7 +601,7 @@ async function resolveWithLease(
     ) {
       throw error;
     }
-    candidates = resolved.candidates.map((candidate) => createUnverifiedMedia(candidate.value));
+    candidates = selectedCandidates.map((candidate) => createUnverifiedMedia(candidate.value));
   }
   if (resolved.rendered) {
     assertLeaseBudget(lease, runtime, POST_PROBE_LEASE_BUDGET_MS);
