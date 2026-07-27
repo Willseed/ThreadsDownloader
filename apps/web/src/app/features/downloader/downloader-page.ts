@@ -210,21 +210,27 @@ function statusText(
           </button>
           @if (state().kind === 'resolving') {
             <div class="analysis-animation" aria-hidden="true">
-              <div class="pixel-cat-runner">
+              <div class="pixel-horse-runner">
                 <svg
-                  class="pixel-cat"
-                  viewBox="0 0 24 16"
+                  class="pixel-horse"
+                  viewBox="0 0 36 18"
                   shape-rendering="crispEdges"
                   focusable="false"
                 >
-                  <g class="pixel-cat-body">
-                    <path d="M0 7h2V5h2V3h2v2H4v4H2v2H0z" fill="currentColor" />
-                    <path d="M5 6h11v2h4v5h-3v2h-4v-3H9v3H5z" fill="currentColor" />
-                    <path d="M14 3h1V1h3v2h2V1h3v3h1v8H14z" fill="currentColor" />
-                    <path d="M17 6h2v2h-2zm5 0h2v2h-2z" class="pixel-cat-eye" />
-                    <path d="M20 9h2v1h-2z" class="pixel-cat-nose" />
+                  <g class="pixel-horse-body">
+                    <path d="M7 6H4V5H1v2h3v2H2v2H0v3h3v-2h3v-2h2z" fill="currentColor" />
+                    <path d="M6 5h16v1h3v7h-4v-1H8v1H5V8h1z" fill="currentColor" />
+                    <path d="M25 2h-4v2h2v2h-4v2h3v2h-3v2h3v3h4V3z" fill="currentColor" />
+                    <path d="M24 3h6v1h3v2h3v5h-8V9h-2v4h-6V8h2V5h2z" fill="currentColor" />
+                    <path d="M24 3V0l3 3zm4 0 3-3v4z" fill="currentColor" />
+                    <path d="M27 6l1-1 2 1-2 1z" class="pixel-horse-eye" />
+                    <path d="M34 8h2v1h-2z" class="pixel-horse-nostril" />
+                    <path d="M32 10h4v1h-4z" class="pixel-horse-eye" />
                   </g>
-                  <path d="M5 13h4v2H5zm8 0h4v2h-4z" class="pixel-cat-legs" />
+                  <path
+                    d="M8 11h2v5h1v2H7v-2h1zm5 1h2v4h1v2h-4v-2h1zm5 0h2v4h1v2h-4v-2h1zm5-1h2v5h1v2h-4v-2h1z"
+                    class="pixel-horse-legs"
+                  />
                 </svg>
               </div>
             </div>

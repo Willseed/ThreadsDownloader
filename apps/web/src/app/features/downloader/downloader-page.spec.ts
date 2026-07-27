@@ -196,7 +196,7 @@ describe('DownloaderPageComponent', () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it('renders the decorative running cat only while resolving a post', async () => {
+  it('renders the decorative running horse only while resolving a post', async () => {
     const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelector('.analysis-animation')).toBeNull();
 
@@ -205,7 +205,7 @@ describe('DownloaderPageComponent', () => {
 
     const animation = root.querySelector('.analysis-animation');
     expect(animation?.getAttribute('aria-hidden')).toBe('true');
-    expect(animation?.querySelector('.pixel-cat')).not.toBeNull();
+    expect(animation?.querySelector('.pixel-horse')).not.toBeNull();
 
     state.set({ kind: 'candidates', siteKey: SITE_KEY, candidates: [candidate] });
     await render();

@@ -354,46 +354,46 @@ h3 {
   border-block-end: 1px solid var(--line);
 }
 
-.pixel-cat-runner {
+.pixel-horse-runner {
   position: absolute;
   inset-block-end: 0.25rem;
   inset-inline-start: 0;
-  inline-size: 3rem;
-  animation: pixel-cat-travel 4.8s linear infinite;
+  inline-size: 4.25rem;
+  animation: pixel-horse-travel 4.8s linear infinite;
   color: var(--ink);
 }
 
-.pixel-cat {
+.pixel-horse {
   display: block;
   inline-size: 100%;
-  animation: pixel-cat-stride 240ms steps(2, end) infinite alternate;
+  animation: pixel-horse-stride 240ms steps(2, end) infinite alternate;
 }
 
-.pixel-cat-eye {
+.pixel-horse-eye {
   fill: var(--canvas);
 }
 
-.pixel-cat-nose {
+.pixel-horse-nostril {
   fill: var(--muted);
 }
 
-.pixel-cat-legs {
+.pixel-horse-legs {
   fill: currentColor;
 }
 
-@keyframes pixel-cat-travel {
+@keyframes pixel-horse-travel {
   0% {
     inset-inline-start: 0;
     transform: scaleX(1);
   }
 
   49.9% {
-    inset-inline-start: calc(100% - 3rem);
+    inset-inline-start: calc(100% - 4.25rem);
     transform: scaleX(1);
   }
 
   50% {
-    inset-inline-start: calc(100% - 3rem);
+    inset-inline-start: calc(100% - 4.25rem);
     transform: scaleX(-1);
   }
 
@@ -408,7 +408,7 @@ h3 {
   }
 }
 
-@keyframes pixel-cat-stride {
+@keyframes pixel-horse-stride {
   from {
     transform: translateY(0);
   }
@@ -820,12 +820,12 @@ h3 {
     transition-duration: 0.001ms !important;
   }
 
-  .pixel-cat-runner {
-    inset-inline-start: calc(50% - 1.5rem);
+  .pixel-horse-runner {
+    inset-inline-start: calc(50% - 2.125rem);
     animation: none !important;
   }
 
-  .pixel-cat {
+  .pixel-horse {
     animation: none !important;
   }
 }
