@@ -33,7 +33,7 @@ protocol into a local interface, containing vendor-specific behavior.
 | `WorkerApplication` | dispatch `fetch`, asset serving, request policy | Worker `fetch` event |
 | `SessionWorkflow` | `bootstrap` then `authorize` a browser session | session and CSRF adapter |
 | `ResolveWorkflow` | resolve approved input into an internal target | resolver adapter |
-| `RenderedThreadsMediaResolver` | opt-in, bounded `/media` rendering into one untrusted candidate | Browser Run `scrape` port |
+| `RenderedThreadsMediaResolver` | opt-in, bounded `/media` rendering into validated candidate envelopes | Browser Run Puppeteer port |
 | `DownloadWorkflow` | `issue`, `head`, `stream`, and `status` | HTTP/range and origin adapter |
 | Angular `DownloaderModel` | typed UI state, commands, errors | Angular service/model boundary |
 
@@ -58,16 +58,16 @@ manually, each hop is validated, and fetches use bounded timeouts and response
 size limits. CDN targets are independently validated before streaming. No
 redirect policy delegates validation to a browser or default fetch behavior.
 
-The rendered fallback is a narrower exception at an external browser
-adapter whose Quick Action response does not expose its navigation redirect
-chain. Production binds exactly one `BROWSER` Browser Run binding after explicit
-approval and a credential-free remote proof. The adapter restricts every
-browser subrequest with anchored patterns, returns allowed canonically
-deduplicated candidates in scrape/DOM order, and sends them through the central
-CDN policy and ordinary media probe. A rendered candidate whose probe ends in
-the exact transport-unavailable state is retained with explicitly unverified
-metadata. The Wrangler exposure gate rejects a missing,
-renamed, remote-development, non-object, or extended browser configuration.
+The rendered fallback is a narrower exception at an external Browser Run
+adapter. Production binds exactly one `BROWSER` binding after explicit approval
+and credential-free remote proofs. The exact Puppeteer adapter restricts every
+browser subrequest with anchored policy, ignores the browser's final location
+as identity evidence, returns allowed canonically deduplicated candidates in
+DOM order, and sends them through the central CDN policy and ordinary media
+probe. A rendered candidate whose probe ends in the exact transport-unavailable
+state is retained with explicitly unverified metadata. The Wrangler exposure
+gate rejects a missing, renamed, remote-development, non-object, or extended
+browser configuration and requires the exact `nodejs_compat` flag.
 
 Encrypted resolver credentials or tokens live only in a server vault using
 AES-GCM. Keys and plaintext do not enter source, frontend bundles, logs, or
@@ -305,18 +305,66 @@ not establish any undocumented upstream Threads API semantics.
   redirect remains non-fallback. Upstream-unavailable covers a credential-free
   public Threads markup transport failure; login, access, bot, rate, all other
   redirects, and policy failures never use rendering as a bypass.
-- Browser containment: the Quick Action has empty cookies, does not forward
-  client headers or cookies or set an explicit referrer, uses zero cache TTL,
-  and supplies a four-second provider navigation limit, an eight-second action
-  limit, a fixed five-second hydration delay, and anchored request patterns for
-  exact `www.threads.com`, the existing `cdninstagram.com` family, and the observed
-  exact Instagram FNA hostname shape. The request deliberately omits
-  `waitForSelector`: fresh provider evidence showed that the field returned before
-  its requested deadline and before delayed carousel videos hydrated. The
-  provider-side browser budget is twelve seconds, followed by a separate
-  two-second absolute response-read budget.
-  Its streamed JSON response, selectors, element records, attributes, values,
-  and candidate count are all bounded and decoded exactly. Exactly one
+- Browser containment: the fallback uses exact `@cloudflare/puppeteer@1.1.0`
+  against the existing `BROWSER` binding with `nodejs_compat`. Every attempt
+  first acquires one browser with the minimum 10-second `keep_alive`. One
+  ordinary launch/connect rejection may use a second bounded acquisition, but
+  an absolute launch timeout does not acquire again. After the first Browser
+  object exists, the adapter never reacquires: it creates two sequential fresh
+  incognito contexts and pages, enables JavaScript, sets only a 1920x1080
+  viewport, and enables interception before navigating each page to the
+  server-built canonical `/media` URL.
+  Cache and service-worker settings retain the remote browser defaults proven by
+  the successful same-binding run. The adapter does not override the remote
+  browser's User-Agent.
+  Requests are allowed only for HTTPS `www.threads.com`, the existing
+  `cdninstagram.com` family, and the observed exact Instagram FNA hostname
+  shape, without credentials or an explicit port. Authorization, Cookie,
+  proxy-authorization, Referer, and Referrer headers are removed; every other
+  network origin is aborted. `data:` URLs are non-network and are explicitly a
+  no-op because Puppeteer 1.1.0 does not intercept them. Each Browser binding
+  control fetch is bounded
+  at four seconds and clears its timer as soon as the response settles so an
+  upgraded WebSocket is not aborted later. Navigation is bounded at four
+  seconds and waits for `domcontentloaded`.
+- Browser readiness: the live DOM is polled every 500 ms for at most eight
+  seconds. An empty candidate set is never settled. A nonempty set succeeds only
+  after at least five seconds of total observation and after candidate source/URL
+  pairs have remained unchanged continuously for three seconds. Valid identity
+  is not required to settle a nonempty candidate set. Once canonical and Open
+  Graph declarations have both appeared, duplicate, empty, or mismatched
+  identity is terminally ready and reaches the exact decoder immediately; it
+  never triggers a metered retry. A
+  readiness timeout advances to the second context only after the first context
+  closes; it never reacquires the browser. Both contexts are attempted even if
+  the first is nonempty, so a late rendition/version candidate is not discarded
+  merely because one page exposed a playable video early. Each context's active
+  work has one absolute 20-second deadline covering context/page creation, setup,
+  navigation, readiness, extraction, and handle disposal, followed by a
+  separate four-second context-close reserve. Setup, navigation, protocol,
+  extraction, identity, and policy failures do not create a browser-acquisition
+  retry. Active or close timeout disconnects the transport and stops enrichment.
+  A validated allowed candidate already extracted from the first context remains
+  usable if optional second-context readiness, malformed output, protocol, or
+  cleanup fails; cleanup is not allowed to erase a downloadable result. Without
+  any validated allowed candidate, those failures remain blocking.
+
+  Each browser launch has an eight-second absolute deadline. One ordinary
+  launch/connect rejection may retry, but a timeout schedules the still-pending
+  launch under request `waitUntil` and fails without another acquisition. That
+  cleanup observes the pending launch for at most 14 seconds and closes a Browser
+  object for at most four seconds if one appears. A partial provider acquisition
+  that never yields a Browser object cannot be forcibly closed and is not
+  described as closed. The minimum `keep_alive` is a configured provider-side
+  idle setting, not evidence of an exact orphan closure time.
+  The package performs acquire before connect, so an ordinary post-acquire
+  connect rejection can have the same no-handle residual. Allowing its one fresh
+  acquisition retry may temporarily overlap that provider session. This is the
+  explicit function-first resource tradeoff required by the reproduced launch
+  failure; it is not a local cleanup guarantee.
+  After readiness, the page returns only a primitive bounded envelope. Literal
+  `video[src]` is retained first, a distinct `currentSrc` is retained beside it,
+  and literal `video source[src]` remains in DOM order. Exactly one
   `link[rel="canonical"]` `href` and exactly one `meta[property="og:url"]`
   `content` must agree. Both normally equal the normalized canonical post; the
   only alternate identity is the literal
@@ -324,8 +372,10 @@ not establish any undocumented upstream Threads API semantics.
   both fields. Scheme, host, port, query, fragment, path, shortcode case, and
   percent-encoding remain exact, fail-closed comparisons. Candidates come only
   from full-page `video[src]` and
-  `video source[src]`; zero canonically deduplicated CDN candidates is not found
-  and every allowed unique candidate is retained in scrape/DOM order. A URL
+  `video source[src]`; each context snapshot must independently satisfy the
+  exact bounded schema and expected full or username-redacted identity before
+  merge. Zero canonically deduplicated CDN candidates is not found and up to 16
+  allowed unique candidates are retained in context/DOM order. A URL
   repeated across `video` and `source` is represented once at its first
   occurrence. The workflow applies its existing eight-candidate probe bound and
   retains later successful probes when an earlier candidate fails. These
@@ -363,22 +413,36 @@ not establish any undocumented upstream Threads API semantics.
   'omit'`, an empty referrer, and `no-referrer`. The compatibility header did not
   eliminate repeated production transport failures, which motivates the
   explicit unverified-vault and browser-redirect degradation described above.
-- Lease decision: session and IP resolve permits are both 60 seconds. Deadline
-  gates require at least 40 seconds before rendering, 26 seconds before probing,
-  and 18 seconds before vault storage. These budgets cover the twelve-second
-  provider browser options, a two-second absolute response-body read limit, an
-  eight-second media probe, two sequential eight-second vault operations, and a
-  two-second margin. If and only if the first renderer result has matching
-  canonical identity but no allowed media candidate, the workflow may make one
-  fresh request for the same canonical post when at least another 40 seconds
-  remain. The worst case after that gate is fourteen seconds for the second
-  rendered response plus the existing 26-second probe, vault, and margin
-  budget, so it remains within the fixed 60-second permit. A successful first
-  render and every unavailable, invalid-identity, or other invalid response are
-  never retried. Compared with the former 30-second
-  lease, a crashed resolve can occupy its session/IP concurrency slot for at
-  most 30 additional seconds; successful and handled failures still release
-  immediately.
+- Lease decision: session and IP resolve permits are both 120 seconds. Foreground
+  renderer budget is exactly 68 seconds: at most two eight-second browser
+  launch/connect attempts, two contexts each with 20 seconds active work plus a
+  four-second close reserve, and four seconds to close the browser
+  (`2*8 + 2*(20+4) + 4`). Deadline gates require at least 94 seconds before
+  renderer fallback, 26 seconds before probing, and 18 seconds before vault
+  storage. The post-render 26 seconds cover the eight-second media probe, two
+  sequential eight-second vault operations, and a two-second margin. The
+  enforceable guarantee is the remaining-time gate: after static fallback is
+  selected, 94 seconds must remain, so renderer 68 plus post-render 26 cannot
+  cross the 120-second permit expiry. The Turnstile siteverify fetch and static
+  resolver each have an eight-second local bound; adding those planned bounded
+  components yields 110 seconds and a nominal ten-second allowance. That is not
+  a strict whole-request maximum: permit Durable Object calls and Turnstile
+  replay coordination have no local wall timeout, while CPU and scheduling are
+  also residual. Retry ownership is entirely inside the Browser adapter; the
+  workflow invokes the renderer once.
+
+  A context active timeout schedules bounded observation/late close for at most
+  18 additional seconds. In the longest context-two case that background work
+  can reach renderer-relative second 78, ten seconds after the 68-second
+  foreground ends, and may overlap a later resolve; when fallback begins at its
+  latest lease gate it still ends before the 120-second permit expiry. A launch
+  timeout can likewise observe 14 seconds and close four seconds in `waitUntil`;
+  if no Browser handle ever appears, the remaining provider-side acquisition is
+  not cancellable by this adapter. An ordinary acquire-success/connect-rejection
+  may likewise leave no handle while its allowed retry proceeds. Compared with
+  the former 60-second lease, a
+  crashed resolve can occupy its session/IP concurrency slot for at most 60
+  additional seconds; successful and handled failures still release immediately.
 - Production state and cost decision: after the account holder explicitly
   approved the metered Browser Run service and confirmed the paid Workers plan,
   production now declares exactly `{ "binding": "BROWSER" }`. `Env.BROWSER`
@@ -386,7 +450,7 @@ not establish any undocumented upstream Threads API semantics.
   port, but the production exposure checker requires that exact binding and
   rejects `remote` or any additional field. Every rendered fallback consumes
   metered Browser Run capacity. Operators must monitor Browser Run Overview and
-  Runs for total sessions, browser hours, Quick Action requests, failures, and
+  Runs for total sessions, browser hours, failures, and
   current quota before and after releases; repository configuration is not
   evidence of current dashboard inventory, usage, or limits.
 - Anonymous remote evidence: the first bounded proof against the exact public
@@ -421,42 +485,86 @@ not establish any undocumented upstream Threads API semantics.
   boundary. Login, access-denied, rate-limited, bot-blocked, ordinary redirect,
   and policy failures remain non-fallback; the sole redirect exception is the
   exact dedicated ambiguous-post signature above.
-- Delayed-carousel timing evidence: fresh anonymous Browser Run sessions for
-  public three-video carousel `DbR4-cwgSwC` exposed three distinct `video[src]`
-  elements only after about 4.52--4.56 seconds, both on clean `/media` and when
-  retaining the input `xmt` query. The same production Quick Action shape with
+- Delayed-candidate timing evidence: fresh anonymous Browser Run sessions for
+  public post `DbR4-cwgSwC` exposed three distinct rendered `video[src]`
+  candidate URLs only after about 4.52--4.56 seconds, both on clean `/media` and
+  when retaining the input `xmt` query. The same production Quick Action shape with
   `waitForSelector` returned HTTP 200 after about 2.35--2.68 seconds with valid,
   mutually matching redacted canonical/Open Graph identity but zero candidates.
   In those executions the provider field did not enforce the intended five-second
-  wait. A fixed five-second hydration delay therefore replaces it. The matching
-  clean/query observations also show that retaining `xmt` was not required, so
-  normalized query stripping remains unchanged. These measurements do not
-  establish a universal Threads hydration time.
-- Carousel candidate evidence: all three hydrated videos were distinct while
-  their observed dimensions, classes, and safe attributes matched; there was no
-  evidenced single-video selector or ranking rule. The decoder therefore keeps
-  every allowed canonical-deduplicated candidate in scrape/DOM order instead of
-  discarding the second and third carousel entries. The workflow's existing
+  wait. A later Quick Action revision with a fixed delay still returned after
+  about 2.65 seconds with valid identity and no candidate, disproving that
+  provider action as a dependable wait. The matching clean/query observations
+  show that retaining `xmt` was not required, so normalized query stripping
+  remains unchanged. These measurements do not establish a universal Threads
+  hydration time.
+- Puppeteer timing evidence: a fresh same-binding proof using the exact package,
+  compatibility flag, and 1920x1080 viewport returned one allowed candidate both
+  without interception and with the production allowlist; all observed network
+  requests were inside the existing allowlist; six observed `data:` scripts are
+  non-network and cannot be intercepted by this Puppeteer version. A later fresh
+  browser with the same configuration navigated HTTP 200
+  yet remained empty over 17 samples from about 161 ms through eight seconds.
+  A later exact proof kept one connected browser and ran two sequential fresh
+  incognito contexts/pages with the production allowlist and defaults. They
+  reached stable matching redacted identity plus one allowed candidate in about
+  6.079 and 5.077 seconds respectively; both contexts and the browser closed.
+  A separate typed diagnostic saw an ordinary first launch/connect rejection,
+  then a second fresh launch return three allowed candidates in 16.497 seconds
+  total. Candidate cardinality does not establish media-item cardinality. No
+  provider identifier, media URL, query token, request identifier, or raw error
+  was retained. This establishes both page and acquisition
+  nondeterminism: empty readiness uses another context inside an acquired
+  browser, while only an ordinary launch/connect rejection may acquire again.
+  It is adapter evidence, not proof that the current revision has completed a
+  production resolve or download.
+  A later one-request proof exercised the current exact adapter. One launch and
+  two contexts returned redacted identity plus two aggregate allowed candidates
+  in 16.095 seconds; candidate cardinality still does not establish media-item
+  cardinality. Both contexts and the Browser closed, with zero disconnects and
+  zero readiness timeouts, and the cleanup audit passed. The proof retained no
+  provider identifier, media URL, query token, request identifier, raw error, or
+  other sensitive value. It establishes current adapter extraction and lifecycle,
+  not a completed resolve, vault write, download, or media decode.
+- Rendition/version evidence: the earlier three distinct rendered candidate URLs
+  did not establish three media items. A later read-only inspection of the exact
+  shortcode-bound media object in an existing logged-in Threads page found
+  numeric `media_type` 2, `carousel_media` null, and a direct `video_versions`
+  array with three entries. Every entry had exactly `type` and `url`; the three
+  observed type markers were 101, 102, and 103. That page's DOM contained one
+  video, and neither its literal nor current URL byte-matched those three script
+  URLs. This bounded shape is consistent with three rendition/version candidates
+  for one video and does not support the earlier carousel claim; the mapping and
+  URL transformation remain unconfirmed. No cookie, media URL, query token, or
+  raw script value was retained. There is still no evidenced safe quality-ranking
+  rule. The decoder therefore keeps every allowed
+  canonical-deduplicated candidate in scrape/DOM order. The workflow's existing
   eight-candidate probe cap remains the bounded downstream seam and preserves
-  later successful candidates when earlier probes fail. The existing one-time
-  retry still applies only to an exact valid zero-candidate response; provider,
-  transport, identity, malformed-response, and policy failures are not retried.
-- Evidence boundary and remaining limitations: the delayed multi-video evidence
-  covers that exact public carousel, fresh anonymous runs, and the observed
-  execution region. Other carousel shapes, images, private or deleted posts,
+  later successful candidates when earlier probes fail. The adapter always
+  attempts the optional second fresh context after a valid first snapshot, and
+  merges only independently exact, expected-identity snapshots. It preserves
+  validated allowed candidates if optional enrichment is empty or fails, while
+  malformed output with no validated candidate remains blocking. The workflow
+  does not add another renderer retry.
+- Evidence boundary and remaining limitations: the delayed-candidate evidence
+  covers that exact public post, fresh anonymous runs, one existing logged-in
+  page, and the observed execution region. Actual multi-item carousels, images,
+  private or deleted posts,
   login or challenge pages, redirect behavior beyond the exact ambiguous-post
   signature, cross-post DOM stability, and long-term CDN hostname stability
   remain unconfirmed. The
   canonical and Open Graph values are fail-closed upstream-authored identity
-  evidence, not a direct final-location proof. `quickAction()` exposes no final
-  URL or redirect chain and accepts no AbortSignal; request patterns contain
-  each browser request's origin but do not prove every redirect hop. With no
+  evidence, not a direct final-location proof. The adapter does not accept the
+  browser's final location as identity; interception validates each observed
+  request independently. With no
   stable post-scoped selector, canonical identity plus full-page video results
-  cannot by itself prove that every candidate is post-owned. A late
-  provider response is rejected by the subsequent lease deadline gate, not
-  locally hard-cancelled. Activation changes only the reviewed binding and
-  exposure gate; failure must not cause automatic host, cookie, header, or
-  origin widening.
+  cannot by itself prove that every candidate is post-owned. Browser binding,
+  navigation, and readiness deadlines are local bounds. Every obtained context
+  and Browser is explicitly closed on the normal path; bounded timeout falls
+  back to disconnect, while a partial launch that never returns a Browser handle
+  cannot be claimed closed. Activation changes only the reviewed binding,
+  `nodejs_compat` flag, and exposure gate; failure must not cause automatic host,
+  cookie, header, User-Agent, or origin widening.
 
 ## Deployment inventory and decisions
 

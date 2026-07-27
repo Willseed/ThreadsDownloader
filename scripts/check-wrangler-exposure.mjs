@@ -22,6 +22,7 @@ const EXPECTED_ASSETS = Object.freeze({
   run_worker_first: true,
 });
 const EXPECTED_BROWSER = Object.freeze({ binding: 'BROWSER' });
+const EXPECTED_COMPATIBILITY_FLAGS = Object.freeze(['nodejs_compat']);
 
 const EXPECTED_VAR_KEYS = Object.freeze(['EXPECTED_HOST', 'EXPECTED_ORIGIN', 'TURNSTILE_SITE_KEY']);
 const SAFE_TURNSTILE_SITE_KEY = /^[A-Za-z0-9_-]{1,128}$/u;
@@ -45,6 +46,7 @@ export const WRANGLER_RULES = Object.freeze({
   turnstileSiteKey: 'WRANGLER_TURNSTILE_SITE_KEY',
   assets: 'WRANGLER_ASSETS',
   browserBinding: 'WRANGLER_BROWSER_BINDING',
+  compatibilityFlags: 'WRANGLER_COMPATIBILITY_FLAGS',
   requiredSecrets: 'WRANGLER_REQUIRED_SECRETS',
   secretValue: 'WRANGLER_SECRET_VALUE',
   checkFailed: 'WRANGLER_CHECK_FAILED',
@@ -184,6 +186,14 @@ function hasExactVars(value) {
   );
 }
 
+function hasExactCompatibilityFlags(value) {
+  return (
+    Array.isArray(value) &&
+    value.length === EXPECTED_COMPATIBILITY_FLAGS.length &&
+    value.every((flag, index) => flag === EXPECTED_COMPATIBILITY_FLAGS[index])
+  );
+}
+
 function bindingViolations(config) {
   const violations = [];
   if (!hasExactProperties(config.assets, EXPECTED_ASSETS)) {
@@ -220,6 +230,9 @@ function configurationViolations(config) {
   }
   if (config.main !== 'apps/worker/src/index.ts') {
     violations.push(WRANGLER_RULES.main);
+  }
+  if (!hasExactCompatibilityFlags(config.compatibility_flags)) {
+    violations.push(WRANGLER_RULES.compatibilityFlags);
   }
   if (!hasExactVars(config.vars)) {
     violations.push(WRANGLER_RULES.vars);

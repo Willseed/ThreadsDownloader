@@ -28,7 +28,10 @@ import {
   SessionIssuanceError,
   type SessionIssuanceReservation,
 } from './security/session-issuance.js';
-import { createBrowserRunScrapePort } from './resolver/rendered-threads-media.js';
+import {
+  createBrowserSessionRenderedPagePort,
+  type BrowserSessionCleanupScheduler,
+} from './resolver/browser-session-renderer.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
 import { TurnstileReplay } from './turnstile-replay.js';
 import {
@@ -103,7 +106,10 @@ const resolvePublicMedia = createResolvePublicMediaHandler({
   requestId,
 });
 
-function resolveBindings(env: Env): ResolvePublicMediaBindings {
+function resolveBindings(
+  env: Env,
+  cleanupScheduler: BrowserSessionCleanupScheduler,
+): ResolvePublicMediaBindings {
   return {
     EXPECTED_HOST: env.EXPECTED_HOST,
     EXPECTED_ORIGIN: env.EXPECTED_ORIGIN,
@@ -112,7 +118,11 @@ function resolveBindings(env: Env): ResolvePublicMediaBindings {
     SESSIONS: env.SESSIONS,
     TURNSTILE_REPLAYS: env.TURNSTILE_REPLAYS,
     TURNSTILE_SECRET: env.TURNSTILE_SECRET,
-    ...(env.BROWSER === undefined ? {} : { BROWSER: createBrowserRunScrapePort(env.BROWSER) }),
+    ...(env.BROWSER === undefined
+      ? {}
+      : {
+          BROWSER: createBrowserSessionRenderedPagePort(env.BROWSER, undefined, cleanupScheduler),
+        }),
   };
 }
 
@@ -283,9 +293,12 @@ app.get('/api/health', (context) => {
 
 app.get('/api/session', (context) => sessionResponse(context.req.raw, context.env));
 
-app.post('/api/resolve', (context) =>
-  resolvePublicMedia(context.req.raw, resolveBindings(context.env)),
-);
+app.post('/api/resolve', (context) => {
+  const cleanupScheduler: BrowserSessionCleanupScheduler = (cleanup) => {
+    context.executionCtx.waitUntil(cleanup);
+  };
+  return resolvePublicMedia(context.req.raw, resolveBindings(context.env, cleanupScheduler));
+});
 
 app.post('/api/download-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
 

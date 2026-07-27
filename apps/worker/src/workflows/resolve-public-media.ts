@@ -24,7 +24,7 @@ import {
   createRenderedThreadsMediaResolver,
   RENDERED_RESOLVER_BUDGET_MS,
   RenderedThreadsMediaResolverError,
-  type BrowserRunScrapePort,
+  type RenderedThreadsPagePort,
   type ResolvedThreadsMedia,
   type RenderedThreadsMediaResolverErrorCode,
 } from '../resolver/rendered-threads-media.js';
@@ -85,8 +85,8 @@ const LEASE_DEADLINE_MARGIN_MS = 2_000;
 const RESOLVE_VAULT_TOTAL_BUDGET_MS = RESOLVE_VAULT_REQUEST_TIMEOUT_MS * 2;
 const POST_RENDER_LEASE_BUDGET_MS =
   MEDIA_PROBE_TIMEOUT_MS + RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
-const FALLBACK_LEASE_BUDGET_MS = RENDERED_RESOLVER_BUDGET_MS + POST_RENDER_LEASE_BUDGET_MS;
-const RENDER_RETRY_LEASE_BUDGET_MS = RENDERED_RESOLVER_BUDGET_MS + POST_RENDER_LEASE_BUDGET_MS;
+export const RENDERED_FALLBACK_LEASE_BUDGET_MS =
+  RENDERED_RESOLVER_BUDGET_MS + POST_RENDER_LEASE_BUDGET_MS;
 const POST_PROBE_LEASE_BUDGET_MS = RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
 const TRANSIENT_PROBE_FAILURE_PRIORITY: readonly MediaProbeErrorCode[] = [
   'MEDIA_PROBE_ABORTED',
@@ -129,7 +129,7 @@ export interface ResolveFailureEvent {
 }
 
 export interface ResolvePublicMediaBindings {
-  readonly BROWSER?: BrowserRunScrapePort;
+  readonly BROWSER?: RenderedThreadsPagePort;
   readonly EXPECTED_HOST: string;
   readonly EXPECTED_ORIGIN: string;
   readonly IP_RATE_LIMITS: IpRateLimitNamespace;
@@ -509,25 +509,13 @@ async function resolveCandidates(
     ) {
       throw error;
     }
-    if (!hasLeaseBudget(lease, runtime, FALLBACK_LEASE_BUDGET_MS)) {
+    if (!hasLeaseBudget(lease, runtime, RENDERED_FALLBACK_LEASE_BUDGET_MS)) {
       throw error;
     }
   }
 
-  const renderer = createRenderedThreadsMediaResolver({ browser: bindings.BROWSER });
-  let rendered: ResolvedThreadsMedia;
-  try {
-    rendered = await renderer.resolve(post);
-  } catch (error: unknown) {
-    if (
-      !(error instanceof RenderedThreadsMediaResolverError) ||
-      error.code !== 'RENDERED_MEDIA_NOT_FOUND' ||
-      !hasLeaseBudget(lease, runtime, RENDER_RETRY_LEASE_BUDGET_MS)
-    ) {
-      throw error;
-    }
-    rendered = await renderer.resolve(post);
-  }
+  const renderer = createRenderedThreadsMediaResolver({ page: bindings.BROWSER });
+  const rendered: ResolvedThreadsMedia = await renderer.resolve(post);
   assertLeaseBudget(lease, runtime, POST_RENDER_LEASE_BUDGET_MS);
   return { candidates: rendered.candidates, rendered: true };
 }

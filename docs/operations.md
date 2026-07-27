@@ -4,7 +4,7 @@ Threads Downloader 是公開 Threads 貼文的影片解析與同源優先串流�
 API 與下載 capability 都由同一個 Cloudflare Worker origin 提供；Angular 與 API
 JSON 只取得 opaque ID 與安全中繼資料。若 Worker 無法建立媒體連線，瀏覽器
 可能透過限定的 `307 Location` 取得 vault 內的 exact CDN URL。Production resolver 先使用 Worker `fetch`；
-只有受控的靜態解析結果允許 fallback 時，才使用 Browser Run Quick Action。兩條路徑
+只有受控的靜態解析結果允許 fallback 時，才使用 Browser Run Puppeteer session。兩條路徑
 都不登入、不帶 Threads／Instagram Cookie，也不繞過任何存取控制。
 
 本文件是維運與部署 runbook。架構決策詳見 [DESIGN.md](../DESIGN.md)，外部狀態
@@ -68,6 +68,7 @@ Worker 驗證 exact host、Origin、CSRF、session 與 rate limit，再先以 `f
 | TypeScript                         | `6.0.3`       |
 | RxJS                               | `7.8.2`       |
 | Hono                               | `4.12.32`     |
+| Cloudflare Puppeteer               | `1.1.0`       |
 | Wrangler                           | `4.114.0`     |
 
 `.nvmrc`、`.node-version`、`package.json` 與 GitHub Actions 都固定 Node
@@ -176,8 +177,11 @@ token 都不得取得 Route／DNS／Custom Domain 管理能力。
 
 Production configuration 已依帳號擁有者的明確付費授權選擇啟用 Browser Run；
 `wrangler.jsonc` 必須有且只能有 `{ "browser": { "binding": "BROWSER" } }`。
+Worker 固定使用 `@cloudflare/puppeteer@1.1.0`，production 與 dev config 都必須有且只能有
+`nodejs_compat` compatibility flag。
 `npm run security:wrangler` 會對 missing、名稱錯誤、`remote`、額外欄位與非 object
-設定 fail closed。本機 `wrangler.dev.jsonc` 與測試可不綁定 Browser Run，不能把
+設定，以及錯誤或額外 compatibility flag fail closed。本機 `wrangler.dev.jsonc` 與測試
+可不綁定 Browser Run，不能把
 production binding 改成 remote development 設定。
 
 每次 resolve 的 admission 與 fallback 順序固定如下：
@@ -191,18 +195,43 @@ production binding 改成 remote development 設定。
    都必須是 `https://www.threads.com/?error=invalid_post`。任何額外 query、fragment、
    userinfo、port、相似 host、其他 redirect status 或後續 redirect 都維持一般 redirect
    failure。login、access、bot、rate、其他 redirect 或 policy failure 不得以渲染繞過。
-3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行匿名、有界
-   Quick Action；不傳 Cookie、client headers 或 referrer。每次固定等待五秒 hydration，
-   不使用供應端曾提早返回的 `waitForSelector`；navigation limit 維持四秒，action limit
-   為八秒，另有兩秒 response read limit。第一次只有在 exact
-   `RENDERED_MEDIA_NOT_FOUND` 且仍有 40 秒租約時，才能對
-   相同 canonical post 再做一次；第二次之後不再重試。
-4. 只接受 canonical link 與 Open Graph identity 各恰好一筆、彼此一致，且等於完整
+3. 至少剩餘 94 秒租約時，對 server 自行正規化並附加 `/media` 的網址建立匿名、有界
+   Puppeteer session。Browser 以 minimum 10 秒 `keep_alive` 啟動；取得 Browser object 後不得因
+   page empty 重新 acquire，而是在同一 Browser 依序建立最多兩個 fresh incognito
+   contexts/pages。兩個 context 都會執行，即使第一個已非空，以保留另一頁才出現的
+   rendition/version 候選。每頁啟用 JavaScript，只設定 1920x1080 viewport，不覆寫遠端 Chrome User-Agent；cache 與 service
+   worker 沿用成功 proof 的 remote defaults。Request interception 必須在 navigation 前啟用，只允許 HTTPS exact Threads、
+   既有 CDN Instagram family 與 exact Instagram FNA shape；不得有 URL credentials、顯式
+   port、Cookie、authorization、proxy authorization 或 referrer。
+   `data:` URL 不走網路，且 Puppeteer 1.1.0 不支援攔截，handler 必須 no-op，不得宣稱已阻擋。
+4. 每個 Browser binding fetch 各限四秒，整次 launch/connect 另有八秒 absolute deadline，response settle 後立即清除 timer，
+   避免已升級 WebSocket 被 delayed abort。Navigation 以 `domcontentloaded` 限四秒；之後每
+   500 ms 讀 live DOM，最長八秒。空集合永遠不算 settled；非空候選只能在總觀察至少五秒、
+   且 source/URL 集合連續三秒不變後成功。Readiness timeout 先 bounded close 該 context，再進
+   第二個 fresh context，不得重新 acquire Browser。合法 identity 不是非空候選 settled 的必要條件；
+   canonical 與 Open Graph declarations 都已出現後，duplicate、空值或 mismatch 會立即進 strict
+   decoder，不等 timeout、不得因此多開 session。每個 context active work 有涵蓋
+   createContext/newPage、page setup、navigation、readiness、evaluate 與 dispose 的 20 秒 wall
+   deadline，再獨立保留四秒 context close；Browser 最後另有四秒 close。Active 或 close timeout
+   立即 disconnect 且停止 enrichment。第一個 context 已取得並驗證的允許候選，不得因第二個
+   optional context empty、malformed、protocol 或 cleanup failure 被抹除；尚無允許候選時仍須失敗。
+   Ordinary launch/connect rejection 最多允許一次 fresh acquisition；absolute launch timeout
+   不得再 acquire，pending launch 交同一 request 的 `waitUntil` 最多觀察 14 秒，若取得 Browser
+   object 再最多 close 四秒。始終沒有 Browser handle 的 partial acquisition 無法由 adapter
+   取消或宣稱 closed；package 是 acquire 後 connect，ordinary post-acquire connect rejection
+   也可能沒有 handle，允許的一次 fresh retry 會暫時與第一個 provider session 重疊。這是為
+   保留下載功能接受的 provider-resource residual；minimum `keep_alive` 只是 provider-side
+   idle setting，不證明 orphan 的 exact closure time，也不是 local cleanup guarantee。Workflow
+   本身只呼叫 renderer 一次。
+5. 只接受 canonical link 與 Open Graph identity 各恰好一筆、彼此一致，且等於完整
    normalized canonical；唯一替代形狀是兩者都精確等於
    `https://www.threads.com/@/post/<same-shortcode>`。替代形狀仍須 byte-for-byte 綁定原
    shortcode，scheme、host、port、query、fragment、path、大小寫或 percent-encoding
-   任一不同皆拒絕。結果還必須至少有一個允許 CDN 候選；所有 canonical-deduped 候選依
-   scrape／DOM 順序保留，跨 `video`／`source` 的相同 URL 只保留第一次出現，workflow
+   任一不同皆拒絕。結果還必須至少有一個允許 CDN 候選；literal `video[src]` 先保留，distinct
+   `currentSrc` 緊接其後，literal `video source[src]` 依 DOM 順序保留。每個 context snapshot
+   必須先通過 exact schema 與完整／username-redacted identity 才能 merge。所有候選依
+   context／DOM 順序 canonical dedupe；跨 context、`video`／`source` 的相同 URL 只保留第一次
+   出現，最多保留 16 個，workflow
    最多 probe 前八個並保留後續 probe 成功的候選。候選仍先嘗試既有 media probe，再進入
    vault 與同源優先下載流程。只有
    rendered candidate 的 probe 最終為 exact
@@ -210,9 +239,9 @@ production binding 改成 remote development 設定。
    failure 仍阻擋。
 
 Browser Run 是按用量計費且受平台 quota 限制。部署前後要在 Cloudflare Browser Run
-的 **Overview** 與 **Runs** 檢查總 sessions、browser hours、Quick Action requests、
+的 **Overview** 與 **Runs** 檢查總 sessions、browser hours、
 失敗情況與當下 quota；異常增加時先停止新的 rollout 並查明原因，不可放寬 host、
-Cookie、headers、origin、selector 或重試限制。repository 只證明預期 binding，不能
+Cookie、headers、origin、readiness 或重試限制。repository 只證明預期 binding，不能
 證明目前 Dashboard inventory、用量、quota 或帳務狀態。
 
 2026-07-27 的 post-fix direct-import proof 在 local revision `9c09651` 對指定公開
@@ -235,22 +264,64 @@ encrypted vault 與 same-origin-first download。login、access-denied、rate-li
 bot-blocked、一般 redirect 與 policy failure 仍不得進入 Browser Run；唯一 redirect 例外是
 本節定義的 `THREADS_POST_REDIRECT_AMBIGUOUS` exact signature。
 
-同日針對指定三影片公開 carousel 的 fresh 匿名 Browser Run 診斷，在 clean `/media` 與
-保留輸入 `xmt` query 兩種情況下，都約在 4.52--4.56 秒才出現三個不同 `video[src]`。
+同日針對指定公開貼文的 fresh 匿名 Browser Run 診斷，在 clean `/media` 與
+保留輸入 `xmt` query 兩種情況下，都約在 4.52--4.56 秒才出現三個不同的 rendered
+`video[src]` candidate URL。
 相同 production Quick Action 選項卻約 2.35--2.68 秒便回 HTTP 200；canonical 與 Open
 Graph identity 有效且一致，但候選為零。這證明該次供應端 `waitForSelector` 沒有實現預期
-等待，所以改用固定五秒 hydration delay。兩種 URL 的結果一致也表示本案例不需保留
-`xmt`；輸入 query 仍由 normalization 丟棄，preview 又只可能發生在 resolve 成功之後，
-兩者都不是此失敗原因。
+等待；後續固定 delay 版本仍約 2.65 秒提早回傳相同的有效 identity 與零候選，所以已停用
+Quick Action renderer。兩種 URL 的結果一致也表示本案例不需保留 `xmt`；輸入 query 仍由
+normalization 丟棄，preview 又只可能發生在 resolve 成功之後，兩者都不是此失敗原因。
 
-三個 hydrated video 的尺寸、classes 與可安全觀察 attributes 相同，沒有證據支持單選或
-排序規則；resolver 因此按 scrape／DOM 順序保留所有 canonical-deduped 合規候選。workflow
-仍最多 probe 八個，前一候選 probe 失敗不會丟棄後續成功候選。第一次 exact
-`RENDERED_MEDIA_NOT_FOUND` 的單次 retry 保留，identity、provider、transport、格式或
-policy failure 都不重試。render 前與 retry 前至少須剩餘 40 秒，涵蓋最多 14 秒 rendered
-resolver、8 秒 probe、兩次各 8 秒 vault 與 2 秒 margin，維持既有 60 秒 permit；失敗路徑
-最多消耗兩次 Browser Run 計費請求。這些數據只涵蓋該公開 carousel、當次匿名 session 與
-觀察區域，不保證所有 Threads 貼文都在五秒內完成 hydration。
+後續對既有 logged-in Threads 頁面的本機唯讀檢查，以 shortcode exact 綁定 media object；
+觀察到 numeric `media_type` 2、`carousel_media` null，以及 direct `video_versions` 恰好三筆。
+每筆 keys 都只有 `type`、`url`，type markers 分別為 101、102、103；當下 DOM 只有一個 video，
+且 literal／current URL 都未與 script 中三個 URL byte-exact 相等。這個 bounded shape 與單一影片
+的三個 rendition/version candidates 一致，不支持先前「三個 media items／carousel」的說法；
+script 與 DOM URL 如何轉換仍未確認。檢查未保留 cookie、media URL、query token 或 raw script
+value。先前觀察到的三個 rendered candidates 也沒有可重現的安全
+quality ranking 規則；resolver 因此按 context／DOM 順序保留所有 canonical-deduped 合規候選。workflow
+仍最多 probe 八個，前一候選 probe 失敗不會丟棄後續成功候選。Renderer foreground 上限是
+`2*8 + 2*(20+4) + 4 = 68` 秒：最多兩次 launch/connect、兩個 context 的 active/close、以及
+Browser close。加上八秒 probe、兩次各八秒 vault 與兩秒 margin，fallback 前須剩 94 秒；
+post-render 與 post-probe gates 分別為 26 與 18 秒。再計八秒 Turnstile 與八秒靜態 resolver，
+規劃中的 bounded components 合計 110 秒，因此 session/IP permit 為 120 秒，名義上另留十秒。
+真正 enforceable 的保證是 static fallback 選定後必須仍有 94 秒，renderer 68 加 post-render
+26 不會越過 permit expiry。前述八秒只界定 Turnstile siteverify fetch，不包含 replay stub；permit
+Durable Object calls 與 replay coordination 沒有 local wall timeout，CPU／scheduling 也是 residual，
+所以 110 秒不得描述成 strict whole-request maximum。比舊 60 秒 lease 更長的代價是 crash 時 session/IP
+concurrency slot 最多多占 60 秒；正常成功與已處理失敗仍立即 release。這些數據只涵蓋指定
+公開內容、當次匿名 session 與觀察區域，不保證所有 Threads 貼文能成功 hydration。
+
+Context active timeout 的 background cleanup 最多再等 18 秒。若發生在最晚的第二個 context，
+它可到 renderer-relative 第 78 秒才結束，比 68 秒 foreground 多十秒，並可能與下一次 resolve
+重疊；即使 fallback 在 lease gate 最晚時點開始，仍早於 120 秒 permit expiry。Launch timeout
+的 `waitUntil` 同樣最多觀察 14 秒並在取得 handle 後 close 四秒；若始終沒有 Browser handle，
+那個 partial provider acquisition 是唯一無法由 adapter 主動取消的殘餘，不得記成已 closed。
+Ordinary acquire 成功、connect rejection 也可能產生相同 no-handle 殘餘；為恢復已重現的下載
+失敗而允許的 retry 可能短暫重疊第二個 acquisition，必須納入 Browser Run usage 監控。
+
+相同 `BROWSER` binding、exact Puppeteer package、`nodejs_compat` 與 1920x1080 viewport 的
+fresh proof 曾在不攔截及 production allowlist 兩種設定各取得一個允許候選；identity 都各
+恰好一筆且一致，觀察到的網路 origin 無需擴大 allowlist；六個 `data:` scripts 是不經網路、
+且此 Puppeteer 版本無法攔截的 no-op，不是成功阻擋的證據。
+然而另一個相同設定的 fresh browser 導航 HTTP 200 後，從約 161 ms 到八秒的 17 次取樣仍
+全為零候選。後續 exact proof 在單一 connected Browser 內依序建立兩個 fresh incognito
+contexts/pages，分別約 6.079 與 5.077 秒取得 matching redacted identity 與一個允許候選，
+兩個 contexts 與 Browser 都成功 closed。另一份只回傳 typed phase／count 的診斷則先遇到一次
+ordinary launch/connect rejection，第二次 fresh launch 在總計 16.497 秒取得三個允許候選；
+候選數量不代表 media-item 數量。
+沒有保留 provider ID、URL、query token、request ID 或 raw error。這是 acquisition/page
+nondeterminism 的直接證據：empty 不 settled 且改用同 Browser 的 fresh context，只有 ordinary
+launch/connect rejection 可 fresh acquire。它不代表目前 revision 已在 production 完成
+resolve、vault 或下載。
+
+後續 current exact-adapter one-request proof 在 16.095 秒取得 username-redacted identity 與
+aggregate 兩個 allowed candidates；candidate count 仍不代表 media-item count。該次只有一次
+launch，兩個 contexts 與 Browser 都 closed，disconnect 與 readiness timeout 都是零，cleanup
+audit 通過。證據沒有保留 provider ID、media URL、query token、request ID、raw error 或其他
+sensitive value。這只證明現行 adapter 的 extraction 與 lifecycle，不代表 resolve、vault、
+download 或 media decode 已完成。
 
 renderer timing 修正後，fresh production resolve 已到達 media probe，PII-free telemetry
 只記錄 exact code `MEDIA_PROBE_UNAVAILABLE`；同一公開候選的 direct remote proof 則成功
@@ -673,8 +744,9 @@ Rollback 前先確認目標 version 與目前 version 位於同一個 DO lifecyc
 
 Production resolver 先使用 Web Platform `fetch`、manual redirect、allowlist、timeout
 與大小限制；只有本節明列的靜態解析結果才可使用有界 Browser Run Quick
-Action。Browser Run 不是登入或存取控制繞過路徑，也不使用 Puppeteer、Playwright
-或第三方下載 API；Playwright 僅用於 mock E2E。若公開頁需要登入、CAPTCHA、遭 bot
+session。Browser Run 不是登入或存取控制繞過路徑；它只透過 exact Cloudflare Puppeteer
+adapter 操作既有 binding，不使用 Playwright 或第三方下載 API，Playwright 僅用於 mock
+E2E。若公開頁需要登入、CAPTCHA、遭 bot
 block、地區／年齡限制或 markup 改變，解析可能失敗。不能登入、上傳 Cookie 或暴力重試；
 transport-only degradation 的精確範圍與未驗證 metadata 必須如實記錄，不得描述成 probe
 成功。

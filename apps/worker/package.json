@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "1.1.0",
     "@threads-downloader/contracts": "file:../../packages/contracts",
     "hono": "4.12.32"
   }

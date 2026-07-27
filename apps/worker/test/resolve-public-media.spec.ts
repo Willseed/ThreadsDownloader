@@ -13,10 +13,8 @@ import type { IpRateLimitNamespace } from '../src/security/resolve-limits.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
 import { RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
 import type { TurnstileReplayNamespace } from '../src/security/turnstile.js';
-import type {
-  BrowserRunScrapePort,
-  RenderedBrowserScrapeOptions,
-} from '../src/resolver/rendered-threads-media.js';
+import type { RenderedThreadsPagePort } from '../src/resolver/rendered-threads-media.js';
+import { IP_RESOLVE_PERMIT_LEASE_MS, RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 
 const NOW = Date.parse('2026-07-25T00:00:00.000Z');
@@ -46,9 +44,7 @@ interface HarnessOptions {
   readonly markupUrls?: readonly string[];
   readonly probeResponse?: (request: Request, index: number) => Response | Promise<Response>;
   readonly rendererEnabled?: boolean;
-  readonly rendererResponse?: (
-    options: RenderedBrowserScrapeOptions,
-  ) => Response | Promise<Response>;
+  readonly rendererResponse?: (url: string) => unknown | Promise<unknown>;
   readonly replayStatus?: number;
   readonly reporterThrows?: boolean;
   readonly sessionAcquireStatus?: number;
@@ -61,10 +57,7 @@ interface HarnessControls {
   readonly clockValues: number[];
   readonly failureEvents: ResolveFailureEvent[];
   readonly ipBodies: Record<string, unknown>[];
-  readonly rendererCalls: Array<{
-    readonly action: string;
-    readonly options: RenderedBrowserScrapeOptions;
-  }>;
+  readonly rendererCalls: string[];
   readonly probeRequests: Request[];
   readonly sequence: string[];
   readonly sessionBodies: Record<string, unknown>[];
@@ -110,66 +103,32 @@ function jsonResponse(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
 
-function renderedElement(attributes: readonly { readonly name: string; readonly value: string }[]) {
+function renderedPage(
+  renderUrl: string,
+  candidateUrls: readonly string[] = [RENDERED_PRIVATE_URL],
+  identityUrl = renderUrl.slice(0, -'/media'.length),
+): unknown {
   return {
-    html: '<video></video>',
-    text: '',
-    width: 640,
-    height: 360,
-    top: 0,
-    left: 0,
-    attributes,
+    canonicalUrls: [identityUrl],
+    openGraphUrls: [identityUrl],
+    candidateSources: candidateUrls.map(() => 'rendered-video'),
+    candidateUrls,
   };
 }
 
-function renderedIdentity(options: RenderedBrowserScrapeOptions): readonly unknown[] {
-  const canonicalUrl = options.url.slice(0, -'/media'.length);
-  return [
-    {
-      selector: options.elements[0]!.selector,
-      results: [renderedElement([{ name: 'href', value: canonicalUrl }])],
-    },
-    {
-      selector: options.elements[1]!.selector,
-      results: [renderedElement([{ name: 'content', value: canonicalUrl }])],
-    },
-  ];
+function emptyRenderedPage(renderUrl: string): unknown {
+  return renderedPage(renderUrl, []);
 }
 
-function renderedResponse(
-  options: RenderedBrowserScrapeOptions,
-  url = RENDERED_PRIVATE_URL,
-): Response {
-  return jsonResponse({
-    success: true,
-    result: [
-      ...renderedIdentity(options),
-      {
-        selector: options.elements[2]!.selector,
-        results: [renderedElement([{ name: 'src', value: url }])],
-      },
-      { selector: options.elements[3]!.selector, results: [] },
-    ],
-  });
-}
-
-function emptyRenderedResponse(options: RenderedBrowserScrapeOptions): Response {
-  return jsonResponse({
-    success: true,
-    result: [
-      ...renderedIdentity(options),
-      { selector: options.elements[2]!.selector, results: [] },
-      { selector: options.elements[3]!.selector, results: [] },
-    ],
-  });
-}
-
-function browserBinding(options: HarnessOptions, controls: HarnessControls): BrowserRunScrapePort {
+function browserBinding(
+  options: HarnessOptions,
+  controls: HarnessControls,
+): RenderedThreadsPagePort {
   return {
-    async quickAction(action, scrapeOptions) {
-      controls.sequence.push('browser:scrape');
-      controls.rendererCalls.push({ action, options: scrapeOptions });
-      return options.rendererResponse?.(scrapeOptions) ?? renderedResponse(scrapeOptions);
+    async render(url) {
+      controls.sequence.push('browser:render');
+      controls.rendererCalls.push(url);
+      return options.rendererResponse?.(url) ?? renderedPage(url);
     },
   };
 }
@@ -191,7 +150,7 @@ function sessionNamespace(options: HarnessOptions, controls: HarnessControls): S
             const status = options.sessionAcquireStatus ?? 201;
             return jsonResponse(
               status === 201
-                ? { ok: true, expiresAt: (body['now'] as number) + 60_000 }
+                ? { ok: true, expiresAt: (body['now'] as number) + RESOLVE_PERMIT_LEASE_MS }
                 : { ok: false },
               status,
             );
@@ -247,7 +206,7 @@ function ipNamespace(options: HarnessOptions, controls: HarnessControls): IpRate
             const status = options.ipAcquireStatus ?? 201;
             return jsonResponse(
               status === 201
-                ? { ok: true, expiresAt: (body['now'] as number) + 60_000 }
+                ? { ok: true, expiresAt: (body['now'] as number) + IP_RESOLVE_PERMIT_LEASE_MS }
                 : { ok: false },
               status,
             );
@@ -784,14 +743,14 @@ describe('resolve public media workflow', () => {
         'turnstile:reserve',
         'turnstile:siteverify',
         'threads:markup',
-        'browser:scrape',
+        'browser:render',
         'probe:0',
         'vault:store',
         'session:release',
         'ip:release',
       ]);
       expect(harness.controls.rendererCalls).toHaveLength(1);
-      expect(harness.controls.rendererCalls[0]!.options.url).toBe(
+      expect(harness.controls.rendererCalls[0]).toBe(
         'https://www.threads.com/@alice/post/Abcde/media',
       );
       expect(harness.controls.probeRequests[0]!.url).toBe(RENDERED_PRIVATE_URL);
@@ -810,32 +769,14 @@ describe('resolve public media workflow', () => {
           status: 302,
           headers: { location: AMBIGUOUS_POST_REDIRECT_URL },
         }),
-      rendererResponse: (options) =>
-        jsonResponse({
-          success: true,
-          result: [
-            {
-              selector: options.elements[0]!.selector,
-              results: [renderedElement([{ name: 'href', value: usernameRedactedUrl }])],
-            },
-            {
-              selector: options.elements[1]!.selector,
-              results: [renderedElement([{ name: 'content', value: usernameRedactedUrl }])],
-            },
-            {
-              selector: options.elements[2]!.selector,
-              results: [renderedElement([{ name: 'src', value: RENDERED_PRIVATE_URL }])],
-            },
-            { selector: options.elements[3]!.selector, results: [] },
-          ],
-        }),
+      rendererResponse: (url) => renderedPage(url, [RENDERED_PRIVATE_URL], usernameRedactedUrl),
     });
 
     const result = await execute(harness);
 
     expect(result.response.status).toBe(200);
     expect(harness.controls.rendererCalls).toHaveLength(1);
-    expect(harness.controls.rendererCalls[0]!.options.url).toBe(
+    expect(harness.controls.rendererCalls[0]).toBe(
       'https://www.threads.com/@alice/post/Abcde/media',
     );
     expect(harness.controls.sequence.filter((entry) => entry === 'threads:markup')).toHaveLength(1);
@@ -850,21 +791,7 @@ describe('resolve public media workflow', () => {
         new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
           headers: { 'content-type': 'text/html' },
         }),
-      rendererResponse: (options) =>
-        jsonResponse({
-          success: true,
-          result: [
-            ...renderedIdentity(options),
-            {
-              selector: options.elements[2]!.selector,
-              results: [
-                renderedElement([{ name: 'src', value: RENDERED_PRIVATE_URL }]),
-                renderedElement([{ name: 'src', value: secondUrl }]),
-              ],
-            },
-            { selector: options.elements[3]!.selector, results: [] },
-          ],
-        }),
+      rendererResponse: (url) => renderedPage(url, [RENDERED_PRIVATE_URL, secondUrl]),
       probeResponse: (request) =>
         request.url === RENDERED_PRIVATE_URL
           ? new Response(null, { status: 404 })
@@ -916,58 +843,11 @@ describe('resolve public media workflow', () => {
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, 'private rendered probe transport']);
   });
 
-  it('retries one empty rendered result with the same canonical post inside the lease', async () => {
-    let renderCall = 0;
-    const harness = createHarness({
-      markupResponse: () =>
-        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
-          headers: { 'content-type': 'text/html' },
-        }),
-      rendererResponse(options) {
-        renderCall += 1;
-        return renderCall === 1 ? emptyRenderedResponse(options) : renderedResponse(options);
-      },
-      clock: (call) =>
-        [
-          NOW,
-          NOW,
-          NOW,
-          NOW + 10_000,
-          NOW + 20_000,
-          NOW + 34_000,
-          NOW + 42_000,
-          NOW + 42_000,
-          NOW + 42_100,
-        ][call]!,
-    });
-
-    const result = await execute(harness);
-
-    expect(result.response.status).toBe(200);
-    expect(harness.controls.rendererCalls).toHaveLength(2);
-    expect(harness.controls.rendererCalls.map(({ options }) => options.url)).toEqual([
-      'https://www.threads.com/@alice/post/Abcde/media',
-      'https://www.threads.com/@alice/post/Abcde/media',
-    ]);
-    expect(harness.controls.probeRequests).toHaveLength(1);
-    expect(harness.controls.vaultBodies).toHaveLength(1);
-  });
-
   it.each([
+    ['valid empty result', (url: string) => emptyRenderedPage(url), 422, 'MEDIA_NOT_FOUND', 1],
     [
-      'valid empty result',
-      (options: RenderedBrowserScrapeOptions) => emptyRenderedResponse(options),
-      422,
-      'MEDIA_NOT_FOUND',
-      2,
-    ],
-    [
-      'provider failure status',
-      () =>
-        new Response('private-provider-error', {
-          status: 429,
-          headers: { 'content-type': 'application/json' },
-        }),
+      'browser-session failure',
+      () => Promise.reject(new Error('private-provider-error')),
       503,
       'RESOLVE_UNAVAILABLE',
       1,
@@ -1060,7 +940,7 @@ describe('resolve public media workflow', () => {
     expectPublicBodySafe(result.body, ['private markup transport']);
   });
 
-  it('accepts each exact 60-second lease budget boundary through rendered probe and vault store', async () => {
+  it('accepts each exact 120-second lease budget boundary through rendered probe and vault store', async () => {
     const harness = createHarness({
       rendererEnabled: true,
       markupResponse: () =>
@@ -1072,11 +952,11 @@ describe('resolve public media workflow', () => {
           NOW,
           NOW,
           NOW,
-          NOW + 20_000,
-          NOW + 34_000,
-          NOW + 42_000,
-          NOW + 42_000,
-          NOW + 42_100,
+          NOW + 26_000,
+          NOW + 94_000,
+          NOW + 102_000,
+          NOW + 102_000,
+          NOW + 102_100,
         ][call]!;
       },
     });
@@ -1089,30 +969,11 @@ describe('resolve public media workflow', () => {
     expect(harness.controls.vaultBodies).toHaveLength(1);
   });
 
-  it('does not retry when the fixed permit cannot cover a second rendered budget', async () => {
-    const harness = createHarness({
-      markupResponse: () =>
-        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
-          headers: { 'content-type': 'text/html' },
-        }),
-      rendererResponse: (options) => emptyRenderedResponse(options),
-      clock: (call) => [NOW, NOW, NOW, NOW + 10_000, NOW + 20_001][call]!,
-    });
-
-    const result = await execute(harness);
-
-    expect(result.response.status).toBe(422);
-    expectError(result.body, 'MEDIA_NOT_FOUND');
-    expect(harness.controls.rendererCalls).toHaveLength(1);
-    expect(harness.controls.probeRequests).toEqual([]);
-    expect(harness.controls.vaultBodies).toEqual([]);
-  });
-
   it.each([
-    ['before rendering', [NOW, NOW, NOW, NOW + 20_001], 422, 'THREADS_JAVASCRIPT_REQUIRED', 0, 0],
+    ['before rendering', [NOW, NOW, NOW, NOW + 26_001], 422, 'THREADS_JAVASCRIPT_REQUIRED', 0, 0],
     [
       'after rendering',
-      [NOW, NOW, NOW, NOW + 20_000, NOW + 34_001],
+      [NOW, NOW, NOW, NOW + 26_000, NOW + 94_001],
       503,
       'RESOLVE_UNAVAILABLE',
       1,
@@ -1120,7 +981,7 @@ describe('resolve public media workflow', () => {
     ],
     [
       'after probing',
-      [NOW, NOW, NOW, NOW + 20_000, NOW + 34_000, NOW + 42_001],
+      [NOW, NOW, NOW, NOW + 26_000, NOW + 94_000, NOW + 102_001],
       503,
       'RESOLVE_UNAVAILABLE',
       1,
@@ -1181,7 +1042,7 @@ describe('resolve public media typed failures', () => {
       503,
       'TURNSTILE_UNAVAILABLE',
     ],
-  ] as const)('never calls Browser Run after $0', async (_name, options, status, code) => {
+  ] as const)('never launches a browser session after $0', async (_name, options, status, code) => {
     const harness = createHarness({ ...options, rendererEnabled: true });
     const result = await execute(harness);
 
@@ -1353,11 +1214,7 @@ describe('resolve public media failure telemetry', () => {
           new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
             headers: { 'content-type': 'text/html' },
           }),
-        rendererResponse: () =>
-          new Response('private-provider-error', {
-            status: 429,
-            headers: { 'content-type': 'application/json' },
-          }),
+        rendererResponse: () => Promise.reject(new Error('private-provider-error')),
       },
       'resolve',
       'RENDERED_UNAVAILABLE',
@@ -1499,15 +1356,7 @@ describe('resolve public media failure telemetry', () => {
           new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
             headers: { 'content-type': 'text/html' },
           }),
-        rendererResponse: (options: RenderedBrowserScrapeOptions) =>
-          jsonResponse({
-            success: true,
-            result: [
-              ...renderedIdentity(options),
-              { selector: options.elements[2]!.selector, results: [] },
-              { selector: options.elements[3]!.selector, results: [] },
-            ],
-          }),
+        rendererResponse: (url: string) => emptyRenderedPage(url),
       },
       'RENDERED_MEDIA_NOT_FOUND',
       undefined,

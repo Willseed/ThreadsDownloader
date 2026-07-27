@@ -19,6 +19,7 @@ function validConfig() {
   return {
     name: 'threads-downloader',
     main: 'apps/worker/src/index.ts',
+    compatibility_flags: ['nodejs_compat'],
     workers_dev: false,
     preview_urls: false,
     secrets: { required: [...REQUIRED_SECRETS] },
@@ -102,13 +103,28 @@ describe('Wrangler exposure gate', () => {
     });
 
     const clean = validConfig();
-    clean.compatibility_flags = ['route'];
+    clean.fixture_note = 'route';
     await expect(violationsFor(clean)).resolves.toEqual([]);
   });
 
   it.each([
     ['wrong name', (config) => (config.name = 'fixture-worker'), WRANGLER_RULES.name],
     ['wrong main', (config) => (config.main = 'apps/worker/src/other.ts'), WRANGLER_RULES.main],
+    [
+      'missing Node compatibility flag',
+      (config) => delete config.compatibility_flags,
+      WRANGLER_RULES.compatibilityFlags,
+    ],
+    [
+      'wrong Node compatibility flag',
+      (config) => (config.compatibility_flags = ['nodejs_compat_v2']),
+      WRANGLER_RULES.compatibilityFlags,
+    ],
+    [
+      'extra compatibility flag',
+      (config) => config.compatibility_flags.push('nodejs_als'),
+      WRANGLER_RULES.compatibilityFlags,
+    ],
     [
       'wrong host',
       (config) => (config.vars.EXPECTED_HOST = 'fixture.invalid'),

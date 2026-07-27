@@ -1,15 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   createRenderedThreadsMediaResolver,
-  RENDERED_ALLOWED_REQUEST_PATTERNS,
-  RENDERED_BROWSER_BUDGET_MS,
-  RENDERED_RESPONSE_READ_TIMEOUT_MS,
   RENDERED_RESOLVER_BUDGET_MS,
   RenderedThreadsMediaResolverError,
-  type BrowserRunScrapePort,
-  type RenderedBrowserScrapeOptions,
   type RenderedThreadsMediaResolverErrorCode,
+  type RenderedThreadsPagePort,
 } from '../src/resolver/rendered-threads-media.js';
 import { parseThreadsPostUrl } from '../src/security/upstream-policy.js';
 
@@ -17,78 +13,38 @@ const insecureHttp = 'http:';
 const CANONICAL_URL = 'https://www.threads.com/@alice/post/Abcde';
 const USERNAME_REDACTED_URL = 'https://www.threads.com/@/post/Abcde';
 const TARGET_URL = 'https://www.threads.com/@alice/post/Abcde/media';
-const CANONICAL_SELECTOR = 'link[rel="canonical"]';
-const OPEN_GRAPH_SELECTOR = 'meta[property="og:url"]';
-const VIDEO_SELECTOR = 'video[src]';
-const SOURCE_SELECTOR = 'video source[src]';
 const PRIVATE_URL =
   'https://instagram.ftpe7-2.fna.fbcdn.net/media/video.mp4?token=private-render-token';
 const post = parseThreadsPostUrl('https://www.threads.com/@alice/post/Abcde?fixture=input');
 
-function element(attributes: readonly { readonly name: string; readonly value: string }[]) {
-  return {
-    html: '<video></video>',
-    text: '',
-    width: 640,
-    height: 360,
-    top: 0,
-    left: 0,
-    attributes,
-  };
+interface PrimitiveCandidate {
+  readonly source: 'rendered-source' | 'rendered-video';
+  readonly url: string;
 }
 
-function successBody(
-  videoResults: readonly unknown[] = [],
-  sourceResults: readonly unknown[] = [],
-  canonicalResults: readonly unknown[] = [element([{ name: 'href', value: CANONICAL_URL }])],
-  openGraphResults: readonly unknown[] = [element([{ name: 'content', value: CANONICAL_URL }])],
+function renderedPage(
+  candidates: readonly PrimitiveCandidate[] = [],
+  canonicalUrls: readonly unknown[] = [CANONICAL_URL],
+  openGraphUrls: readonly unknown[] = [CANONICAL_URL],
 ): Record<string, unknown> {
   return {
-    success: true,
-    result: [
-      { selector: CANONICAL_SELECTOR, results: canonicalResults },
-      { selector: OPEN_GRAPH_SELECTOR, results: openGraphResults },
-      { selector: VIDEO_SELECTOR, results: videoResults },
-      { selector: SOURCE_SELECTOR, results: sourceResults },
-    ],
+    canonicalUrls,
+    openGraphUrls,
+    candidateSources: candidates.map(({ source }) => source),
+    candidateUrls: candidates.map(({ url }) => url),
   };
 }
 
-function identityBody(value: string): Record<string, unknown> {
-  return successBody(
-    [],
-    [],
-    [element([{ name: 'href', value }])],
-    [element([{ name: 'content', value }])],
-  );
-}
-
-function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
-  headers.set('content-type', 'application/json; charset=utf-8');
-  return new Response(JSON.stringify(value), { ...init, headers });
-}
-
-function browserReturning(
-  response: (options: RenderedBrowserScrapeOptions) => Response | Promise<Response>,
-  calls: Array<{ readonly action: string; readonly options: RenderedBrowserScrapeOptions }> = [],
-): BrowserRunScrapePort {
+function pageReturning(
+  value: unknown | ((url: string) => unknown | Promise<unknown>),
+  calls: string[] = [],
+): RenderedThreadsPagePort {
   return {
-    async quickAction(action, options) {
-      calls.push({ action, options });
-      return response(options);
+    async render(url) {
+      calls.push(url);
+      return typeof value === 'function' ? value(url) : value;
     },
   };
-}
-
-function resolver(
-  browser: BrowserRunScrapePort,
-  timeoutSignal?: (milliseconds: number) => AbortSignal,
-) {
-  return createRenderedThreadsMediaResolver({
-    browser,
-    ...(timeoutSignal === undefined ? {} : { timeoutSignal }),
-  });
 }
 
 async function expectResolverError(
@@ -109,392 +65,141 @@ async function expectResolverError(
   }
 }
 
-describe('rendered Threads media resolver request policy', () => {
-  it('loads only the canonical /media route with bounded credential-free scrape options', async () => {
-    const calls: Array<{
-      readonly action: string;
-      readonly options: RenderedBrowserScrapeOptions;
-    }> = [];
-    const browser = browserReturning(
-      () => jsonResponse(successBody([element([{ name: 'src', value: PRIVATE_URL }])])),
+describe('rendered Threads media resolver', () => {
+  it('renders only the server-built canonical /media URL within the session budget', async () => {
+    const calls: string[] = [];
+    const page = pageReturning(
+      renderedPage([{ source: 'rendered-video', url: PRIVATE_URL }]),
       calls,
     );
 
-    const result = await resolver(browser).resolve(post);
+    const result = await createRenderedThreadsMediaResolver({ page }).resolve(post);
 
     expect(result.candidates).toHaveLength(1);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.action).toBe('scrape');
-    const options = calls[0]!.options;
-    expect(options.url).toBe(TARGET_URL);
-    expect(options.url).not.toContain('fixture');
-    expect(options.cookies).toEqual([]);
-    expect(options.cacheTTL).toBe(0);
-    expect(options.setJavaScriptEnabled).toBe(true);
-    expect(options.gotoOptions).toEqual({ timeout: 4_000, waitUntil: 'domcontentloaded' });
-    expect(options.actionTimeout).toBe(8_000);
-    expect(options.waitForTimeout).toBe(5_000);
-    expect(options).not.toHaveProperty('waitForSelector');
-    expect(RENDERED_BROWSER_BUDGET_MS).toBe(12_000);
-    expect(RENDERED_RESPONSE_READ_TIMEOUT_MS).toBe(2_000);
-    expect(RENDERED_RESOLVER_BUDGET_MS).toBe(14_000);
-    expect(options.bestAttempt).toBe(false);
-    expect(options.elements).toEqual([
-      { selector: CANONICAL_SELECTOR },
-      { selector: OPEN_GRAPH_SELECTOR },
-      { selector: VIDEO_SELECTOR },
-      { selector: SOURCE_SELECTOR },
-    ]);
-    expect(Object.keys(options).sort()).toEqual([
-      'actionTimeout',
-      'allowRequestPattern',
-      'bestAttempt',
-      'cacheTTL',
-      'cookies',
-      'elements',
-      'gotoOptions',
-      'setJavaScriptEnabled',
-      'url',
-      'waitForTimeout',
-    ]);
+    expect(calls).toEqual([TARGET_URL]);
+    expect(calls[0]).not.toContain('fixture');
+    expect(RENDERED_RESOLVER_BUDGET_MS).toBe(68_000);
   });
 
-  it('anchors Browser Run subrequests to Threads and the two approved CDN families', () => {
-    const patterns = RENDERED_ALLOWED_REQUEST_PATTERNS.map((source) => new RegExp(source, 'u'));
-    const allowed = (url: string): boolean => patterns.some((pattern) => pattern.test(url));
-
-    expect(allowed('https://www.threads.com/@alice/post/Abcde/media')).toBe(true);
-    expect(allowed('https://static.cdninstagram.com/rsrc/script.js')).toBe(true);
-    expect(allowed(PRIVATE_URL)).toBe(true);
-
-    for (const unsafe of [
-      'https://threads.com/@alice/post/Abcde/media',
-      'https://www.threads.com.attacker.example/private',
-      'https://user@www.threads.com/private',
-      'https://www.threads.com:444/private',
-      `${insecureHttp}//www.threads.com/@alice/post/Abcde/media`,
-      'https://cdninstagram.com.attacker.example/private',
-      'https://instagram.ftpe7-2.fna.fbcdn.net.attacker.example/private',
-      'https://scontent.ftpe7-2.fna.fbcdn.net/private',
-    ]) {
-      expect(allowed(unsafe), unsafe).toBe(false);
-    }
-  });
-});
-
-describe('rendered Threads media resolver response contract', () => {
-  it('validates post identity, ignores unsafe media, and canonically deduplicates one candidate', async () => {
-    const body = successBody(
-      [element([{ name: 'src', value: ` ${PRIVATE_URL} ` }])],
-      [
-        element([{ name: 'src', value: PRIVATE_URL }]),
-        element([{ name: 'src', value: 'https://attacker.example/private' }]),
-      ],
-    );
-
-    const result = await resolver(browserReturning(() => jsonResponse(body))).resolve(post);
-
-    expect(result.candidates.map(({ source, value }) => [source, value.url.href])).toEqual([
-      ['rendered-video', PRIVATE_URL],
-    ]);
-  });
-
-  it('accepts one mutually consistent username-redacted identity for the exact shortcode', async () => {
-    const body = successBody(
-      [element([{ name: 'src', value: PRIVATE_URL }])],
-      [],
-      [element([{ name: 'href', value: USERNAME_REDACTED_URL }])],
-      [element([{ name: 'content', value: USERNAME_REDACTED_URL }])],
+  it('accepts mutually consistent username-redacted identity for the exact shortcode', async () => {
+    const page = renderedPage(
+      [{ source: 'rendered-video', url: PRIVATE_URL }],
+      [USERNAME_REDACTED_URL],
+      [USERNAME_REDACTED_URL],
     );
 
     await expect(
-      resolver(browserReturning(() => jsonResponse(body))).resolve(post),
+      createRenderedThreadsMediaResolver({ page: pageReturning(page) }).resolve(post),
     ).resolves.toHaveProperty('candidates.length', 1);
   });
 
   it.each([
-    ['missing canonical link', successBody([], [], [])],
+    ['missing canonical', renderedPage([], [])],
+    ['duplicate canonical', renderedPage([], [CANONICAL_URL, CANONICAL_URL])],
+    ['foreign canonical', renderedPage([], ['https://www.threads.com/@alice/post/Related'])],
+    ['identity disagreement', renderedPage([], [USERNAME_REDACTED_URL], [CANONICAL_URL])],
+    ['redacted mismatched shortcode', renderedPage([], ['https://www.threads.com/@/post/Other'])],
+    ['redacted case-changed shortcode', renderedPage([], ['https://www.threads.com/@/post/abcde'])],
+    ['redacted encoded shortcode', renderedPage([], ['https://www.threads.com/@/post/Abcd%65'])],
+    ['redacted HTTP', renderedPage([], [`${insecureHttp}//www.threads.com/@/post/Abcde`])],
     [
-      'duplicate canonical links',
-      successBody(
-        [],
-        [],
-        [
-          element([{ name: 'href', value: CANONICAL_URL }]),
-          element([{ name: 'href', value: CANONICAL_URL }]),
-        ],
-      ),
+      'redacted lookalike host',
+      renderedPage([], ['https://www.threads.com.attacker.example/@/post/Abcde']),
     ],
-    [
-      'canonical link without href',
-      successBody([], [], [element([{ name: 'rel', value: 'canonical' }])]),
-    ],
-    [
-      'foreign canonical link',
-      successBody(
-        [],
-        [],
-        [
-          element([
-            {
-              name: 'href',
-              value: 'https://www.threads.com/@alice/post/Related',
-            },
-          ]),
-        ],
-      ),
-    ],
-    ['missing Open Graph URL', successBody([], [], undefined, [])],
-    [
-      'Open Graph URL with query',
-      successBody([], [], undefined, [
-        element([{ name: 'content', value: `${CANONICAL_URL}?private=redirected` }]),
-      ]),
-    ],
-    [
-      'redacted identity with a mismatched shortcode',
-      identityBody('https://www.threads.com/@/post/Other'),
-    ],
-    [
-      'redacted identity with case-changed shortcode',
-      identityBody('https://www.threads.com/@/post/abcde'),
-    ],
-    [
-      'redacted identity with percent-encoded shortcode',
-      identityBody('https://www.threads.com/@/post/Abcd%65'),
-    ],
-    ['redacted identity with HTTP', identityBody(`${insecureHttp}//www.threads.com/@/post/Abcde`)],
-    [
-      'redacted identity with a similar host',
-      identityBody('https://www.threads.com.attacker.example/@/post/Abcde'),
-    ],
-    [
-      'redacted identity with an explicit port',
-      identityBody('https://www.threads.com:443/@/post/Abcde'),
-    ],
-    ['redacted identity with a query', identityBody(`${USERNAME_REDACTED_URL}?view=media`)],
-    ['redacted identity with a fragment', identityBody(`${USERNAME_REDACTED_URL}#media`)],
-    ['redacted identity with a trailing slash', identityBody(`${USERNAME_REDACTED_URL}/`)],
-    ['redacted identity with extra path', identityBody(`${USERNAME_REDACTED_URL}/extra`)],
-    [
-      'canonical and Open Graph identity disagreement',
-      successBody(
-        [],
-        [],
-        [element([{ name: 'href', value: USERNAME_REDACTED_URL }])],
-        [element([{ name: 'content', value: CANONICAL_URL }])],
-      ),
-    ],
-  ] as const)('rejects identity evidence with %s', async (_name, body) => {
+    ['redacted explicit port', renderedPage([], ['https://www.threads.com:443/@/post/Abcde'])],
+    ['redacted query', renderedPage([], [`${USERNAME_REDACTED_URL}?view=media`])],
+    ['redacted fragment', renderedPage([], [`${USERNAME_REDACTED_URL}#media`])],
+    ['redacted trailing slash', renderedPage([], [`${USERNAME_REDACTED_URL}/`])],
+  ] as const)('rejects %s identity evidence', async (_name, value) => {
     await expectResolverError(
-      resolver(browserReturning(() => jsonResponse(body))).resolve(post),
+      createRenderedThreadsMediaResolver({ page: pageReturning(value) }).resolve(post),
       'RENDERED_RESPONSE_INVALID',
-      ['Related', 'private=redirected', PRIVATE_URL],
+      ['Related'],
     );
   });
 
   it.each([
-    ['extra envelope field', { ...successBody(), provider: 'private-provider-detail' }],
-    ['provider error shape', { success: false, errors: [{ message: 'private-provider-detail' }] }],
+    ['extra field', { ...renderedPage(), provider: 'private-provider-detail' }],
     [
-      'wrong selector order',
+      'oversized identity',
+      renderedPage([], [`https://www.threads.com/@alice/post/${'a'.repeat(4_097)}`]),
+    ],
+    ['non-array candidate URLs', { ...renderedPage(), candidateUrls: PRIVATE_URL }],
+    [
+      'invalid candidate source',
       {
-        success: true,
-        result: [
-          { selector: OPEN_GRAPH_SELECTOR, results: [] },
-          { selector: CANONICAL_SELECTOR, results: [] },
-          { selector: VIDEO_SELECTOR, results: [] },
-          { selector: SOURCE_SELECTOR, results: [] },
-        ],
+        ...renderedPage(),
+        candidateSources: ['provider-private-source'],
+        candidateUrls: [PRIVATE_URL],
       },
     ],
-    ['extra element field', successBody([{ ...element([]), provider: 'private-provider-detail' }])],
     [
-      'duplicate attributes',
-      successBody([
-        element([
-          { name: 'src', value: PRIVATE_URL },
-          { name: 'src', value: 'https://video.cdninstagram.com/duplicate.mp4' },
-        ]),
+      'mismatched candidate arrays',
+      { ...renderedPage(), candidateSources: ['rendered-video'], candidateUrls: [] },
+    ],
+    [
+      'too many candidates',
+      renderedPage(
+        Array.from({ length: 17 }, (_, index) => ({
+          source: 'rendered-video' as const,
+          url: `https://video.cdninstagram.com/${String(index)}.mp4`,
+        })),
+      ),
+    ],
+    [
+      'oversized candidate value',
+      renderedPage([
+        { source: 'rendered-video', url: `https://video.cdninstagram.com/${'a'.repeat(4_097)}` },
       ]),
     ],
-    [
-      'non-finite layout',
-      successBody([{ ...element([{ name: 'src', value: PRIVATE_URL }]), width: Number.NaN }]),
-    ],
-    ['too many selector results', successBody(Array.from({ length: 17 }, () => element([])))],
-    [
-      'too many attributes',
-      successBody([
-        element(
-          Array.from({ length: 65 }, (_, index) => ({
-            name: `data-${String(index)}`,
-            value: '',
-          })),
-        ),
-      ]),
-    ],
-  ] as const)('rejects an invalid exact response: %s', async (_name, body) => {
+  ] as const)('rejects a malformed primitive envelope: %s', async (_name, value) => {
     await expectResolverError(
-      resolver(browserReturning(() => jsonResponse(body))).resolve(post),
+      createRenderedThreadsMediaResolver({ page: pageReturning(value) }).resolve(post),
       'RENDERED_RESPONSE_INVALID',
-      ['private-provider-detail', PRIVATE_URL],
+      ['private-provider-detail', 'provider-private-source', PRIVATE_URL],
     );
   });
 
-  it('returns three unique videos in DOM order while filtering unsafe and cross-selector duplicates', async () => {
+  it('keeps three unique candidates in DOM order while filtering unsafe and duplicate URLs', async () => {
     const urls = Array.from(
       { length: 3 },
       (_, index) =>
         `https://video.cdninstagram.com/${String(index)}.mp4?token=private-${String(index)}`,
     );
-    const results = [
-      element([{ name: 'src', value: 'https://attacker.example/blocked.mp4' }]),
-      ...urls.map((url) => element([{ name: 'src', value: url }])),
-    ];
-    const result = await resolver(
-      browserReturning(() =>
-        jsonResponse(
-          successBody(results, [
-            element([{ name: 'src', value: ` ${urls[1]!} ` }]),
-            element([{ name: 'src', value: 'https://attacker.example/source.mp4' }]),
-          ]),
-        ),
-      ),
-    ).resolve(post);
+    const page = renderedPage([
+      { source: 'rendered-video', url: 'https://attacker.example/blocked.mp4' },
+      { source: 'rendered-video', url: urls[0]! },
+      { source: 'rendered-source', url: urls[1]! },
+      { source: 'rendered-video', url: urls[2]! },
+      { source: 'rendered-video', url: ` ${urls[1]!} ` },
+    ]);
 
-    expect(result.candidates.map(({ source, value }) => [source, value.url.href])).toEqual(
-      urls.map((url) => ['rendered-video', url]),
+    const result = await createRenderedThreadsMediaResolver({ page: pageReturning(page) }).resolve(
+      post,
     );
+
+    expect(result.candidates.map(({ source, value }) => [source, value.url.href])).toEqual([
+      ['rendered-video', urls[0]],
+      ['rendered-source', urls[1]],
+      ['rendered-video', urls[2]],
+    ]);
   });
 
-  it.each([
-    [
-      new Response('{}', { status: 429, headers: { 'content-type': 'application/json' } }),
-      'RENDERED_UNAVAILABLE',
-    ],
-    [new Response('{}'), 'RENDERED_RESPONSE_INVALID'],
-    [new Response('{}', { headers: { 'content-type': 'text/html' } }), 'RENDERED_RESPONSE_INVALID'],
-    [
-      new Response('{broken', { headers: { 'content-type': 'application/json' } }),
-      'RENDERED_RESPONSE_INVALID',
-    ],
-    [
-      new Response(Uint8Array.of(0xff), { headers: { 'content-type': 'application/json' } }),
-      'RENDERED_RESPONSE_INVALID',
-    ],
-  ] as const)(
-    'maps status, media type, JSON, and UTF-8 failures safely',
-    async (response, code) => {
-      await expectResolverError(resolver(browserReturning(() => response)).resolve(post), code, [
-        'private-provider-detail',
-      ]);
-    },
-  );
-
-  it('prechecks declared length and cancels an actual body beyond 128 KiB', async () => {
-    let declaredCancellations = 0;
-    const unread = new ReadableStream<Uint8Array>({
-      cancel() {
-        declaredCancellations += 1;
-      },
-    });
-    const declared = new Response(unread, {
-      headers: {
-        'content-length': String(128 * 1024 + 1),
-        'content-type': 'application/json',
-      },
-    });
+  it('maps session failures to one typed safe unavailable result', async () => {
+    const secret = 'private-browser-session-detail';
     await expectResolverError(
-      resolver(browserReturning(() => declared)).resolve(post),
-      'RENDERED_RESPONSE_TOO_LARGE',
-    );
-    expect(declaredCancellations).toBe(1);
-
-    let actualCancellations = 0;
-    const oversized = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(128 * 1024 + 1));
-      },
-      cancel() {
-        actualCancellations += 1;
-      },
-    });
-    await expectResolverError(
-      resolver(
-        browserReturning(
-          () => new Response(oversized, { headers: { 'content-type': 'application/json' } }),
-        ),
-      ).resolve(post),
-      'RENDERED_RESPONSE_TOO_LARGE',
-    );
-    expect(actualCancellations).toBe(1);
-  });
-
-  it('maps provider and body-read failures without provider details', async () => {
-    const providerSecret = 'private-provider-selector-timeout';
-    await expectResolverError(
-      resolver({
-        async quickAction() {
-          throw new Error(providerSecret);
-        },
+      createRenderedThreadsMediaResolver({
+        page: pageReturning(() => Promise.reject(new Error(secret))),
       }).resolve(post),
       'RENDERED_UNAVAILABLE',
-      [providerSecret],
+      [secret],
     );
+  });
 
-    const readSecret = 'private-stream-stack';
-    const stream = new ReadableStream<Uint8Array>({
-      pull() {
-        throw new Error(readSecret);
-      },
-    });
+  it('reports no media only after a valid identity-bound empty envelope', async () => {
     await expectResolverError(
-      resolver(
-        browserReturning(
-          () => new Response(stream, { headers: { 'content-type': 'application/json' } }),
-        ),
-      ).resolve(post),
-      'RENDERED_UNAVAILABLE',
-      [readSecret],
+      createRenderedThreadsMediaResolver({ page: pageReturning(renderedPage()) }).resolve(post),
+      'RENDERED_MEDIA_NOT_FOUND',
     );
-  });
-
-  it('aborts and cancels a never-ending response body at one absolute deadline', async () => {
-    const controller = new AbortController();
-    const timeoutCalls: number[] = [];
-    let cancellations = 0;
-    const stream = new ReadableStream<Uint8Array>({
-      cancel() {
-        cancellations += 1;
-      },
-    });
-    const action = resolver(
-      browserReturning(
-        () => new Response(stream, { headers: { 'content-type': 'application/json' } }),
-      ),
-      (milliseconds) => {
-        timeoutCalls.push(milliseconds);
-        return controller.signal;
-      },
-    ).resolve(post);
-
-    await vi.waitFor(() => expect(timeoutCalls).toEqual([RENDERED_RESPONSE_READ_TIMEOUT_MS]));
-    controller.abort('private-timeout-reason');
-    await expectResolverError(action, 'RENDERED_UNAVAILABLE', ['private-timeout-reason']);
-    expect(cancellations).toBe(1);
-    await Promise.resolve();
-  });
-
-  it('reports no media only after a valid empty response', async () => {
-    const browser = browserReturning(() => jsonResponse(successBody()));
-    await expectResolverError(resolver(browser).resolve(post), 'RENDERED_MEDIA_NOT_FOUND');
-  });
-
-  it('never uses Response.json() for the external Browser Run response', async () => {
-    const response = jsonResponse(successBody([element([{ name: 'src', value: PRIVATE_URL }])]));
-    const json = vi.spyOn(response, 'json');
-    await resolver(browserReturning(() => response)).resolve(post);
-    expect(json).not.toHaveBeenCalled();
   });
 });
