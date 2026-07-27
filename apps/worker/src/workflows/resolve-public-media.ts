@@ -11,6 +11,7 @@ import {
   createMediaProbe,
   MEDIA_PROBE_TIMEOUT_MS,
   MediaProbeError,
+  type MediaProbeErrorCode,
   type ProbedMedia,
 } from '../resolver/media-probe.js';
 import {
@@ -23,6 +24,7 @@ import {
   RENDERED_RESOLVER_BUDGET_MS,
   RenderedThreadsMediaResolverError,
   type BrowserRunScrapePort,
+  type RenderedThreadsMediaResolverErrorCode,
 } from '../resolver/rendered-threads-media.js';
 import type { MediaCandidate } from '../resolver/structured-media.js';
 import {
@@ -30,9 +32,10 @@ import {
   CSRF_TOKEN_BYTES,
   readBoundedJson,
   resumeBrowserSession,
+  type BrowserSessionErrorCode,
   validateMutationHeaders,
 } from '../security/browser-session.js';
-import { ClientIpError, extractClientIp } from '../security/client-ip.js';
+import { ClientIpError, extractClientIp, type ClientIpErrorCode } from '../security/client-ip.js';
 import {
   createOpaqueValueSigner,
   hashIdentifier,
@@ -42,23 +45,27 @@ import {
   acquireResolveLimits,
   ResolveLimitsError,
   type IpRateLimitNamespace,
+  type ResolveLimitsErrorCode,
   type ResolveLimitsLease,
 } from '../security/resolve-limits.js';
 import {
   RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
   ResolveVaultError,
+  type ResolveVaultErrorCode,
   storeResolvedMediaBatch,
 } from '../security/resolve-vault.js';
 import type { BrowserSessionIdentity, SessionNamespace } from '../security/session-client.js';
 import {
   TurnstileError,
   verifyTurnstileOnce,
+  type TurnstileErrorCode,
   type TurnstileReplayNamespace,
 } from '../security/turnstile.js';
 import {
   parseThreadsPostUrl,
   type NormalizedThreadsPost,
   UpstreamPolicyError,
+  type UpstreamPolicyErrorCode,
 } from '../security/upstream-policy.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 
@@ -79,6 +86,31 @@ const FALLBACK_LEASE_BUDGET_MS =
 const POST_RENDER_LEASE_BUDGET_MS =
   MEDIA_PROBE_TIMEOUT_MS + RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
 const POST_PROBE_LEASE_BUDGET_MS = RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
+const TRANSIENT_PROBE_FAILURE_PRIORITY: readonly MediaProbeErrorCode[] = [
+  'MEDIA_PROBE_ABORTED',
+  'MEDIA_PROBE_UNAVAILABLE',
+];
+
+export type ResolveFailureStage = 'admission' | 'prepare' | 'resolve';
+export type ResolveFailureCode =
+  | BrowserSessionErrorCode
+  | ClientIpErrorCode
+  | MediaProbeErrorCode
+  | PublicThreadsMarkupResolverErrorCode
+  | RenderedThreadsMediaResolverErrorCode
+  | ResolveLimitsErrorCode
+  | ResolveVaultErrorCode
+  | TurnstileErrorCode
+  | UpstreamPolicyErrorCode
+  | WorkflowErrorCode
+  | 'RESOLVE_LEASE_BUDGET'
+  | 'UNEXPECTED_ERROR';
+
+export interface ResolveFailureEvent {
+  readonly requestId: string;
+  readonly stage: ResolveFailureStage;
+  readonly code: ResolveFailureCode;
+}
 
 export interface ResolvePublicMediaBindings {
   readonly BROWSER?: BrowserRunScrapePort;
@@ -94,6 +126,7 @@ export interface ResolvePublicMediaBindings {
 export interface ResolvePublicMediaRuntime {
   readonly fetcher: typeof fetch;
   readonly now: () => number;
+  readonly reportFailure: (event: ResolveFailureEvent) => void;
   readonly requestId: () => string;
 }
 
@@ -124,7 +157,10 @@ interface ResolvedCandidates {
 type WorkflowErrorCode = 'MEDIA_NOT_FOUND' | 'RESOLVE_UNAVAILABLE';
 
 class ResolvePublicMediaError extends Error {
-  constructor(readonly code: WorkflowErrorCode) {
+  constructor(
+    readonly code: WorkflowErrorCode,
+    readonly failureCode: ResolveFailureCode = code,
+  ) {
     super(code);
     this.name = 'ResolvePublicMediaError';
   }
@@ -267,8 +303,44 @@ function publicFailure(error: unknown): PublicFailure {
   return failure('INTERNAL_ERROR', 500, '伺服器暫時無法處理請求。');
 }
 
-function errorResponse(error: unknown, requestId: string): Response {
+function failureCode(error: unknown): ResolveFailureCode {
+  if (
+    error instanceof BrowserSessionError ||
+    error instanceof ClientIpError ||
+    error instanceof MediaProbeError ||
+    error instanceof PublicThreadsMarkupResolverError ||
+    error instanceof RenderedThreadsMediaResolverError ||
+    error instanceof ResolveLimitsError ||
+    error instanceof ResolveVaultError ||
+    error instanceof TurnstileError ||
+    error instanceof UpstreamPolicyError
+  ) {
+    return error.code;
+  }
+  if (error instanceof ResolvePublicMediaError) {
+    return error.failureCode;
+  }
+  return 'UNEXPECTED_ERROR';
+}
+
+function reportServerFailure(runtime: ResolvePublicMediaRuntime, event: ResolveFailureEvent): void {
+  try {
+    runtime.reportFailure(event);
+  } catch {
+    // Failure reporting is best-effort and must never replace the public response.
+  }
+}
+
+function errorResponse(
+  error: unknown,
+  requestId: string,
+  stage: ResolveFailureStage,
+  runtime: ResolvePublicMediaRuntime,
+): Response {
   const mapped = publicFailure(error);
+  if (mapped.status >= 500 && mapped.status <= 599) {
+    reportServerFailure(runtime, { requestId, stage, code: failureCode(error) });
+  }
   return Response.json(createApiError(mapped.code, mapped.message, requestId), {
     status: mapped.status,
     headers: { 'cache-control': 'no-store' },
@@ -310,7 +382,7 @@ async function probeCandidates(
   );
   const usable: ProbedMedia[] = [];
   const finalUrls = new Set<string>();
-  let transientFailure = false;
+  const transientFailures = new Set<MediaProbeErrorCode>();
 
   for (const result of settled) {
     if (result.status === 'fulfilled') {
@@ -324,11 +396,19 @@ async function probeCandidates(
     if (!(result.reason instanceof MediaProbeError)) {
       throw result.reason;
     }
-    transientFailure ||= transientProbeFailure(result.reason);
+    if (transientProbeFailure(result.reason)) {
+      transientFailures.add(result.reason.code);
+    }
   }
 
   if (usable.length === 0) {
-    throw new ResolvePublicMediaError(transientFailure ? 'RESOLVE_UNAVAILABLE' : 'MEDIA_NOT_FOUND');
+    const transientFailure = TRANSIENT_PROBE_FAILURE_PRIORITY.find((code) =>
+      transientFailures.has(code),
+    );
+    throw new ResolvePublicMediaError(
+      transientFailure === undefined ? 'MEDIA_NOT_FOUND' : 'RESOLVE_UNAVAILABLE',
+      transientFailure,
+    );
   }
   return usable;
 }
@@ -373,7 +453,7 @@ function hasLeaseBudget(
   try {
     now = runtime.now();
   } catch {
-    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE');
+    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE', 'RESOLVE_LEASE_BUDGET');
   }
   return (
     Number.isSafeInteger(now) &&
@@ -388,7 +468,7 @@ function assertLeaseBudget(
   minimumRemainingMs: number,
 ): void {
   if (!hasLeaseBudget(lease, runtime, minimumRemainingMs)) {
-    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE');
+    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE', 'RESOLVE_LEASE_BUDGET');
   }
 }
 
@@ -458,7 +538,7 @@ export function createResolvePublicMediaHandler(
     try {
       prepared = await prepareRequest(request, bindings);
     } catch (error: unknown) {
-      return errorResponse(error, id);
+      return errorResponse(error, id, 'prepare', runtime);
     }
 
     let lease: ResolveLimitsLease;
@@ -473,7 +553,7 @@ export function createResolvePublicMediaHandler(
         now: runtime.now(),
       });
     } catch (error: unknown) {
-      return errorResponse(error, id);
+      return errorResponse(error, id, 'admission', runtime);
     }
 
     try {
@@ -487,7 +567,7 @@ export function createResolvePublicMediaHandler(
       );
       return Response.json(response, { headers: { 'cache-control': 'no-store' } });
     } catch (error: unknown) {
-      return errorResponse(error, id);
+      return errorResponse(error, id, 'resolve', runtime);
     } finally {
       try {
         await lease.release();

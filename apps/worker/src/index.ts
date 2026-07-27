@@ -95,6 +95,9 @@ function requestId(): string {
 const resolvePublicMedia = createResolvePublicMediaHandler({
   fetcher: fetch,
   now: Date.now,
+  reportFailure(event) {
+    console.error(JSON.stringify(event));
+  },
   requestId,
 });
 

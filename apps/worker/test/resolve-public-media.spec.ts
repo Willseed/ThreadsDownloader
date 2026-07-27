@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createResolvePublicMediaHandler,
+  type ResolveFailureEvent,
   type ResolvePublicMediaBindings,
   type ResolvePublicMediaRuntime,
 } from '../src/workflows/resolve-public-media.js';
@@ -42,6 +43,7 @@ interface HarnessOptions {
     options: RenderedBrowserScrapeOptions,
   ) => Response | Promise<Response>;
   readonly replayStatus?: number;
+  readonly reporterThrows?: boolean;
   readonly sessionAcquireStatus?: number;
   readonly siteverifyResponse?: () => Response | Promise<Response>;
   readonly vaultResponse?: (body: Record<string, unknown>) => Response | Promise<Response>;
@@ -50,6 +52,7 @@ interface HarnessOptions {
 
 interface HarnessControls {
   readonly clockValues: number[];
+  readonly failureEvents: ResolveFailureEvent[];
   readonly ipBodies: Record<string, unknown>[];
   readonly rendererCalls: Array<{
     readonly action: string;
@@ -305,6 +308,7 @@ function runtimeFetcher(options: HarnessOptions, controls: HarnessControls): typ
 function createHarness(options: HarnessOptions = {}): Harness {
   const controls: HarnessControls = {
     clockValues: [],
+    failureEvents: [],
     ipBodies: [],
     rendererCalls: [],
     probeRequests: [],
@@ -324,6 +328,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
       clockOffset += 100;
       controls.clockValues.push(value);
       return value;
+    },
+    reportFailure(event) {
+      controls.failureEvents.push(event);
+      if (options.reporterThrows === true) {
+        throw new Error('private reporter failure');
+      }
     },
     requestId: () => REQUEST_ID,
   };
@@ -428,6 +438,27 @@ function expectPublicBodySafe(body: string, extraSecrets: readonly string[] = []
   }
 }
 
+function expectFailureEventsSafe(
+  events: readonly ResolveFailureEvent[],
+  extraSecrets: readonly string[] = [],
+): void {
+  const serialized = JSON.stringify(events);
+  for (const secret of [
+    POST_URL,
+    'query-token',
+    CSRF_TOKEN,
+    TURNSTILE_TOKEN,
+    RAW_SESSION_ID,
+    PRIVATE_CDN_QUERY,
+    RENDERED_PRIVATE_URL,
+    'private-turnstile-secret',
+    'stack',
+    ...extraSecrets,
+  ]) {
+    expect(serialized).not.toContain(secret);
+  }
+}
+
 function releaseCounts(controls: HarnessControls): {
   readonly ip: number;
   readonly session: number;
@@ -494,6 +525,7 @@ describe('resolve public media request policy', () => {
       expectPublicBodySafe(result.body);
       expect(harness.controls.sequence).toEqual([]);
       expect(harness.controls.rendererCalls).toEqual([]);
+      expect(harness.controls.failureEvents).toEqual([]);
     },
   );
 
@@ -574,6 +606,7 @@ describe('resolve public media workflow', () => {
         { candidateId: candidateId(2), filename: 'threads_Abcde_3.mp4', contentLength: 44 },
       ],
     });
+    expect(harness.controls.failureEvents).toEqual([]);
     expect(harness.controls.sequence).toEqual([
       'session:acquire',
       'ip:acquire',
@@ -1140,5 +1173,97 @@ describe('resolve public media typed failures', () => {
     expectError(result.body, 'INTERNAL_ERROR');
     expect(harness.controls.sequence).toEqual([]);
     expectPublicBodySafe(result.body, ['private stack and secret detail']);
+  });
+});
+
+describe('resolve public media failure telemetry', () => {
+  it.each([
+    ['limits', { sessionAcquireStatus: 503 }, 'admission', 'RESOLVE_LIMITS_UNAVAILABLE'],
+    [
+      'renderer',
+      {
+        markupResponse: () =>
+          new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+            headers: { 'content-type': 'text/html' },
+          }),
+        rendererResponse: () =>
+          new Response('private-provider-error', {
+            status: 429,
+            headers: { 'content-type': 'application/json' },
+          }),
+      },
+      'resolve',
+      'RENDERED_UNAVAILABLE',
+    ],
+    [
+      'probe',
+      { probeResponse: () => Promise.reject(new Error('private probe transport')) },
+      'resolve',
+      'MEDIA_PROBE_UNAVAILABLE',
+    ],
+    [
+      'vault',
+      { vaultResponse: () => jsonResponse({ ok: false, private: POST_URL }, 500) },
+      'resolve',
+      'RESOLVE_VAULT_UNAVAILABLE',
+    ],
+  ] as const)(
+    'reports one exact PII-free event for a 5xx $0 failure',
+    async (_name, options, stage, code) => {
+      const harness = createHarness(options);
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(503);
+      expect(harness.controls.failureEvents).toEqual([{ requestId: REQUEST_ID, stage, code }]);
+      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual([
+        'code',
+        'requestId',
+        'stage',
+      ]);
+      expectFailureEventsSafe(harness.controls.failureEvents, [
+        'private-provider-error',
+        'private probe transport',
+      ]);
+    },
+  );
+
+  it('reports an unexpected prepare failure without exposing its details', async () => {
+    const harness = createHarness();
+    const bindings = { ...harness.bindings, SESSION_SIGNING_KEY: 'private invalid signing key' };
+    const response = await createResolvePublicMediaHandler(harness.runtime)(
+      await resolveRequest(),
+      bindings,
+    );
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expectError(body, 'INTERNAL_ERROR');
+    expect(harness.controls.failureEvents).toEqual([
+      { requestId: REQUEST_ID, stage: 'prepare', code: 'UNEXPECTED_ERROR' },
+    ]);
+    expectFailureEventsSafe(harness.controls.failureEvents, ['private invalid signing key']);
+  });
+
+  it('does not report 4xx failures', async () => {
+    const harness = createHarness({ replayStatus: 409 });
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(403);
+    expect(harness.controls.failureEvents).toEqual([]);
+  });
+
+  it('preserves the safe public response when the reporter throws', async () => {
+    const harness = createHarness({
+      probeResponse: () => Promise.reject(new Error('private probe transport')),
+      reporterThrows: true,
+    });
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(503);
+    expectError(result.body, 'RESOLVE_UNAVAILABLE');
+    expect(harness.controls.failureEvents).toEqual([
+      { requestId: REQUEST_ID, stage: 'resolve', code: 'MEDIA_PROBE_UNAVAILABLE' },
+    ]);
+    expectPublicBodySafe(result.body, ['private reporter failure', 'private probe transport']);
   });
 });

@@ -69,6 +69,14 @@ Encrypted resolver credentials or tokens live only in a server vault using
 AES-GCM. Keys and plaintext do not enter source, frontend bundles, logs, or
 error messages. CDN URLs likewise never enter the frontend or logs.
 
+Resolve failure telemetry is emitted only when the public response is a 5xx.
+Its complete schema is the existing opaque `requestId`, one bounded workflow
+stage (`prepare`, `admission`, or `resolve`), and one code from the internal
+closed error-code union. It never includes request or upstream URLs, shortcode,
+session or IP material, headers, tokens, candidate data, exception messages,
+stacks, or cause objects. Reporting is best-effort and cannot change the public
+response; 4xx outcomes and successful resolves emit no event.
+
 ## Durable Object lifecycle model
 
 SQLite Durable Object exports are: `SessionCoordinator`, `IpRateLimiter`,
