@@ -58,6 +58,12 @@ export type DownloaderWorkflowState =
       readonly candidates?: readonly ResolveCandidate[];
     };
 
+interface CandidateOperationContext {
+  readonly candidates: readonly ResolveCandidate[];
+  readonly session: SessionResponse;
+  readonly resolveId: string;
+}
+
 function safeCandidates(candidates: readonly ResolveCandidate[]): readonly ResolveCandidate[] {
   return Object.freeze(
     candidates.map((candidate) =>
@@ -260,33 +266,11 @@ export class DownloaderWorkflow {
   }
 
   async download(candidateId: string): Promise<void> {
-    if (this.destroyed) {
+    const context = this.candidateOperationContext(candidateId);
+    if (context === null) {
       return;
     }
-    const current = this.stateValue();
-    if (
-      current.kind === 'bootstrapping' ||
-      current.kind === 'resolving' ||
-      current.kind === 'issuing' ||
-      current.kind === 'previewing'
-    ) {
-      return;
-    }
-    const candidates = downloadableCandidates(current);
-    const session = this.session;
-    const resolveId = this.resolveId;
-    if (
-      candidates === null ||
-      session === null ||
-      resolveId === null ||
-      !candidates.some((candidate) => candidate.candidateId === candidateId)
-    ) {
-      this.rejectOperation(
-        this.i18n.messages().downloader.candidateInvalid,
-        candidates ?? undefined,
-      );
-      return;
-    }
+    const { candidates, session, resolveId } = context;
 
     const generation = this.invalidatePending();
     const retryUrl =
@@ -342,33 +326,11 @@ export class DownloaderWorkflow {
   }
 
   async preview(candidateId: string): Promise<void> {
-    if (this.destroyed) {
+    const context = this.candidateOperationContext(candidateId);
+    if (context === null) {
       return;
     }
-    const current = this.stateValue();
-    if (
-      current.kind === 'bootstrapping' ||
-      current.kind === 'resolving' ||
-      current.kind === 'issuing' ||
-      current.kind === 'previewing'
-    ) {
-      return;
-    }
-    const candidates = downloadableCandidates(current);
-    const session = this.session;
-    const resolveId = this.resolveId;
-    if (
-      candidates === null ||
-      session === null ||
-      resolveId === null ||
-      !candidates.some((candidate) => candidate.candidateId === candidateId)
-    ) {
-      this.rejectOperation(
-        this.i18n.messages().downloader.candidateInvalid,
-        candidates ?? undefined,
-      );
-      return;
-    }
+    const { candidates, session, resolveId } = context;
 
     const generation = this.invalidatePending();
     this.stateValue.set({
@@ -415,6 +377,37 @@ export class DownloaderWorkflow {
   private invalidatePending(): number {
     this.generation += 1;
     return this.generation;
+  }
+
+  private candidateOperationContext(candidateId: string): CandidateOperationContext | null {
+    if (this.destroyed) {
+      return null;
+    }
+    const current = this.stateValue();
+    if (
+      current.kind === 'bootstrapping' ||
+      current.kind === 'resolving' ||
+      current.kind === 'issuing' ||
+      current.kind === 'previewing'
+    ) {
+      return null;
+    }
+    const candidates = downloadableCandidates(current);
+    const session = this.session;
+    const resolveId = this.resolveId;
+    if (
+      candidates === null ||
+      session === null ||
+      resolveId === null ||
+      !candidates.some((candidate) => candidate.candidateId === candidateId)
+    ) {
+      this.rejectOperation(
+        this.i18n.messages().downloader.candidateInvalid,
+        candidates ?? undefined,
+      );
+      return null;
+    }
+    return { candidates, session, resolveId };
   }
 
   private isCurrent(generation: number): boolean {
