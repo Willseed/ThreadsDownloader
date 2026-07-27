@@ -2,6 +2,10 @@ import { DurableObject } from 'cloudflare:workers';
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import {
+  SESSION_COORDINATOR_METHOD,
+  SESSION_COORDINATOR_ROUTES,
+} from './session-coordinator-protocol.js';
+import {
   createAesGcmSealer,
   createOpaqueId,
   importEncryptionKey,
@@ -1741,41 +1745,41 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
   }
 
   override async fetch(request: Request): Promise<Response> {
-    if (request.method !== 'POST') {
+    if (request.method !== SESSION_COORDINATOR_METHOD) {
       return safeJson(404, { ok: false });
     }
     const pathname = new URL(request.url).pathname;
-    if (pathname === '/create') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.session.create) {
       return this.createSession(request);
     }
-    if (pathname === '/resume') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.session.resume) {
       return this.resumeSession(request);
     }
-    if (pathname === '/authorize') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.session.authorize) {
       return this.authorize(request);
     }
-    if (pathname === '/resolve-permits/acquire') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.resolvePermits.acquire) {
       return this.acquirePermit(request);
     }
-    if (pathname === '/resolve-permits/release') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.resolvePermits.release) {
       return this.releasePermit(request);
     }
-    if (pathname === '/download-permits/acquire') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.downloadPermits.acquire) {
       return this.acquireSessionDownloadPermit(request);
     }
-    if (pathname === '/download-permits/renew') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.downloadPermits.renew) {
       return this.renewSessionDownloadPermit(request);
     }
-    if (pathname === '/download-permits/release') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.downloadPermits.release) {
       return this.releaseSessionDownloadPermit(request);
     }
-    if (pathname === '/resolve-vault/store') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.resolveVault.store) {
       return this.storeVault(request);
     }
-    if (pathname === '/resolve-vault/claim') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.resolveVault.claim) {
       return this.claimVault(request);
     }
-    if (pathname === '/resolve-vault/settle') {
+    if (pathname === SESSION_COORDINATOR_ROUTES.resolveVault.settle) {
       return this.settleVault(request);
     }
     return safeJson(404, { ok: false });

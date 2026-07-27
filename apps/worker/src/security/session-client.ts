@@ -1,3 +1,7 @@
+import {
+  createSessionCoordinatorRequest,
+  SESSION_COORDINATOR_ROUTES,
+} from '../session-coordinator-protocol.js';
 import { createOpaqueId } from './cryptography.js';
 
 export {
@@ -100,11 +104,7 @@ export async function createSession(
   try {
     const stub = namespace.get(namespace.idFromName(rawId));
     response = await stub.fetch(
-      new Request('https://session.internal/create', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      }),
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.session.create, input),
     );
   } catch {
     throw unavailable();
@@ -127,11 +127,7 @@ export async function resumeSession(
   try {
     const stub = namespace.get(namespace.idFromName(rawId));
     response = await stub.fetch(
-      new Request('https://session.internal/resume', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(input),
-      }),
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.session.resume, input),
     );
   } catch {
     throw unavailable();
@@ -155,10 +151,10 @@ export async function authorizeSession(
   try {
     const stub = namespace.get(namespace.idFromName(rawId));
     const response = await stub.fetch(
-      new Request('https://session.internal/authorize', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionHash, csrfHash, now }),
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.session.authorize, {
+        sessionHash,
+        csrfHash,
+        now,
       }),
     );
     if (response.status !== 200) {
@@ -182,15 +178,11 @@ export async function acquireSessionResolvePermit(
   try {
     const stub = namespace.get(namespace.idFromName(identity.rawId));
     response = await stub.fetch(
-      new Request('https://session.internal/resolve-permits/acquire', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionHash: identity.sessionHash,
-          csrfHash,
-          now,
-          permitId,
-        }),
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.resolvePermits.acquire, {
+        sessionHash: identity.sessionHash,
+        csrfHash,
+        now,
+        permitId,
       }),
     );
   } catch {
@@ -235,10 +227,10 @@ export async function releaseSessionResolvePermit(
   try {
     const stub = namespace.get(namespace.idFromName(identity.rawId));
     const response = await stub.fetch(
-      new Request('https://session.internal/resolve-permits/release', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionHash: identity.sessionHash, permitId, now }),
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.resolvePermits.release, {
+        sessionHash: identity.sessionHash,
+        permitId,
+        now,
       }),
     );
     if (response.status !== 200) {

@@ -1,5 +1,9 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
+import {
+  createSessionCoordinatorRequest,
+  SESSION_COORDINATOR_ROUTES,
+} from '../session-coordinator-protocol.js';
 import { createOpaqueId } from './cryptography.js';
 import {
   hasCanonicalOpaqueBytes,
@@ -11,7 +15,6 @@ import {
 } from './session-download-admission.js';
 import type { BrowserSessionIdentity, SessionNamespace } from './session-client.js';
 
-const INTERNAL_ORIGIN = 'https://session.internal';
 export const SESSION_DOWNLOAD_ADMISSION_REQUEST_TIMEOUT_MS = 8_000;
 
 export interface SessionDownloadAdmissionInput {
@@ -112,14 +115,6 @@ function responseError(response: Response): SessionDownloadAdmissionError {
   return unavailable();
 }
 
-function jsonRequest(path: string, body: object): Request {
-  return new Request(`${INTERNAL_ORIGIN}${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
 async function boundedFetch(stub: SessionStub, request: Request): Promise<Response> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
@@ -169,7 +164,10 @@ async function strictRelease(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await boundedFetch(stub, jsonRequest('/download-permits/release', binding));
+    response = await boundedFetch(
+      stub,
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.downloadPermits.release, binding),
+    );
   } catch {
     throw unavailable();
   }
@@ -235,7 +233,10 @@ class RemoteSessionDownloadAdmission implements SessionDownloadAdmission {
       try {
         response = await boundedFetch(
           this.stub,
-          jsonRequest('/download-permits/renew', { ...this.binding, sequence }),
+          createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.downloadPermits.renew, {
+            ...this.binding,
+            sequence,
+          }),
         );
       } catch {
         throw unavailable();
@@ -297,7 +298,10 @@ export async function acquireSessionDownloadAdmission(
   };
   let response: Response;
   try {
-    response = await boundedFetch(stub, jsonRequest('/download-permits/acquire', binding));
+    response = await boundedFetch(
+      stub,
+      createSessionCoordinatorRequest(SESSION_COORDINATOR_ROUTES.downloadPermits.acquire, binding),
+    );
   } catch {
     await bestEffortRelease(stub, binding);
     throw unavailable();

@@ -1,6 +1,11 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import type { ProbedMedia } from '../resolver/media-probe.js';
+import {
+  createSessionCoordinatorRequest,
+  SESSION_COORDINATOR_ROUTES,
+  type SessionCoordinatorPath,
+} from '../session-coordinator-protocol.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 import { createOpaqueId } from './cryptography.js';
 import {
@@ -322,17 +327,13 @@ function mapStatus(status: number): never {
 async function internalPost(
   sessions: SessionNamespace,
   identity: BrowserSessionIdentity,
-  path: string,
+  path: SessionCoordinatorPath,
   body: Record<string, unknown>,
 ): Promise<Response> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const stub = sessions.get(sessions.idFromName(identity.rawId));
-    const request = new Request(`https://session.internal${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const request = createSessionCoordinatorRequest(path, body);
     const expired = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(
         () => reject(new ResolveVaultError('RESOLVE_VAULT_UNAVAILABLE')),
@@ -410,14 +411,19 @@ export async function storeResolvedMediaBatch(
   } catch {
     return fail('RESOLVE_VAULT_INVALID');
   }
-  const response = await internalPost(input.sessions, input.identity, '/resolve-vault/store', {
-    sessionHash: input.identity.sessionHash,
-    csrfHash: input.csrfHash,
-    permitId: input.permitId,
-    now,
-    shortcode: input.shortcode,
-    candidates,
-  });
+  const response = await internalPost(
+    input.sessions,
+    input.identity,
+    SESSION_COORDINATOR_ROUTES.resolveVault.store,
+    {
+      sessionHash: input.identity.sessionHash,
+      csrfHash: input.csrfHash,
+      permitId: input.permitId,
+      now,
+      shortcode: input.shortcode,
+      candidates,
+    },
+  );
   if (response.status !== 201) {
     return mapStatus(response.status);
   }
@@ -489,7 +495,7 @@ export async function claimResolvedMediaCandidate(
     response = await internalPost(
       input.sessions,
       input.identity,
-      '/resolve-vault/claim',
+      SESSION_COORDINATOR_ROUTES.resolveVault.claim,
       requestBody,
     );
   } catch (error: unknown) {
@@ -500,7 +506,7 @@ export async function claimResolvedMediaCandidate(
       response = await internalPost(
         input.sessions,
         input.identity,
-        '/resolve-vault/claim',
+        SESSION_COORDINATOR_ROUTES.resolveVault.claim,
         requestBody,
       );
     } catch {
@@ -571,15 +577,20 @@ async function bestEffortRelease(
   reservationId: string,
 ): Promise<void> {
   try {
-    await internalPost(input.sessions, input.identity, '/resolve-vault/settle', {
-      sessionHash: input.identity.sessionHash,
-      csrfHash: input.csrfHash,
-      now: Date.now(),
-      resolveId: input.resolveId,
-      candidateId: input.candidateId,
-      reservationId,
-      outcome: 'release',
-    });
+    await internalPost(
+      input.sessions,
+      input.identity,
+      SESSION_COORDINATOR_ROUTES.resolveVault.settle,
+      {
+        sessionHash: input.identity.sessionHash,
+        csrfHash: input.csrfHash,
+        now: Date.now(),
+        resolveId: input.resolveId,
+        candidateId: input.candidateId,
+        reservationId,
+        outcome: 'release',
+      },
+    );
   } catch {
     // The reservation expires after 30 seconds if the best-effort release cannot be delivered.
   }
@@ -588,15 +599,20 @@ async function bestEffortRelease(
 export async function settleResolvedMediaClaim(
   input: SettleResolvedMediaClaimInput,
 ): Promise<void> {
-  const response = await internalPost(input.sessions, input.identity, '/resolve-vault/settle', {
-    sessionHash: input.identity.sessionHash,
-    csrfHash: input.csrfHash,
-    now: input.now ?? Date.now(),
-    resolveId: input.resolveId,
-    candidateId: input.candidateId,
-    reservationId: input.reservationId,
-    outcome: input.outcome,
-  });
+  const response = await internalPost(
+    input.sessions,
+    input.identity,
+    SESSION_COORDINATOR_ROUTES.resolveVault.settle,
+    {
+      sessionHash: input.identity.sessionHash,
+      csrfHash: input.csrfHash,
+      now: input.now ?? Date.now(),
+      resolveId: input.resolveId,
+      candidateId: input.candidateId,
+      reservationId: input.reservationId,
+      outcome: input.outcome,
+    },
+  );
   if (response.status !== 200) {
     return mapStatus(response.status);
   }
