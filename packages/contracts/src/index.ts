@@ -82,6 +82,13 @@ export interface DownloadSessionResponse {
   readonly startExpiresAt: string;
 }
 
+export type PreviewSessionRequest = DownloadSessionRequest;
+
+export interface PreviewSessionResponse {
+  readonly previewUrl: string;
+  readonly expiresAt: string;
+}
+
 export type DownloadStatus = 'ISSUED' | 'ACTIVE' | 'INTERRUPTED' | 'COMPLETE_PENDING';
 
 export type DownloadRangeCapability = 'bytes' | 'none' | 'unknown';
@@ -122,6 +129,7 @@ const HEXADECIMAL_CHARACTER = /^[0-9A-Fa-f]$/u;
 const MAX_API_ERROR_MESSAGE_CHARACTERS = 256;
 const MAX_CONCURRENT_DOWNLOAD_STREAMS = 4;
 const MAX_RESOLVE_CANDIDATES = 8;
+const MAX_PREVIEW_CAPABILITY_CHARACTERS = 8_192;
 const apiErrorCodes = new Set<string>(API_ERROR_CODES);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -320,6 +328,26 @@ function isCanonicalIsoDate(value: unknown): value is string {
   }
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
+}
+
+function isCanonicalPreviewCapability(value: string): boolean {
+  if (value.length === 0 || value.length > MAX_PREVIEW_CAPABILITY_CHARACTERS) {
+    return false;
+  }
+  const parts = value.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1' || !/^[A-Za-z0-9_-]{16}$/u.test(parts[1] ?? '')) {
+    return false;
+  }
+  const ciphertext = parts[2] ?? '';
+  if (!/^[A-Za-z0-9_-]{22,}$/u.test(ciphertext) || ciphertext.length % 4 === 1) {
+    return false;
+  }
+  const last = ciphertext.at(-1) ?? '';
+  return (
+    ciphertext.length % 4 === 0 ||
+    (ciphertext.length % 4 === 2 && /^[AQgw]$/u.test(last)) ||
+    (ciphertext.length % 4 === 3 && /^[AEIMQUYcgkosw048]$/u.test(last))
+  );
 }
 
 function isoTimestamp(value: string): number {
@@ -548,6 +576,22 @@ export function decodeDownloadSessionResponse(value: unknown): DownloadSessionRe
     downloadUrl: record['downloadUrl'],
     startExpiresAt: record['startExpiresAt'],
   };
+}
+
+export const decodePreviewSessionRequest = decodeDownloadSessionRequest;
+
+export function decodePreviewSessionResponse(value: unknown): PreviewSessionResponse | null {
+  const record = decodeExactRecord(value, ['expiresAt', 'previewUrl']);
+  if (
+    record === null ||
+    typeof record['previewUrl'] !== 'string' ||
+    !record['previewUrl'].startsWith('/api/preview/') ||
+    !isCanonicalPreviewCapability(record['previewUrl'].slice('/api/preview/'.length)) ||
+    !isCanonicalIsoDate(record['expiresAt'])
+  ) {
+    return null;
+  }
+  return { previewUrl: record['previewUrl'], expiresAt: record['expiresAt'] };
 }
 
 export function decodeDownloadStatusResponse(value: unknown): DownloadStatusResponse | null {

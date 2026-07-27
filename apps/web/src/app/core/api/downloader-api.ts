@@ -4,12 +4,15 @@ import {
   decodeApiError,
   decodeDownloadSessionResponse,
   decodeDownloadStatusResponse,
+  decodePreviewSessionResponse,
   decodeResolveResponse,
   decodeSessionResponse,
   type ApiErrorCode,
   type DownloadSessionRequest,
   type DownloadSessionResponse,
   type DownloadStatusResponse,
+  type PreviewSessionRequest,
+  type PreviewSessionResponse,
   type ResolveRequest,
   type ResolveResponse,
   type SessionResponse,
@@ -22,6 +25,7 @@ const SESSION_PATH = '/api/session';
 const RESOLVE_PATH = '/api/resolve';
 const DOWNLOAD_SESSIONS_PATH = '/api/download-sessions';
 const DOWNLOAD_STATUS_PATH_PREFIX = '/api/download-status/';
+const PREVIEW_SESSIONS_PATH = '/api/preview-sessions';
 const CANONICAL_DOWNLOAD_ID = /^[A-Za-z0-9_-]{32}$/u;
 
 type ResponseDecoder<T> = (value: unknown) => T | null;
@@ -90,6 +94,18 @@ export class DownloaderApi {
     return this.decode(
       this.http.post<unknown>(DOWNLOAD_SESSIONS_PATH, body),
       decodeDownloadSessionResponse,
+    );
+  }
+
+  createPreviewSession(request: PreviewSessionRequest): Observable<PreviewSessionResponse> {
+    const body: PreviewSessionRequest = {
+      resolveId: request.resolveId,
+      candidateId: request.candidateId,
+      csrfToken: request.csrfToken,
+    };
+    return this.decode(
+      this.http.post<unknown>(PREVIEW_SESSIONS_PATH, body),
+      decodePreviewSessionResponse,
     );
   }
 

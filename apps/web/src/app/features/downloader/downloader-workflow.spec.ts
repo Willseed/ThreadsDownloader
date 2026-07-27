@@ -17,6 +17,7 @@ const CANDIDATE_ID = 'C'.repeat(32);
 const OTHER_CANDIDATE_ID = 'E'.repeat(32);
 const DOWNLOAD_ID = 'D'.repeat(32);
 const OTHER_DOWNLOAD_ID = 'F'.repeat(32);
+const PREVIEW_CAPABILITY = `v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
 const REQUEST_ID = 'Q'.repeat(32);
 const SITE_KEY = '0x4AAAAAAD9Gx9nArUYJAkKJ';
 const NEXT_CSRF_TOKEN = `${'n'.repeat(42)}Q`;
@@ -55,6 +56,11 @@ const downloadResponse = {
   startExpiresAt: '2026-07-25T08:32:00.000Z',
 } as const;
 
+const previewResponse = {
+  previewUrl: `/api/preview/${PREVIEW_CAPABILITY}`,
+  expiresAt: '2026-07-25T08:50:00.000Z',
+} as const;
+
 interface ChallengeFixture {
   readonly handle: DownloaderChallengeHandle;
   readonly reset: Mock<() => void>;
@@ -74,6 +80,7 @@ describe('DownloaderWorkflow', () => {
   let getSession: ReturnType<typeof vi.fn>;
   let resolve: ReturnType<typeof vi.fn>;
   let createDownloadSession: ReturnType<typeof vi.fn>;
+  let createPreviewSession: ReturnType<typeof vi.fn>;
   let handoff: ReturnType<typeof vi.fn>;
 
   afterEach(() => {
@@ -84,11 +91,15 @@ describe('DownloaderWorkflow', () => {
     getSession = vi.fn(() => of(sessionResponse));
     resolve = vi.fn(() => of(resolveResponse));
     createDownloadSession = vi.fn(() => of(downloadResponse));
+    createPreviewSession = vi.fn(() => of(previewResponse));
     handoff = vi.fn(() => DOWNLOAD_HANDOFF_MESSAGE);
     TestBed.configureTestingModule({
       providers: [
         DownloaderWorkflow,
-        { provide: DownloaderApi, useValue: { getSession, resolve, createDownloadSession } },
+        {
+          provide: DownloaderApi,
+          useValue: { getSession, resolve, createDownloadSession, createPreviewSession },
+        },
         { provide: BrowserDownloadHandoff, useValue: { handoff } },
       ],
     });
@@ -314,6 +325,35 @@ describe('DownloaderWorkflow', () => {
     expect(handoff).toHaveBeenCalledTimes(2);
     expect(handoff).toHaveBeenLastCalledWith(nextDownloadResponse.downloadUrl);
     expect(workflow.state()).toMatchObject({ kind: 'handed-off' });
+  });
+
+  it('issues a preview capability without consuming or exposing the CDN target', async () => {
+    await candidates();
+
+    await workflow.preview(CANDIDATE_ID);
+
+    expect(createPreviewSession).toHaveBeenCalledWith({
+      resolveId: RESOLVE_ID,
+      candidateId: CANDIDATE_ID,
+      csrfToken: CSRF_TOKEN,
+    });
+    expect(createDownloadSession).not.toHaveBeenCalled();
+    expect(handoff).not.toHaveBeenCalled();
+    expect(workflow.state()).toEqual({
+      kind: 'preview-ready',
+      siteKey: SITE_KEY,
+      candidates: resolveResponse.candidates,
+      candidateId: CANDIDATE_ID,
+      previewUrl: previewResponse.previewUrl,
+    });
+    const serialized = JSON.stringify(workflow.state());
+    expect(serialized).not.toContain(RESOLVE_ID);
+    expect(serialized).not.toContain(CSRF_TOKEN);
+    expect(serialized).not.toContain('cdninstagram');
+
+    await workflow.download(CANDIDATE_ID);
+    expect(createDownloadSession).toHaveBeenCalledOnce();
+    expect(handoff).toHaveBeenCalledWith(downloadResponse.downloadUrl);
   });
 
   it('clears resolved state when download issuance reports an expired session', async () => {

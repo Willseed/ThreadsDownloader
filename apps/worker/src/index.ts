@@ -81,6 +81,7 @@ const securityHeaders = {
     "style-src 'self'",
     'frame-src https://challenges.cloudflare.com',
     "connect-src 'self'",
+    "media-src 'self' https://cdninstagram.com https://*.cdninstagram.com https://*.fna.fbcdn.net",
   ].join('; '),
   'cross-origin-resource-policy': 'same-origin',
   'permissions-policy': 'camera=(), geolocation=(), microphone=()',
@@ -287,6 +288,10 @@ app.post('/api/resolve', (context) =>
 );
 
 app.post('/api/download-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
+
+app.post('/api/preview-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
+
+app.get('/api/preview/:capability', (context) => publicDownloadApi(context.req.raw, context.env));
 
 app.get('/api/download/:downloadId', (context) => publicDownloadApi(context.req.raw, context.env));
 

@@ -3,9 +3,12 @@ import {
   decodeDownloadSessionRequest,
   decodeDownloadSessionResponse,
   decodeDownloadStatusResponse,
+  decodePreviewSessionRequest,
+  decodePreviewSessionResponse,
   type ApiErrorCode,
   type DownloadSessionResponse,
   type DownloadStatusResponse,
+  type PreviewSessionResponse,
 } from '@threads-downloader/contracts';
 
 import {
@@ -27,6 +30,7 @@ import {
   type DownloadSessionNamespace,
   type DownloadSessionStatus,
 } from '../security/download-session-client.js';
+import { isCanonicalPreviewCapability } from '../security/preview-capability.js';
 import {
   createSessionDownloadAdmissionPort,
   SessionDownloadAdmissionError,
@@ -43,13 +47,20 @@ import {
   DownloadSessionIssuanceError,
   type DownloadSessionIssuer,
 } from './issue-download-session.js';
+import {
+  createRemotePreviewSessionService,
+  PreviewSessionError,
+  type PreviewSessionService,
+} from './preview-session.js';
 
 const DOWNLOAD_ID_BYTES = 24;
 const DOWNLOAD_ID_CHARACTERS = 32;
 const DOWNLOAD_PATH_PREFIX = '/api/download/';
 const DOWNLOAD_STATUS_PATH_PREFIX = '/api/download-status/';
+const PREVIEW_PATH_PREFIX = '/api/preview/';
 
 export interface PublicDownloadApiBindings {
+  readonly DOWNLOAD_ENCRYPTION_KEY: string;
   readonly DOWNLOAD_SESSIONS: DownloadSessionNamespace;
   readonly EXPECTED_ORIGIN: string;
   readonly SESSION_SIGNING_KEY: string;
@@ -59,6 +70,7 @@ export interface PublicDownloadApiBindings {
 export interface PublicDownloadApiOperations {
   readonly issuer: DownloadSessionIssuer;
   readonly deliver: DownloadDelivery;
+  readonly preview: PreviewSessionService;
   inspect(input: {
     readonly downloadId: string;
     readonly sessionHash: string;
@@ -87,6 +99,8 @@ export type PublicDownloadApiHandler = (
 
 type PublicRoute =
   | { readonly kind: 'issue' }
+  | { readonly kind: 'issue-preview' }
+  | { readonly kind: 'preview'; readonly capability: string }
   | { readonly kind: 'download'; readonly downloadId: string }
   | { readonly kind: 'inspect'; readonly downloadId: string }
   | { readonly kind: 'status'; readonly downloadId: string };
@@ -121,6 +135,14 @@ function exactDownloadId(pathname: string, prefix: string): string | null {
   return isCanonicalDownloadId(downloadId) ? downloadId : null;
 }
 
+function previewRoute(request: Request, pathname: string): PublicRoute | null {
+  if (request.method !== 'GET' || !pathname.startsWith(PREVIEW_PATH_PREFIX)) {
+    return null;
+  }
+  const capability = pathname.slice(PREVIEW_PATH_PREFIX.length);
+  return isCanonicalPreviewCapability(capability) ? { kind: 'preview', capability } : null;
+}
+
 function publicRoute(request: Request): PublicRoute | null {
   const url = new URL(request.url);
   if (url.search !== '') {
@@ -128,6 +150,13 @@ function publicRoute(request: Request): PublicRoute | null {
   }
   if (request.method === 'POST' && url.pathname === '/api/download-sessions') {
     return { kind: 'issue' };
+  }
+  if (request.method === 'POST' && url.pathname === '/api/preview-sessions') {
+    return { kind: 'issue-preview' };
+  }
+  const preview = previewRoute(request, url.pathname);
+  if (preview !== null) {
+    return preview;
   }
   if (request.method === 'GET' || request.method === 'HEAD') {
     const downloadId = exactDownloadId(url.pathname, DOWNLOAD_PATH_PREFIX);
@@ -190,6 +219,20 @@ function clientFailure(error: DownloadSessionClientError): PublicFailure {
   }
 }
 
+function previewFailure(error: PreviewSessionError): PublicFailure {
+  switch (error.code) {
+    case 'PREVIEW_CANDIDATE_UNAVAILABLE':
+    case 'PREVIEW_SESSION_EXPIRED':
+      return failure('DOWNLOAD_EXPIRED', 410, '下載候選已過期，請重新解析貼文。');
+    case 'PREVIEW_REQUEST_INVALID':
+      return failure('REQUEST_INVALID', 400, '請求格式不正確。');
+    case 'SESSION_INVALID':
+      return failure('SESSION_INVALID', 401, '工作階段無效，請重新載入頁面。');
+    default:
+      return failure('DOWNLOAD_UNAVAILABLE', 503, '下載暫時無法使用，請稍後再試。');
+  }
+}
+
 function safeUnsatisfiedContentRange(value: string | undefined): string | null {
   const match = /^bytes \*\/([1-9]\d*)$/u.exec(value ?? '');
   if (match === null) {
@@ -221,6 +264,9 @@ function publicFailure(error: unknown): PublicFailure {
   }
   if (error instanceof DownloadSessionClientError) {
     return clientFailure(error);
+  }
+  if (error instanceof PreviewSessionError) {
+    return previewFailure(error);
   }
   if (error instanceof SessionDownloadAdmissionError) {
     return admissionFailure(error);
@@ -313,6 +359,55 @@ async function issueDownload(
   return Response.json(response, {
     status: 201,
     headers: { 'cache-control': 'no-store' },
+  });
+}
+
+async function issuePreview(
+  request: Request,
+  bindings: PublicDownloadApiBindings,
+  operations: PublicDownloadApiOperations,
+): Promise<Response> {
+  const { contentLength } = validateMutationHeaders(request.headers, bindings.EXPECTED_ORIGIN);
+  const body = decodePreviewSessionRequest(await readBoundedJson(request.body, contentLength));
+  if (body === null) {
+    throw new BrowserSessionError('BODY_INVALID');
+  }
+  const identity = await browserIdentity(request, bindings);
+  const issued = await operations.preview.issue({
+    identity,
+    csrfHash: await hashIdentifier(body.csrfToken),
+    resolveId: body.resolveId,
+    candidateId: body.candidateId,
+  });
+  const expiresAt = isoDate(issued.expiresAt);
+  if (expiresAt === null) {
+    throw new PreviewSessionError('PREVIEW_SESSION_UNAVAILABLE');
+  }
+  const response: PreviewSessionResponse = {
+    previewUrl: `${PREVIEW_PATH_PREFIX}${issued.capability}`,
+    expiresAt,
+  };
+  if (decodePreviewSessionResponse(response) === null) {
+    throw new PreviewSessionError('PREVIEW_SESSION_UNAVAILABLE');
+  }
+  return Response.json(response, { status: 201, headers: { 'cache-control': 'no-store' } });
+}
+
+async function redirectPreview(
+  identity: BrowserSessionIdentity,
+  capability: string,
+  operations: PublicDownloadApiOperations,
+): Promise<Response> {
+  const target = await operations.preview.open({
+    capability,
+    sessionHash: identity.sessionHash,
+  });
+  return new Response(null, {
+    status: 307,
+    headers: {
+      'cache-control': 'no-store',
+      location: target.url.href,
+    },
   });
 }
 
@@ -418,6 +513,11 @@ function productionOperations(
       sessions: bindings.DOWNLOAD_SESSIONS,
       admissions: createSessionDownloadAdmissionPort(bindings.SESSIONS, runtime.now),
     }),
+    preview: createRemotePreviewSessionService({
+      sessions: bindings.SESSIONS,
+      encryptionKey: bindings.DOWNLOAD_ENCRYPTION_KEY,
+      now: runtime.now,
+    }),
     inspect: (input) => inspectDownloadSession(bindings.DOWNLOAD_SESSIONS, input),
     status: (input) => readDownloadSessionStatus(bindings.DOWNLOAD_SESSIONS, input),
   };
@@ -438,7 +538,13 @@ export function createPublicDownloadApiHandler(
       if (route.kind === 'issue') {
         return await issueDownload(request, bindings, operations);
       }
+      if (route.kind === 'issue-preview') {
+        return await issuePreview(request, bindings, operations);
+      }
       const identity = await browserIdentity(request, bindings);
+      if (route.kind === 'preview') {
+        return await redirectPreview(identity, route.capability, operations);
+      }
       if (route.kind === 'inspect') {
         return await inspectDownload(identity, route.downloadId, operations);
       }

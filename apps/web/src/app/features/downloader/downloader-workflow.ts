@@ -32,6 +32,18 @@ export type DownloaderWorkflowState =
       readonly candidates: readonly ResolveCandidate[];
     }
   | {
+      readonly kind: 'previewing';
+      readonly siteKey: string;
+      readonly candidates: readonly ResolveCandidate[];
+    }
+  | {
+      readonly kind: 'preview-ready';
+      readonly siteKey: string;
+      readonly candidates: readonly ResolveCandidate[];
+      readonly candidateId: string;
+      readonly previewUrl: string;
+    }
+  | {
       readonly kind: 'handed-off';
       readonly siteKey: string;
       readonly candidates: readonly ResolveCandidate[];
@@ -96,7 +108,11 @@ function safeError(
 function downloadableCandidates(
   state: DownloaderWorkflowState,
 ): readonly ResolveCandidate[] | null {
-  if (state.kind === 'candidates' || state.kind === 'handed-off') {
+  if (
+    state.kind === 'candidates' ||
+    state.kind === 'handed-off' ||
+    state.kind === 'preview-ready'
+  ) {
     return state.candidates;
   }
   return state.kind === 'error' ? (state.candidates ?? null) : null;
@@ -137,7 +153,8 @@ export class DownloaderWorkflow {
     if (
       current.kind === 'bootstrapping' ||
       current.kind === 'resolving' ||
-      current.kind === 'issuing'
+      current.kind === 'issuing' ||
+      current.kind === 'previewing'
     ) {
       return;
     }
@@ -179,7 +196,8 @@ export class DownloaderWorkflow {
     if (
       current.kind === 'bootstrapping' ||
       current.kind === 'resolving' ||
-      current.kind === 'issuing'
+      current.kind === 'issuing' ||
+      current.kind === 'previewing'
     ) {
       return;
     }
@@ -190,6 +208,7 @@ export class DownloaderWorkflow {
       current.kind === 'ready' ||
       current.kind === 'candidates' ||
       current.kind === 'handed-off' ||
+      current.kind === 'preview-ready' ||
       current.kind === 'error';
     if (
       !allowedState ||
@@ -248,7 +267,8 @@ export class DownloaderWorkflow {
     if (
       current.kind === 'bootstrapping' ||
       current.kind === 'resolving' ||
-      current.kind === 'issuing'
+      current.kind === 'issuing' ||
+      current.kind === 'previewing'
     ) {
       return;
     }
@@ -312,6 +332,67 @@ export class DownloaderWorkflow {
         siteKey: session.turnstileSiteKey,
         candidates,
         message: this.i18n.messages().downloader.handoffMessage,
+      });
+    } catch (reason: unknown) {
+      if (!this.isCurrent(generation)) {
+        return;
+      }
+      this.setOperationError(reason, session.turnstileSiteKey, candidates);
+    }
+  }
+
+  async preview(candidateId: string): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    const current = this.stateValue();
+    if (
+      current.kind === 'bootstrapping' ||
+      current.kind === 'resolving' ||
+      current.kind === 'issuing' ||
+      current.kind === 'previewing'
+    ) {
+      return;
+    }
+    const candidates = downloadableCandidates(current);
+    const session = this.session;
+    const resolveId = this.resolveId;
+    if (
+      candidates === null ||
+      session === null ||
+      resolveId === null ||
+      !candidates.some((candidate) => candidate.candidateId === candidateId)
+    ) {
+      this.rejectOperation(
+        this.i18n.messages().downloader.candidateInvalid,
+        candidates ?? undefined,
+      );
+      return;
+    }
+
+    const generation = this.invalidatePending();
+    this.stateValue.set({
+      kind: 'previewing',
+      siteKey: session.turnstileSiteKey,
+      candidates,
+    });
+    try {
+      const response = await firstValueFrom(
+        this.api.createPreviewSession({
+          resolveId,
+          candidateId,
+          csrfToken: session.csrfToken,
+        }),
+      );
+      if (!this.isCurrent(generation)) {
+        return;
+      }
+      this.stateValue.set({
+        kind: 'preview-ready',
+        siteKey: session.turnstileSiteKey,
+        candidates,
+        candidateId,
+        previewUrl: response.previewUrl,
       });
     } catch (reason: unknown) {
       if (!this.isCurrent(generation)) {

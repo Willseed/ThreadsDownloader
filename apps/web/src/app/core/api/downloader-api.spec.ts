@@ -5,6 +5,8 @@ import {
   type DownloadSessionRequest,
   type DownloadSessionResponse,
   type DownloadStatusResponse,
+  type PreviewSessionRequest,
+  type PreviewSessionResponse,
   type ResolveRequest,
   type ResolveResponse,
   type SessionResponse,
@@ -18,6 +20,7 @@ const RESOLVE_ID = 'R'.repeat(32);
 const CANDIDATE_ID = 'C'.repeat(32);
 const DOWNLOAD_ID = 'D'.repeat(32);
 const REQUEST_ID = 'Q'.repeat(32);
+const PREVIEW_CAPABILITY = `v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
 
 const sessionResponse: SessionResponse = {
   csrfToken: CSRF_TOKEN,
@@ -48,6 +51,12 @@ const downloadSessionResponse: DownloadSessionResponse = {
   downloadId: DOWNLOAD_ID,
   downloadUrl: `/api/download/${DOWNLOAD_ID}`,
   startExpiresAt: '2026-07-25T08:32:00.000Z',
+};
+
+const previewSessionRequest: PreviewSessionRequest = downloadSessionRequest;
+const previewSessionResponse: PreviewSessionResponse = {
+  previewUrl: `/api/preview/${PREVIEW_CAPABILITY}`,
+  expiresAt: '2026-07-25T08:50:00.000Z',
 };
 
 const downloadStatusResponse: DownloadStatusResponse = {
@@ -125,6 +134,22 @@ describe('DownloaderApi', () => {
     expect(request.request.body).toEqual(downloadSessionRequest);
     request.flush(downloadSessionResponse, { status: 201, statusText: 'Created' });
     await expect(result).resolves.toEqual(downloadSessionResponse);
+  });
+
+  it('creates a preview session without forwarding caller-only or CDN fields', async () => {
+    const callerValue = {
+      ...previewSessionRequest,
+      finalUrl: 'https://video.cdninstagram.com/private.mp4',
+    };
+    const result = firstValueFrom(api.createPreviewSession(callerValue));
+    const request = http.expectOne('/api/preview-sessions');
+
+    expect(request.request.method).toBe('POST');
+    expect(request.request.urlWithParams).toBe('/api/preview-sessions');
+    expect(request.request.body).toEqual(previewSessionRequest);
+    expect(JSON.stringify(request.request.body)).not.toContain('cdninstagram');
+    request.flush(previewSessionResponse, { status: 201, statusText: 'Created' });
+    await expect(result).resolves.toEqual(previewSessionResponse);
   });
 
   it('gets status only from the canonical download status route', async () => {

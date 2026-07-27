@@ -93,6 +93,7 @@ describe('DownloaderPageComponent', () => {
   let attachChallenge: Mock<(handle: TurnstileWidgetHandle) => void>;
   let resolve: Mock<(postUrl: string, rightsConfirmed: boolean) => Promise<void>>;
   let download: Mock<(candidateId: string) => Promise<void>>;
+  let preview: Mock<(candidateId: string) => Promise<void>>;
   let destroy: Mock<() => void>;
   let mount: Mock<
     (command: {
@@ -116,6 +117,7 @@ describe('DownloaderPageComponent', () => {
       Promise.resolve(),
     );
     download = vi.fn<(candidateId: string) => Promise<void>>(() => Promise.resolve());
+    preview = vi.fn<(candidateId: string) => Promise<void>>(() => Promise.resolve());
     destroy = vi.fn<() => void>();
     widgets = [];
     mount = vi.fn(() => {
@@ -135,6 +137,7 @@ describe('DownloaderPageComponent', () => {
             attachChallenge,
             resolve,
             download,
+            preview,
             destroy,
           },
         },
@@ -388,6 +391,38 @@ describe('DownloaderPageComponent', () => {
     expect(download).toHaveBeenCalledWith(CANDIDATE_ID);
   });
 
+  it('starts an explicit inline preview with native controls and no eager loading or autoplay', async () => {
+    state.set({ kind: 'candidates', siteKey: SITE_KEY, candidates: [candidate] });
+    await render();
+    const root = fixture.nativeElement as HTMLElement;
+    const action = root.querySelector<HTMLButtonElement>('.candidate-preview-action');
+
+    expect(action?.textContent?.trim()).toBe('▶');
+    expect(action?.getAttribute('aria-label')).toBe('▶，版本 1：threads_Abcde_1.mp4');
+    action?.click();
+    await fixture.whenStable();
+    expect(preview).toHaveBeenCalledWith(CANDIDATE_ID);
+    expect(root.querySelector('video')).toBeNull();
+
+    const previewUrl = `/api/preview/v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
+    state.set({
+      kind: 'preview-ready',
+      siteKey: SITE_KEY,
+      candidates: [candidate],
+      candidateId: CANDIDATE_ID,
+      previewUrl,
+    });
+    await render();
+    const video = root.querySelector<HTMLVideoElement>('video.candidate-preview');
+
+    expect(video).not.toBeNull();
+    expect(video?.controls).toBe(true);
+    expect(video?.preload).toBe('none');
+    expect(video?.autoplay).toBe(false);
+    expect(video?.getAttribute('src')).toBe(previewUrl);
+    expect(video?.getAttribute('src')).not.toContain('cdninstagram');
+  });
+
   it('shows progress on the candidate whose download is being issued', async () => {
     let finishDownload: (() => void) | undefined;
     const pendingDownload = new Promise<void>((resolvePending) => {
@@ -447,6 +482,7 @@ describe('DownloaderPageComponent', () => {
     const operationStates: readonly DownloaderWorkflowState[] = [
       { kind: 'resolving', siteKey: SITE_KEY },
       { kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate] },
+      { kind: 'previewing', siteKey: SITE_KEY, candidates: [candidate] },
     ];
 
     for (const busyState of operationStates) {

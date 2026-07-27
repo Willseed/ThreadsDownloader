@@ -13,6 +13,8 @@ import {
 } from '../src/security/download-session-client.js';
 import { SessionDownloadAdmissionError } from '../src/security/session-download-admission-client.js';
 import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
+import { PREVIEW_CAPABILITY_TTL_MS } from '../src/security/preview-capability.js';
+import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { DownloadDeliveryError } from '../src/streaming/download-delivery.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 import {
@@ -24,6 +26,10 @@ import {
   DownloadSessionIssuanceError,
   type IssueDownloadSessionInput,
 } from '../src/workflows/issue-download-session.js';
+import {
+  PreviewSessionError,
+  type IssuePreviewSessionInput,
+} from '../src/workflows/preview-session.js';
 
 const NOW = Date.parse('2026-07-25T00:00:00.000Z');
 const EXPECTED_ORIGIN = 'https://threads.example';
@@ -37,6 +43,7 @@ const DOWNLOAD_ID = encodeBase64Url(new Uint8Array(24).fill(5));
 const LAST_MODIFIED = 'Mon, 01 Jan 2024 00:00:00 GMT';
 const PRIVATE_CDN_URL =
   'https://scontent.cdninstagram.com/o1/v/t16/f2/m69/private.mp4?private_token=secret';
+const PREVIEW_CAPABILITY = `v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
 
 const metadata: DownloadSessionMetadataSnapshot = {
   filename: 'threads_Abcde_1.mp4',
@@ -67,6 +74,8 @@ interface Harness {
   readonly handler: ReturnType<typeof createPublicDownloadApiHandler>;
   readonly inspect: ReturnType<typeof vi.fn>;
   readonly issue: ReturnType<typeof vi.fn>;
+  readonly issuePreview: ReturnType<typeof vi.fn>;
+  readonly openPreview: ReturnType<typeof vi.fn>;
   readonly operations: PublicDownloadApiOperations;
   readonly readStatus: ReturnType<typeof vi.fn>;
 }
@@ -92,13 +101,20 @@ function createHarness(): Harness {
   );
   const inspect = vi.fn(async () => metadata);
   const readStatus = vi.fn(async () => status());
+  const issuePreview = vi.fn(async () => ({
+    capability: PREVIEW_CAPABILITY,
+    expiresAt: NOW + PREVIEW_CAPABILITY_TTL_MS,
+  }));
+  const openPreview = vi.fn(async () => parseCdnUrl(PRIVATE_CDN_URL));
   const operations: PublicDownloadApiOperations = {
     issuer: { issue },
     deliver,
+    preview: { issue: issuePreview, open: openPreview },
     inspect,
     status: readStatus,
   };
   const bindings: PublicDownloadApiBindings = {
+    DOWNLOAD_ENCRYPTION_KEY: 'A'.repeat(43),
     DOWNLOAD_SESSIONS: {} as PublicDownloadApiBindings['DOWNLOAD_SESSIONS'],
     EXPECTED_ORIGIN,
     SESSION_SIGNING_KEY: SIGNING_KEY,
@@ -113,6 +129,8 @@ function createHarness(): Harness {
     ),
     inspect,
     issue,
+    issuePreview,
+    openPreview,
     operations,
     readStatus,
   };
@@ -136,7 +154,9 @@ interface RequestOptions {
 }
 
 async function apiRequest(path: string, options: RequestOptions = {}): Promise<Request> {
-  const method = options.method ?? (path === '/api/download-sessions' ? 'POST' : 'GET');
+  const method =
+    options.method ??
+    (path === '/api/download-sessions' || path === '/api/preview-sessions' ? 'POST' : 'GET');
   const headers = new Headers();
   if (options.cookie !== null) {
     headers.set('cookie', options.cookie ?? (await signedCookie()));
@@ -183,6 +203,8 @@ function expectNoOperationCalls(harness: Harness): void {
   expect(harness.deliver).not.toHaveBeenCalled();
   expect(harness.inspect).not.toHaveBeenCalled();
   expect(harness.readStatus).not.toHaveBeenCalled();
+  expect(harness.issuePreview).not.toHaveBeenCalled();
+  expect(harness.openPreview).not.toHaveBeenCalled();
 }
 
 describe('public browser-bound download API', () => {
@@ -211,6 +233,89 @@ describe('public browser-bound download API', () => {
       resolveId: RESOLVE_ID,
       candidateId: CANDIDATE_ID,
     });
+  });
+
+  it('issues a 20-minute browser-bound preview without exposing the CDN target', async () => {
+    const harness = createHarness();
+    const response = await harness.handler(
+      await apiRequest('/api/preview-sessions'),
+      harness.bindings,
+    );
+    const text = await response.text();
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(JSON.parse(text)).toEqual({
+      previewUrl: `/api/preview/${PREVIEW_CAPABILITY}`,
+      expiresAt: new Date(NOW + PREVIEW_CAPABILITY_TTL_MS).toISOString(),
+    });
+    expect(text).not.toContain(PRIVATE_CDN_URL);
+    expect(text).not.toContain('cdninstagram.com');
+    expect(harness.issuePreview).toHaveBeenCalledOnce();
+    const input = harness.issuePreview.mock.calls[0]?.[0] as IssuePreviewSessionInput;
+    expect(input).toEqual({
+      identity: {
+        rawId: RAW_SESSION_ID,
+        sessionHash: await hashIdentifier(RAW_SESSION_ID),
+      },
+      csrfHash: await hashIdentifier(CSRF_TOKEN),
+      resolveId: RESOLVE_ID,
+      candidateId: CANDIDATE_ID,
+    });
+  });
+
+  it('rejects a caller-supplied preview target before capability issuance', async () => {
+    const harness = createHarness();
+    const response = await harness.handler(
+      await apiRequest('/api/preview-sessions', {
+        body: {
+          resolveId: RESOLVE_ID,
+          candidateId: CANDIDATE_ID,
+          csrfToken: CSRF_TOKEN,
+          finalUrl: PRIVATE_CDN_URL,
+        },
+      }),
+      harness.bindings,
+    );
+    const text = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(text).not.toContain(PRIVATE_CDN_URL);
+    expect(harness.issuePreview).not.toHaveBeenCalled();
+    expect(harness.openPreview).not.toHaveBeenCalled();
+  });
+
+  it('redirects an authorized preview with no-store and no response body', async () => {
+    const harness = createHarness();
+    const response = await harness.handler(
+      await apiRequest(`/api/preview/${PREVIEW_CAPABILITY}`),
+      harness.bindings,
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('location')).toBe(PRIVATE_CDN_URL);
+    expect(response.body).toBeNull();
+    expect(harness.openPreview).toHaveBeenCalledWith({
+      capability: PREVIEW_CAPABILITY,
+      sessionHash: await hashIdentifier(RAW_SESSION_ID),
+    });
+    expect(harness.deliver).not.toHaveBeenCalled();
+  });
+
+  it('keeps preview target details out of capability failures', async () => {
+    const harness = createHarness();
+    harness.openPreview.mockRejectedValueOnce(new PreviewSessionError('PREVIEW_SESSION_EXPIRED'));
+    const response = await harness.handler(
+      await apiRequest(`/api/preview/${PREVIEW_CAPABILITY}`),
+      harness.bindings,
+    );
+    const text = await response.text();
+
+    expect(response.status).toBe(410);
+    expect(text).not.toContain(PRIVATE_CDN_URL);
+    expect(text).not.toContain('cdninstagram.com');
+    expect(JSON.parse(text)).toMatchObject({ error: { code: 'DOWNLOAD_EXPIRED' } });
   });
 
   it.each([

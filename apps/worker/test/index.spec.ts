@@ -572,6 +572,8 @@ describe('worker entry policy', () => {
     `/api/download/%41${'A'.repeat(31)}`,
     `/api/download/A%2F${'A'.repeat(30)}`,
     `/api/download-status/${'A'.repeat(32)}?debug=1`,
+    `/api/preview/v1.${'A'.repeat(16)}.${'A'.repeat(22)}?debug=1`,
+    '/api/preview/not-a-capability',
   ])('keeps a non-canonical download path inside the API 404: %s', async (path) => {
     const env = createEnv();
     const response = await fetchWorker(path, env);
@@ -597,6 +599,18 @@ describe('worker entry policy', () => {
     );
     expect(wrongMethod.status).toBe(404);
     expect(wrongMethod.headers.get('cache-control')).toBe('no-store');
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it('routes canonical preview GET before catch-all without touching assets', async () => {
+    const env = createEnv();
+    const capability = `v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
+    const response = await fetchWorker(`/api/preview/${capability}`, env);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'SESSION_INVALID' },
+    });
     expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
@@ -643,7 +657,8 @@ describe('worker entry policy', () => {
     expect(contentSecurityPolicy).toBe(
       "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; " +
         "script-src 'self' https://challenges.cloudflare.com https://static.cloudflareinsights.com; " +
-        "style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self'",
+        "style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self'; " +
+        "media-src 'self' https://cdninstagram.com https://*.cdninstagram.com https://*.fna.fbcdn.net",
     );
     expect(contentSecurityPolicy).toContain("base-uri 'self'");
     expect(contentSecurityPolicy).toContain("style-src 'self'");
@@ -652,7 +667,9 @@ describe('worker entry policy', () => {
     expect(contentSecurityPolicy).not.toContain("'unsafe-eval'");
     expect(contentSecurityPolicy).not.toContain('connect-src https://challenges.cloudflare.com');
     expect(contentSecurityPolicy).not.toContain('https://cloudflareinsights.com');
+    expect(contentSecurityPolicy).not.toContain('https://*.fbcdn.net');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });

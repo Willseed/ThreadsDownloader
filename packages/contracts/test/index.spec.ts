@@ -6,6 +6,8 @@ import {
   decodeDownloadSessionRequest,
   decodeDownloadSessionResponse,
   decodeDownloadStatusResponse,
+  decodePreviewSessionRequest,
+  decodePreviewSessionResponse,
   decodeResolveResponse,
   decodeSessionResponse,
   type ApiError,
@@ -15,6 +17,8 @@ import {
   type DownloadStatusMetadata,
   type DownloadStatusResponse,
   type HealthResponse,
+  type PreviewSessionRequest,
+  type PreviewSessionResponse,
   type ResolveCandidate,
   type ResolveRequest,
   type ResolveResponse,
@@ -344,6 +348,36 @@ describe('contracts', () => {
       readonly downloadUrl: string;
       readonly startExpiresAt: string;
     }>();
+  });
+
+  it('keeps preview issuance same-origin and free of CDN targets', () => {
+    expectTypeOf<PreviewSessionRequest>().toEqualTypeOf<DownloadSessionRequest>();
+    expectTypeOf<PreviewSessionResponse>().toEqualTypeOf<{
+      readonly previewUrl: string;
+      readonly expiresAt: string;
+    }>();
+    const request: PreviewSessionRequest = {
+      resolveId: 'A'.repeat(32),
+      candidateId: 'B'.repeat(32),
+      csrfToken: `${'c'.repeat(42)}Q`,
+    };
+    const capability = `v1.${'A'.repeat(16)}.${'A'.repeat(22)}`;
+    const response: PreviewSessionResponse = {
+      previewUrl: `/api/preview/${capability}`,
+      expiresAt: '2026-07-25T08:50:00.000Z',
+    };
+
+    expect(decodePreviewSessionRequest(request)).toEqual(request);
+    expect(decodePreviewSessionResponse(response)).toEqual(response);
+    for (const invalid of [
+      { ...response, finalUrl: 'https://video.cdninstagram.com/private.mp4' },
+      { ...response, previewUrl: `https://threads.pylot.dev${response.previewUrl}` },
+      { ...response, previewUrl: `${response.previewUrl}?target=cdninstagram.com` },
+      { ...response, previewUrl: '/api/preview/not-a-capability' },
+      { ...response, expiresAt: '2026-07-25T16:50:00+08:00' },
+    ]) {
+      expect(decodePreviewSessionResponse(invalid)).toBeNull();
+    }
   });
 
   it('decodes canonical download session requests', () => {

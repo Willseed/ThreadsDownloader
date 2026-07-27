@@ -71,7 +71,13 @@ function siteKeyFrom(state: DownloaderWorkflowState): string | null {
 }
 
 function candidatesFrom(state: DownloaderWorkflowState): readonly ResolveCandidate[] {
-  if (state.kind === 'candidates' || state.kind === 'issuing' || state.kind === 'handed-off') {
+  if (
+    state.kind === 'candidates' ||
+    state.kind === 'issuing' ||
+    state.kind === 'previewing' ||
+    state.kind === 'preview-ready' ||
+    state.kind === 'handed-off'
+  ) {
     return state.candidates;
   }
   return state.kind === 'error' ? (state.candidates ?? []) : [];
@@ -85,6 +91,7 @@ function statusText(
     case 'idle':
     case 'ready':
     case 'candidates':
+    case 'preview-ready':
     case 'error':
       return null;
     case 'bootstrapping':
@@ -92,6 +99,7 @@ function statusText(
     case 'resolving':
       return text.resolveStatus;
     case 'issuing':
+    case 'previewing':
     case 'handed-off':
       return null;
   }
@@ -330,20 +338,44 @@ function statusText(
                 </div>
                 <div class="candidate-handoff">
                   <h3>{{ candidate.filename }}</h3>
-                  <button
-                    type="button"
-                    class="candidate-action"
-                    [disabled]="busy()"
-                    [attr.aria-label]="candidateActionLabel(candidate, index)"
-                    (click)="download(candidate.candidateId)"
-                  >
-                    @if (isIssuingCandidate(candidate.candidateId)) {
-                      {{ text().preparingCandidate }}
-                    } @else {
-                      {{ text().openOrDownload }}
-                    }
-                  </button>
+                  <div class="candidate-actions">
+                    <button
+                      type="button"
+                      class="candidate-preview-action"
+                      [disabled]="busy()"
+                      [attr.aria-label]="candidatePreviewLabel(candidate, index)"
+                      (click)="preview(candidate.candidateId)"
+                    >
+                      @if (isPreviewingCandidate(candidate.candidateId)) {
+                        {{ text().preparingCandidate }}
+                      } @else {
+                        <span aria-hidden="true">▶</span>
+                      }
+                    </button>
+                    <button
+                      type="button"
+                      class="candidate-action"
+                      [disabled]="busy()"
+                      [attr.aria-label]="candidateActionLabel(candidate, index)"
+                      (click)="download(candidate.candidateId)"
+                    >
+                      @if (isIssuingCandidate(candidate.candidateId)) {
+                        {{ text().preparingCandidate }}
+                      } @else {
+                        {{ text().openOrDownload }}
+                      }
+                    </button>
+                  </div>
                 </div>
+                @if (previewUrl(candidate.candidateId); as url) {
+                  <video
+                    class="candidate-preview"
+                    controls
+                    preload="none"
+                    [src]="url"
+                    [attr.aria-label]="candidatePreviewLabel(candidate, index)"
+                  ></video>
+                }
               </li>
             }
           </ul>
@@ -366,6 +398,7 @@ export class DownloaderPageComponent implements OnDestroy {
   private readonly widgetValue = signal<TurnstileWidgetHandle | null>(null);
   private readonly widgetMountFailed = signal(false);
   private readonly issuingCandidateId = signal<string | null>(null);
+  private readonly previewingCandidateId = signal<string | null>(null);
   private mountedSiteKey: string | null = null;
   private mountedContainer: HTMLDivElement | null = null;
   private focusedFeedbackState: DownloaderWorkflowState | null = null;
@@ -409,11 +442,16 @@ export class DownloaderPageComponent implements OnDestroy {
   readonly candidates = computed(() => candidatesFrom(this.state()));
   readonly busy = computed(() => {
     const kind = this.state().kind;
-    return kind === 'bootstrapping' || kind === 'resolving' || kind === 'issuing';
+    return (
+      kind === 'bootstrapping' ||
+      kind === 'resolving' ||
+      kind === 'issuing' ||
+      kind === 'previewing'
+    );
   });
   private readonly formLocked = computed(() => {
     const kind = this.state().kind;
-    return kind === 'resolving' || kind === 'issuing';
+    return kind === 'resolving' || kind === 'issuing' || kind === 'previewing';
   });
   private readonly synchronizeFormAvailability = effect(() => {
     const formLocked = this.formLocked();
@@ -493,6 +531,20 @@ export class DownloaderPageComponent implements OnDestroy {
     }
   }
 
+  async preview(candidateId: string): Promise<void> {
+    if (this.busy()) {
+      return;
+    }
+    this.previewingCandidateId.set(candidateId);
+    try {
+      await this.workflow.preview(candidateId);
+    } finally {
+      if (this.previewingCandidateId() === candidateId) {
+        this.previewingCandidateId.set(null);
+      }
+    }
+  }
+
   async retryBootstrap(): Promise<void> {
     if (!this.canRetryBootstrap() || this.busy()) {
       return;
@@ -515,10 +567,28 @@ export class DownloaderPageComponent implements OnDestroy {
     return this.state().kind === 'issuing' && this.issuingCandidateId() === candidateId;
   }
 
+  isPreviewingCandidate(candidateId: string): boolean {
+    return this.state().kind === 'previewing' && this.previewingCandidateId() === candidateId;
+  }
+
+  previewUrl(candidateId: string): string | null {
+    const state = this.state();
+    return state.kind === 'preview-ready' && state.candidateId === candidateId
+      ? state.previewUrl
+      : null;
+  }
+
   candidateActionLabel(candidate: ResolveCandidate, index: number): string {
     const action = this.isIssuingCandidate(candidate.candidateId)
       ? this.text().preparingCandidateLabel
       : this.text().openOrDownload;
+    return this.text().candidateActionLabel(action, index + 1, candidate.filename);
+  }
+
+  candidatePreviewLabel(candidate: ResolveCandidate, index: number): string {
+    const action = this.isPreviewingCandidate(candidate.candidateId)
+      ? this.text().preparingCandidateLabel
+      : '▶';
     return this.text().candidateActionLabel(action, index + 1, candidate.filename);
   }
 

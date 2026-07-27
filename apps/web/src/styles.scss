@@ -520,6 +520,25 @@ h3 {
   font-weight: 500;
 }
 
+.candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.candidate-preview-action {
+  font-weight: 700;
+}
+
+.candidate-preview {
+  display: block;
+  width: 100%;
+  max-height: 32rem;
+  background: #000;
+  border-radius: 0.375rem;
+}
+
 .site-footer {
   display: flex;
   align-items: center;
@@ -807,7 +826,9 @@ h3 {
     grid-template-columns: 1fr;
   }
 
-  .candidate-action {
+  .candidate-actions,
+  .candidate-action,
+  .candidate-preview-action {
     width: 100%;
   }
 
