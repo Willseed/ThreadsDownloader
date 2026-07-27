@@ -196,6 +196,26 @@ describe('DownloaderPageComponent', () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
+  it('renders the decorative running cat only while resolving a post', async () => {
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.analysis-animation')).toBeNull();
+
+    state.set({ kind: 'resolving', siteKey: SITE_KEY });
+    await render();
+
+    const animation = root.querySelector('.analysis-animation');
+    expect(animation?.getAttribute('aria-hidden')).toBe('true');
+    expect(animation?.querySelector('.pixel-cat')).not.toBeNull();
+
+    state.set({ kind: 'candidates', siteKey: SITE_KEY, candidates: [candidate] });
+    await render();
+    expect(root.querySelector('.analysis-animation')).toBeNull();
+
+    state.set({ kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate] });
+    await render();
+    expect(root.querySelector('.analysis-animation')).toBeNull();
+  });
+
   it('removes the widget without remounting into a disconnected container', async () => {
     const container = (fixture.nativeElement as HTMLElement).querySelector('.turnstile-container');
     expect(container).not.toBeNull();

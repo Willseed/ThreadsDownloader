@@ -203,6 +203,27 @@ function statusText(state: DownloaderWorkflowState): string | null {
               取得影片
             }
           </button>
+          @if (state().kind === 'resolving') {
+            <div class="analysis-animation" aria-hidden="true">
+              <div class="pixel-cat-runner">
+                <svg
+                  class="pixel-cat"
+                  viewBox="0 0 24 16"
+                  shape-rendering="crispEdges"
+                  focusable="false"
+                >
+                  <g class="pixel-cat-body">
+                    <path d="M0 7h2V5h2V3h2v2H4v4H2v2H0z" fill="currentColor" />
+                    <path d="M5 6h11v2h4v5h-3v2h-4v-3H9v3H5z" fill="currentColor" />
+                    <path d="M14 3h1V1h3v2h2V1h3v3h1v8H14z" fill="currentColor" />
+                    <path d="M17 6h2v2h-2zm5 0h2v2h-2z" class="pixel-cat-eye" />
+                    <path d="M20 9h2v1h-2z" class="pixel-cat-nose" />
+                  </g>
+                  <path d="M5 13h4v2H5zm8 0h4v2h-4z" class="pixel-cat-legs" />
+                </svg>
+              </div>
+            </div>
+          }
           @if (statusMessage(); as message) {
             <p class="status-line" aria-live="polite" aria-atomic="true">
               {{ message }}

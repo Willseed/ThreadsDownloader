@@ -347,6 +347,77 @@ h3 {
   font-size: 0.9rem;
 }
 
+.analysis-animation {
+  position: relative;
+  block-size: 3rem;
+  overflow: hidden;
+  border-block-end: 1px solid var(--line);
+}
+
+.pixel-cat-runner {
+  position: absolute;
+  inset-block-end: 0.25rem;
+  inset-inline-start: 0;
+  inline-size: 3rem;
+  animation: pixel-cat-travel 4.8s linear infinite;
+  color: var(--ink);
+}
+
+.pixel-cat {
+  display: block;
+  inline-size: 100%;
+  animation: pixel-cat-stride 240ms steps(2, end) infinite alternate;
+}
+
+.pixel-cat-eye {
+  fill: var(--canvas);
+}
+
+.pixel-cat-nose {
+  fill: var(--muted);
+}
+
+.pixel-cat-legs {
+  fill: currentColor;
+}
+
+@keyframes pixel-cat-travel {
+  0% {
+    inset-inline-start: 0;
+    transform: scaleX(1);
+  }
+
+  49.9% {
+    inset-inline-start: calc(100% - 3rem);
+    transform: scaleX(1);
+  }
+
+  50% {
+    inset-inline-start: calc(100% - 3rem);
+    transform: scaleX(-1);
+  }
+
+  99.9% {
+    inset-inline-start: 0;
+    transform: scaleX(-1);
+  }
+
+  100% {
+    inset-inline-start: 0;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes pixel-cat-stride {
+  from {
+    transform: translateY(0);
+  }
+
+  to {
+    transform: translateY(-2px);
+  }
+}
+
 .error-panel p + p {
   margin-block-start: var(--space-2);
 }
@@ -747,6 +818,15 @@ h3 {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+
+  .pixel-cat-runner {
+    inset-inline-start: calc(50% - 1.5rem);
+    animation: none !important;
+  }
+
+  .pixel-cat {
+    animation: none !important;
   }
 }
 
