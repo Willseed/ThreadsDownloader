@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DownloadSession, type DownloadSessionEnv } from '../src/download-session.js';
+import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 
 type SqlRecord = Record<string, string | number | ArrayBuffer | null>;
@@ -318,14 +319,14 @@ describe('DownloadSession initialize seam', () => {
     await expect(response.json()).resolves.toEqual({
       ok: true,
       issuedAt: NOW,
-      startExpiresAt: NOW + 120_000,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
       absoluteExpiresAt: NOW + 3_600_000,
     });
     expect(storage.tables).toEqual(
       new Set(['download_session', 'download_completed_intervals', 'download_active_leases']),
     );
     expect(storage.totalChanges).toBe(1);
-    expect(storage.alarmAt).toBe(NOW + 120_000);
+    expect(storage.alarmAt).toBe(NOW + DOWNLOAD_START_DEADLINE_MS);
     expect(storage.row).toMatchObject({
       download_id: downloadId,
       session_hash: sessionHash,
@@ -461,7 +462,7 @@ describe('DownloadSession read-only seams', () => {
       rangeCapability: media.rangeCapability,
       status: 'ISSUED',
       available: true,
-      startExpiresAt: NOW + 120_000,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
       idleExpiresAt: null,
       absoluteExpiresAt: NOW + 3_600_000,
       completionExpiresAt: null,
@@ -493,7 +494,7 @@ describe('DownloadSession read-only seams', () => {
     );
     expect(extra.status).toBe(400);
 
-    vi.spyOn(Date, 'now').mockReturnValue(NOW + 120_000);
+    vi.spyOn(Date, 'now').mockReturnValue(NOW + DOWNLOAD_START_DEADLINE_MS);
     expect((await session.fetch(headRequest())).status).toBe(410);
     expect((await session.fetch(jsonRequest('/status', { downloadId, sessionHash }))).status).toBe(
       410,
@@ -790,12 +791,12 @@ describe('DownloadSession lifecycle seams', () => {
     const { session, storage } = object();
     expect((await initialize(session)).status).toBe(201);
 
-    clock.mockReturnValue(NOW + 120_000);
+    clock.mockReturnValue(NOW + DOWNLOAD_START_DEADLINE_MS);
     storage.alarmAt = null;
     storage.failDeleteAllOnce = true;
     await session.alarm();
     expect(storage.row).not.toBeNull();
-    expect(storage.alarmAt).toBe(NOW + 120_000);
+    expect(storage.alarmAt).toBe(NOW + DOWNLOAD_START_DEADLINE_MS);
     expect(storage.deleteAlarm).not.toHaveBeenCalled();
 
     await session.alarm();

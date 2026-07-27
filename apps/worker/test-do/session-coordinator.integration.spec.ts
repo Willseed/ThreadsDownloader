@@ -9,7 +9,8 @@ import {
   hashIdentifier,
   importSigningKey,
 } from '../src/security/cryptography.js';
-import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
+import { encodeProbedMediaWire, RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
+import type { ResolvedMediaGrantCodec } from '../src/security/resolved-media-grant.js';
 import { RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { decodeBase64Url } from '../src/utils/base64url.js';
@@ -407,7 +408,7 @@ async function prepareVaultSession(rawId: string): Promise<{
   const permitId = createOpaqueId();
   const now = Date.now();
   expect(
-    (await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 }))
+    (await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 3_600_000 }))
       .status,
   ).toBe(200);
   expect((await acquirePermit(stub, sessionHash, csrfHash, permitId, now)).status).toBe(201);
@@ -941,7 +942,7 @@ describe('SessionCoordinator in workerd', () => {
 
     expect(decodeBase64Url(stored.resolveId)).toHaveLength(24);
     expect(stored.expiresAt).toBeGreaterThan(stored.issuedAt);
-    expect(stored.expiresAt - stored.issuedAt).toBeLessThanOrEqual(300_000);
+    expect(stored.expiresAt - stored.issuedAt).toBeLessThanOrEqual(RESOLVE_VAULT_TTL_MS);
     expect(stored.candidates).toHaveLength(2);
     expect(decodeBase64Url(stored.candidates[0]!.candidateId)).toHaveLength(24);
     expect(stored.candidates).toEqual([
@@ -1071,6 +1072,7 @@ describe('SessionCoordinator in workerd', () => {
     };
     expect((await settleVault(stub, { ...consumed, now: now + 7 })).status).toBe(200);
     expect((await settleVault(stub, { ...consumed, now: now + 8 })).status).toBe(200);
+    const repeatedReservation = createOpaqueId();
     expect(
       (
         await claimVault(stub, {
@@ -1079,17 +1081,43 @@ describe('SessionCoordinator in workerd', () => {
           now: now + 9,
           resolveId: stored.resolveId,
           candidateId,
+          reservationId: repeatedReservation,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await settleVault(stub, { ...consumed, now: now + 10 })).status).toBe(200);
+    expect(
+      (
+        await claimVault(stub, {
+          sessionHash,
+          csrfHash,
+          now: now + 11,
+          resolveId: stored.resolveId,
+          candidateId,
           reservationId: createOpaqueId(),
         })
       ).status,
-    ).toBe(404);
+    ).toBe(409);
+    expect(
+      (
+        await settleVault(stub, {
+          sessionHash,
+          csrfHash,
+          now: now + 12,
+          resolveId: stored.resolveId,
+          candidateId,
+          reservationId: repeatedReservation,
+          outcome: 'release',
+        })
+      ).status,
+    ).toBe(200);
 
     expect(
       (
         await claimVault(sessionStub('vault-lifecycle-session'), {
           sessionHash,
           csrfHash,
-          now: now + 10,
+          now: now + 13,
           resolveId: stored.resolveId,
           candidateId: stored.candidates[1]!.candidateId,
           reservationId: createOpaqueId(),
@@ -1098,7 +1126,7 @@ describe('SessionCoordinator in workerd', () => {
     ).toBe(200);
   });
 
-  it('accepts a consumed retry only for the reservation recorded in its tombstone', async () => {
+  it('treats consume as a non-destructive acknowledgement while the candidate exists', async () => {
     const context = await prepareVaultSession('vault-consume-tombstone-session');
     const storedResponse = await storeVault(context.stub, context);
     const stored = (await storedResponse.json()) as StoredVaultBatch;
@@ -1160,7 +1188,7 @@ describe('SessionCoordinator in workerd', () => {
           reservationId: expiredReservation,
         })
       ).status,
-    ).toBe(409);
+    ).toBe(200);
     expect(
       (
         await settleVault(context.stub, {
@@ -1175,10 +1203,10 @@ describe('SessionCoordinator in workerd', () => {
         .exec<{ reservation_id: string }>('SELECT reservation_id FROM resolved_media_consumptions')
         .toArray(),
     );
-    expect(tombstones).toEqual([{ reservation_id: consumingReservation }]);
+    expect(tombstones).toEqual([]);
   });
 
-  it('uses the fresh object clock and caps batch expiry at the session or five minutes', async () => {
+  it('uses the fresh object clock and caps batch expiry at the session or ten minutes', async () => {
     const rawId = 'vault-fresh-clock-session';
     const stub = sessionStub(rawId);
     const sessionHash = await hashIdentifier(rawId);
@@ -1212,7 +1240,7 @@ describe('SessionCoordinator in workerd', () => {
       ).status,
     ).toBe(409);
 
-    const futureCallerClock = Number.MAX_SAFE_INTEGER - 300_000;
+    const futureCallerClock = Number.MAX_SAFE_INTEGER - RESOLVE_VAULT_TTL_MS;
     const response = await storeVault(stub, {
       sessionHash,
       csrfHash,
@@ -1227,11 +1255,131 @@ describe('SessionCoordinator in workerd', () => {
     expect(row!.expires_at).toBe(sessionExpiresAt);
     expect(row!.issued_at).toBeLessThanOrEqual(Date.now());
 
-    const longSession = await prepareVaultSession('vault-five-minute-session');
+    const longSession = await prepareVaultSession('vault-ten-minute-session');
     const longResponse = await storeVault(longSession.stub, longSession);
     expect(longResponse.status).toBe(201);
     const [longRow] = await readVaultRows(longSession.stub);
-    expect(longRow!.expires_at - longRow!.issued_at).toBe(300_000);
+    expect(longRow!.expires_at - longRow!.issued_at).toBe(RESOLVE_VAULT_TTL_MS);
+  });
+
+  it('keeps a consumed candidate reusable at 599 seconds and expires it at 600 seconds', async () => {
+    const context = await prepareVaultSession('vault-reusable-boundary-session');
+    const storedResponse = await storeVault(context.stub, context);
+    expect(storedResponse.status).toBe(201);
+    const stored = (await storedResponse.json()) as StoredVaultBatch;
+    const candidate = stored.candidates[0]!;
+    const firstReservation = createOpaqueId();
+
+    expect(
+      (
+        await claimVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: context.now,
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          reservationId: firstReservation,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await settleVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: context.now,
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          reservationId: firstReservation,
+          outcome: 'consume',
+        })
+      ).status,
+    ).toBe(200);
+
+    await runInDurableObject(context.stub, async (instance, state) => {
+      const issuedAt = Date.now() - 599_000;
+      const expiresAt = issuedAt + RESOLVE_VAULT_TTL_MS;
+      const codec = await (
+        instance as unknown as { grantCodec(): Promise<ResolvedMediaGrantCodec> }
+      ).grantCodec();
+      const sealedGrant = await codec.seal(
+        probedMedia(),
+        {
+          sessionHash: context.sessionHash,
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          ordinal: 1,
+          filename: candidate.filename,
+          shortcode: 'Abcde_1',
+          contentLength: candidate.contentLength ?? null,
+          issuedAt,
+          expiresAt,
+        },
+        issuedAt,
+      );
+      state.storage.sql.exec(
+        'UPDATE resolved_media_batches SET issued_at = ?, expires_at = ? WHERE resolve_id = ?',
+        issuedAt,
+        expiresAt,
+        stored.resolveId,
+      );
+      state.storage.sql.exec(
+        `UPDATE resolved_media_candidates SET sealed_grant = ?
+         WHERE resolve_id = ? AND candidate_id = ?`,
+        sealedGrant,
+        stored.resolveId,
+        candidate.candidateId,
+      );
+    });
+
+    const secondReservation = createOpaqueId();
+    expect(
+      (
+        await claimVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: Date.now(),
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          reservationId: secondReservation,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await settleVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: Date.now(),
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          reservationId: secondReservation,
+          outcome: 'consume',
+        })
+      ).status,
+    ).toBe(200);
+
+    await runInDurableObject(context.stub, (_instance, state) => {
+      const expiresAt = Date.now();
+      state.storage.sql.exec(
+        'UPDATE resolved_media_batches SET issued_at = ?, expires_at = ? WHERE resolve_id = ?',
+        expiresAt - RESOLVE_VAULT_TTL_MS,
+        expiresAt,
+        stored.resolveId,
+      );
+    });
+    expect(
+      (
+        await claimVault(context.stub, {
+          sessionHash: context.sessionHash,
+          csrfHash: context.csrfHash,
+          now: Date.now(),
+          resolveId: stored.resolveId,
+          candidateId: candidate.candidateId,
+          reservationId: createOpaqueId(),
+        })
+      ).status,
+    ).toBe(404);
   });
 
   it('enforces five-batch and fifty-candidate capacity with per-session isolation', async () => {
@@ -1416,8 +1564,9 @@ describe('SessionCoordinator in workerd', () => {
           outcome: 'consume',
         })
       ).status,
-    ).toBe(409);
-    expect(await readVaultRows(context.stub)).toHaveLength(1);
+    ).toBe(200);
+    const [availableAfterLateConsume] = await readVaultRows(context.stub);
+    expect(availableAfterLateConsume?.reservation_id).toBeNull();
     await expect(runDurableObjectAlarm(context.stub)).resolves.toBe(true);
     expect(
       (

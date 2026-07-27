@@ -36,6 +36,7 @@ import {
 } from '../src/security/download-session-client.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
+import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import { decodeBase64Url, encodeBase64Url } from '../src/utils/base64url.js';
 
 const PRIVATE_URL =
@@ -80,7 +81,7 @@ function media(overrides: Partial<ProbedMedia> = {}): ProbedMedia {
 const initializeResponse = {
   ok: true,
   issuedAt: 1_000,
-  startExpiresAt: 121_000,
+  startExpiresAt: 1_000 + DOWNLOAD_START_DEADLINE_MS,
   absoluteExpiresAt: 3_601_000,
 } as const;
 
@@ -88,7 +89,7 @@ const statusResponse = {
   ok: true,
   status: 'ACTIVE',
   available: true,
-  startExpiresAt: 121_000,
+  startExpiresAt: 1_000 + DOWNLOAD_START_DEADLINE_MS,
   idleExpiresAt: 601_000,
   absoluteExpiresAt: 3_601_000,
   completionExpiresAt: null,

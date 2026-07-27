@@ -12,6 +12,7 @@ import {
   type ResolvedMediaClaim,
 } from '../src/security/resolve-vault.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
+import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 import {
@@ -43,6 +44,8 @@ const resolveId = encodeBase64Url(bytes(24, 4));
 const candidateId = encodeBase64Url(bytes(24, 5));
 const reservationId = encodeBase64Url(bytes(24, 6));
 const downloadId = encodeBase64Url(bytes(24, 7));
+const secondReservationId = encodeBase64Url(bytes(24, 8));
+const secondDownloadId = encodeBase64Url(bytes(24, 9));
 
 const input: IssueDownloadSessionInput = { identity, csrfHash, resolveId, candidateId };
 
@@ -74,7 +77,7 @@ function initialized() {
   return {
     downloadId,
     issuedAt: NOW,
-    startExpiresAt: NOW + 120_000,
+    startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
     absoluteExpiresAt: NOW + 3_600_000,
   };
 }
@@ -132,7 +135,7 @@ function remoteInitializeResponse(): Response {
     {
       ok: true,
       issuedAt: NOW,
-      startExpiresAt: NOW + 120_000,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
       absoluteExpiresAt: NOW + 3_600_000,
     },
     { status: 201 },
@@ -211,11 +214,45 @@ describe('browser-bound download-session issuer', () => {
     const result = await createDownloadSessionIssuer(dependencies).issue(input);
     expect(result).toEqual({
       downloadId,
-      startExpiresAt: NOW + 120_000,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
     });
     expect(events).toEqual(['claim', 'initialize', 'consume']);
     expect(dependencies.downloadSessions.destroy).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain(PRIVATE_URL);
+  });
+
+  it('issues two sequential download sessions for the same reusable candidate', async () => {
+    const claims = [
+      claim(),
+      { ...claim(), reservationId: secondReservationId },
+    ] satisfies ResolvedMediaClaim[];
+    const initializedSessions = [initialized(), { ...initialized(), downloadId: secondDownloadId }];
+    const dependencies = ports({
+      claim: vi.fn(async () => claims.shift()!),
+      initialize: vi.fn(async () => initializedSessions.shift()!),
+    });
+    const issuer = createDownloadSessionIssuer(dependencies);
+
+    await expect(issuer.issue(input)).resolves.toEqual({
+      downloadId,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
+    });
+    await expect(issuer.issue(input)).resolves.toEqual({
+      downloadId: secondDownloadId,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
+    });
+    expect(dependencies.resolvedMedia.claim).toHaveBeenCalledTimes(2);
+    expect(dependencies.downloadSessions.initialize).toHaveBeenCalledTimes(2);
+    expect(dependencies.resolvedMedia.settle).toHaveBeenNthCalledWith(1, {
+      ...input,
+      reservationId,
+      outcome: 'consume',
+    });
+    expect(dependencies.resolvedMedia.settle).toHaveBeenNthCalledWith(2, {
+      ...input,
+      reservationId: secondReservationId,
+      outcome: 'consume',
+    });
   });
 
   it('initializes a download session from an unverified rendered grant without publishing its URL', async () => {
@@ -230,7 +267,7 @@ describe('browser-bound download-session issuer', () => {
 
     const result = await createDownloadSessionIssuer(dependencies).issue(input);
 
-    expect(result).toEqual({ downloadId, startExpiresAt: NOW + 120_000 });
+    expect(result).toEqual({ downloadId, startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS });
     expect(JSON.stringify(result)).not.toContain(PRIVATE_URL);
   });
 
@@ -289,7 +326,7 @@ describe('browser-bound download-session issuer', () => {
 
     await expect(createDownloadSessionIssuer(dependencies).issue(input)).resolves.toEqual({
       downloadId,
-      startExpiresAt: NOW + 120_000,
+      startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
     });
     expect(settlements).toEqual([
       { ...input, reservationId, outcome: 'consume' },

@@ -12,6 +12,7 @@ import {
   type DownloadSessionStatus,
 } from '../src/security/download-session-client.js';
 import { SessionDownloadAdmissionError } from '../src/security/session-download-admission-client.js';
+import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import { DownloadDeliveryError } from '../src/streaming/download-delivery.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 import {
@@ -50,7 +51,7 @@ function status(overrides: Partial<DownloadSessionStatus> = {}): DownloadSession
   return {
     status: 'ISSUED',
     available: true,
-    startExpiresAt: NOW + 120_000,
+    startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
     idleExpiresAt: null,
     absoluteExpiresAt: NOW + 3_600_000,
     completionExpiresAt: null,
@@ -73,7 +74,7 @@ interface Harness {
 function createHarness(): Harness {
   const issue = vi.fn(async () => ({
     downloadId: DOWNLOAD_ID,
-    startExpiresAt: NOW + 120_000,
+    startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS,
   }));
   const deliver = vi.fn(
     async () =>
@@ -197,7 +198,7 @@ describe('public browser-bound download API', () => {
     await expect(response.json()).resolves.toEqual({
       downloadId: DOWNLOAD_ID,
       downloadUrl: `/api/download/${DOWNLOAD_ID}`,
-      startExpiresAt: new Date(NOW + 120_000).toISOString(),
+      startExpiresAt: new Date(NOW + DOWNLOAD_START_DEADLINE_MS).toISOString(),
     });
     expect(harness.issue).toHaveBeenCalledTimes(1);
     const input = harness.issue.mock.calls[0]?.[0] as IssueDownloadSessionInput;
@@ -328,7 +329,7 @@ describe('public browser-bound download API', () => {
   );
 
   it.each([
-    { downloadId: 'not-canonical', startExpiresAt: NOW + 120_000 },
+    { downloadId: 'not-canonical', startExpiresAt: NOW + DOWNLOAD_START_DEADLINE_MS },
     { downloadId: DOWNLOAD_ID, startExpiresAt: Number.MAX_SAFE_INTEGER },
   ])('fails closed on an invalid issuance result', async (issued) => {
     const harness = createHarness();

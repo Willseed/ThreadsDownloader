@@ -262,13 +262,13 @@ describe('ResolvedMediaGrantCodec authenticated binding', () => {
 });
 
 describe('ResolvedMediaGrantCodec time policy', () => {
-  it('accepts exactly five minutes and enforces issue and open time boundaries', async () => {
+  it('accepts a ten-minute grant at 599 seconds and rejects its exact expiry', async () => {
     const subject = await codec();
     const exact = binding({ expiresAt: NOW + RESOLVED_MEDIA_GRANT_MAX_TTL_MS });
     const sealed = await subject.seal(media(), exact, NOW);
 
     await expect(subject.open(sealed, exact, NOW)).resolves.toMatchObject({ contentLength: 42 });
-    await expect(subject.open(sealed, exact, exact.expiresAt - 1)).resolves.toMatchObject({
+    await expect(subject.open(sealed, exact, NOW + 599_000)).resolves.toMatchObject({
       contentLength: 42,
     });
     await expectCodecError(
@@ -284,7 +284,7 @@ describe('ResolvedMediaGrantCodec time policy', () => {
   it.each([
     ['issuedAt differs from now', binding({ issuedAt: NOW - 1 }), NOW],
     ['zero lifetime', binding({ expiresAt: NOW }), NOW],
-    ['over five minutes', binding({ expiresAt: NOW + RESOLVED_MEDIA_GRANT_MAX_TTL_MS + 1 }), NOW],
+    ['over ten minutes', binding({ expiresAt: NOW + RESOLVED_MEDIA_GRANT_MAX_TTL_MS + 1 }), NOW],
     ['negative issuedAt', binding({ issuedAt: -1 }), -1],
     ['unsafe expiry', binding({ expiresAt: Number.MAX_SAFE_INTEGER + 1 }), NOW],
     ['unsafe now', binding(), Number.MAX_SAFE_INTEGER + 1],

@@ -196,7 +196,7 @@ describe('resolve vault session client', () => {
           ok: true,
           resolveId,
           issuedAt: NOW,
-          expiresAt: NOW + 300_000,
+          expiresAt: NOW + RESOLVE_VAULT_TTL_MS,
           candidates: [
             { candidateId, filename: 'threads_Abcde_1_1.mp4', contentLength: 42 },
             {

@@ -99,9 +99,20 @@ approved.
 `DownloadSession` states are `ISSUED`, `ACTIVE`, `INTERRUPTED`,
 `COMPLETE_PENDING`, and `EXPIRED`.
 
+A resolved candidate batch and its sealed grant remain usable from their
+server-issued timestamp up to, but not including, the ten-minute expiry. The
+same candidate may issue multiple independent download sessions during that
+window. A 30-second reservation only serializes one in-flight issuance;
+`consume` is a non-destructive acknowledgement that releases the exact current
+reservation. A late or repeated acknowledgement succeeds while the same
+session-owned candidate still exists but never clears a newer reservation.
+Missing, corrupt, undecryptable, or expired candidates remain unavailable.
+This internal window does not extend an upstream CDN URL's own validity; an
+earlier upstream expiry remains an honest origin failure.
+
 | Limit or lease | Value | Meaning |
 | --- | ---: | --- |
-| Start deadline | 120 seconds | issued download must begin |
+| Start deadline | 600 seconds | issued download must begin |
 | Idle deadline | 600 seconds | active transfer may not go silent |
 | Absolute lifetime | 3600 seconds | upper bound for a download session |
 | Completion grace | 90 seconds | verify completion after final activity |

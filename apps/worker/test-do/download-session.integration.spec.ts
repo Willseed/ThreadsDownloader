@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DownloadSession } from '../src/download-session.js';
 import { createOpaqueId } from '../src/security/cryptography.js';
+import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import { decodeBase64Url, encodeBase64Url } from '../src/utils/base64url.js';
 
 interface TestEnv {
@@ -283,13 +284,13 @@ describe('DownloadSession read-only paths in workerd', () => {
     ).toBe(401);
 
     await runInDurableObject(target, (_instance, state) => {
-      const issuedAt = Date.now() - 120_001;
+      const issuedAt = Date.now() - DOWNLOAD_START_DEADLINE_MS - 1;
       state.storage.sql.exec(
         `UPDATE download_session
          SET issued_at = ?, start_expires_at = ?, absolute_expires_at = ?
          WHERE singleton = 1`,
         issuedAt,
-        issuedAt + 120_000,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
         issuedAt + 3_600_000,
       );
     });
@@ -423,7 +424,7 @@ describe('DownloadSession lifecycle in workerd', () => {
            absolute_expires_at = ?, completion_expires_at = ?
          WHERE singleton = 1`,
         issuedAt,
-        issuedAt + 120_000,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
         lastActivityAt,
         lastActivityAt + 600_000,
         issuedAt + 3_600_000,
@@ -586,7 +587,7 @@ describe('DownloadSession lifecycle in workerd', () => {
            idle_expires_at = ?, absolute_expires_at = ?, completion_expires_at = NULL
          WHERE singleton = 1`,
         issuedAt,
-        issuedAt + 120_000,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
         lastActivityAt,
         lastActivityAt + 600_000,
         issuedAt + 3_600_000,
@@ -659,13 +660,13 @@ describe('DownloadSession lifecycle in workerd', () => {
     const startExpired = fixture();
     expect((await initialize(startExpired)).status).toBe(201);
     await runInDurableObject(startExpired.target, (_instance, state) => {
-      const issuedAt = Date.now() - 120_000;
+      const issuedAt = Date.now() - DOWNLOAD_START_DEADLINE_MS;
       state.storage.sql.exec(
         `UPDATE download_session
          SET issued_at = ?, start_expires_at = ?, absolute_expires_at = ?
          WHERE singleton = 1`,
         issuedAt,
-        issuedAt + 120_000,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
         issuedAt + 3_600_000,
       );
     });
@@ -684,7 +685,7 @@ describe('DownloadSession lifecycle in workerd', () => {
            last_activity_at = ?, idle_expires_at = ?, absolute_expires_at = ?
          WHERE singleton = 1`,
         issuedAt,
-        issuedAt + 120_000,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
         lastActivityAt,
         absoluteExpiresAt,
         absoluteExpiresAt,

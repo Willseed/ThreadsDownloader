@@ -8,7 +8,7 @@ import type { BrowserSessionIdentity, SessionNamespace } from './session-client.
 export const RESOLVE_VAULT_MAX_BATCHES = 5;
 export const RESOLVE_VAULT_MAX_CANDIDATES = 50;
 export const RESOLVE_VAULT_MAX_BATCH_CANDIDATES = 10;
-export const RESOLVE_VAULT_TTL_MS = 300_000;
+export const RESOLVE_VAULT_TTL_MS = 600_000;
 export const RESOLVE_VAULT_STAGING_MS = 30_000;
 export const RESOLVE_VAULT_RESERVATION_MS = 30_000;
 export const RESOLVE_VAULT_REQUEST_TIMEOUT_MS = 8_000;

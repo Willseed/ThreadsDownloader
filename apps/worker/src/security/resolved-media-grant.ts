@@ -4,7 +4,7 @@ import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.
 import { isCanonicalBase64UrlWithExactBytes } from '../utils/base64url.js';
 import type { AesGcmSealer } from './cryptography.js';
 
-export const RESOLVED_MEDIA_GRANT_MAX_TTL_MS = 300_000;
+export const RESOLVED_MEDIA_GRANT_MAX_TTL_MS = 600_000;
 
 const RESOLVED_MEDIA_GRANT_VERSION = 1;
 const SESSION_HASH_BYTES = 32;

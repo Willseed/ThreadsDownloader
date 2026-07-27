@@ -108,6 +108,8 @@ describe('legal pages', () => {
     expect(text).toContain('最長 12 小時');
     expect(text).toContain('60 秒限流視窗');
     expect(text).toContain('防重放雜湊最長 5 分鐘');
+    expect(text).toContain('候選安全中繼資料及密封授權最長 10 分鐘');
+    expect(text).toContain('核發後 10 分鐘內開始');
     expect(text).toContain('絕對最長存續 1 小時');
     expect(text).toContain('不等同於對 Cloudflare 邊緣安全紀錄');
     const contact = root.querySelector<HTMLAnchorElement>('a[href="mailto:pony@pylot.dev"]');

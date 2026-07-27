@@ -11,7 +11,7 @@ import {
 } from './range-transfer.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 
-export const DOWNLOAD_START_DEADLINE_MS = 120_000;
+export const DOWNLOAD_START_DEADLINE_MS = 600_000;
 export const DOWNLOAD_IDLE_DEADLINE_MS = 600_000;
 export const DOWNLOAD_ABSOLUTE_LIFETIME_MS = 3_600_000;
 export const DOWNLOAD_COMPLETION_GRACE_MS = 90_000;

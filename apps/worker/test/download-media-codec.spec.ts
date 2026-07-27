@@ -361,7 +361,7 @@ describe('DownloadMediaCodec strict envelope and cryptography', () => {
     }
   });
 
-  it('rejects a wrong encryption key and legacy five-minute resolve ciphertext', async () => {
+  it('rejects a wrong encryption key and resolved-grant ciphertext', async () => {
     const subject = await createDownloadMediaCodec(firstKey);
     const wrongKey = await createDownloadMediaCodec(secondKey);
     const sealed = await subject.seal(media(), binding(), NOW);

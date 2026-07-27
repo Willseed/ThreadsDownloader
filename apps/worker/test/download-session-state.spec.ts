@@ -266,11 +266,11 @@ describe('download session issue and inspection', () => {
 });
 
 describe('download stream acquisition', () => {
-  it('accepts immediately before the start deadline and rejects its exact boundary', () => {
+  it('accepts a new stream at 599 seconds and rejects the exact ten-minute boundary', () => {
     const state = issued();
     expect(
       acquireDownloadStream(state, {
-        now: state.startExpiresAt - 1,
+        now: NOW + 599_000,
         holderId: holder('holder_before'),
         rangeHeader: null,
         ifRangeHeader: null,

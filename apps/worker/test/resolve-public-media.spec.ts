@@ -11,6 +11,7 @@ import { SESSION_COOKIE_NAME } from '../src/security/browser-session.js';
 import { createOpaqueValueSigner, importSigningKey } from '../src/security/cryptography.js';
 import type { IpRateLimitNamespace } from '../src/security/resolve-limits.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
+import { RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
 import type { TurnstileReplayNamespace } from '../src/security/turnstile.js';
 import type {
   BrowserRunScrapePort,
@@ -210,7 +211,7 @@ function sessionNamespace(options: HarnessOptions, controls: HarnessControls): S
                 ok: true,
                 resolveId: RESOLVE_ID,
                 issuedAt: (body['now'] as number) + 50,
-                expiresAt: (body['now'] as number) + 50 + 300_000,
+                expiresAt: (body['now'] as number) + 50 + RESOLVE_VAULT_TTL_MS,
                 candidates: candidates.map((candidate, index) => ({
                   candidateId: candidateId(index),
                   filename: `threads_Abcde_${String(index + 1)}.mp4`,
@@ -615,7 +616,7 @@ describe('resolve public media workflow', () => {
     expect(response.headers.has('access-control-allow-origin')).toBe(false);
     expect(decoded).toEqual({
       resolveId: RESOLVE_ID,
-      expiresAt: new Date(NOW + 350 + 300_000).toISOString(),
+      expiresAt: new Date(NOW + 350 + RESOLVE_VAULT_TTL_MS).toISOString(),
       candidates: [
         { candidateId: candidateId(0), filename: 'threads_Abcde_1.mp4', contentLength: 42 },
         { candidateId: candidateId(1), filename: 'threads_Abcde_2.mp4', contentLength: 43 },

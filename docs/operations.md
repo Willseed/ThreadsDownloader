@@ -283,9 +283,16 @@ metadata，不建立、消耗或完成 session。
 
 Download Session 的邏輯狀態是：
 
+解析候選與密封 grant 從 server-issuedAt 起有效到 600 秒邊界之前；第 599
+秒仍可對同一候選重複核發獨立 Download Session，exact 600 秒起失效。核發中的
+30 秒 reservation 只用於串行單次進行中作業；`consume` 只是非破壞性核發確認，
+只會清除 exact current reservation。舊或重複確認不會刪除候選，也不會清除
+新 reservation；候選缺失、損壞、無法解密或到期仍會拒絕。這個內部 600 秒視窗
+不會延長 CDN URL 自身期限；來源若更早失效，仍會如實上報來源失敗。
+
 | 狀態               | 意義與轉移                                                               |
 | ------------------ | ------------------------------------------------------------------------ |
-| `ISSUED`           | 已核發；必須在 120 秒內開始                                              |
+| `ISSUED`           | 已核發；必須在 600 秒內開始                                              |
 | `ACTIVE`           | 至少有一個有效 stream lease；最多四個平行的單一 Range                    |
 | `INTERRUPTED`      | 沒有 active lease，但仍可在 idle／absolute deadline 前續傳               |
 | `COMPLETE_PENDING` | 伺服器確認完整 representation；進入 90 秒 grace，合法重試可回到 `ACTIVE` |
@@ -309,7 +316,7 @@ GitHub／`.env`／Angular bundle：
 | Secret                     | 精確契約                                                                   | 輪替影響                                                         |
 | -------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | `DOWNLOAD_ENCRYPTION_KEY`  | 32 bytes 的 canonical、unpadded base64url；正好 43 chars                   | 現有 DO 密封媒體資料會立刻無法解開，最長影響 1 小時 absolute TTL |
-| `RESOLVED_MEDIA_GRANT_KEY` | 32 bytes 的 canonical、padded standard base64；正好 44 chars 且以 `=` 結尾 | 現有 resolved-media grant 最長 5 分鐘內失效                      |
+| `RESOLVED_MEDIA_GRANT_KEY` | 32 bytes 的 canonical、padded standard base64；正好 44 chars 且以 `=` 結尾 | 現有 resolved-media grant 最長 10 分鐘內失效                     |
 | `SESSION_SIGNING_KEY`      | 32 bytes 的 canonical、padded standard base64；正好 44 chars 且以 `=` 結尾 | 所有現有匿名 session cookie 失效，使用者須建立新 session         |
 | `TURNSTILE_SECRET`         | Cloudflare 為 production widget 提供的值；不得自行生成                     | 切換後必須重新驗證完整 resolve 流程                              |
 
@@ -355,7 +362,7 @@ npm exec -- wrangler secret list --config wrangler.jsonc
    absolute TTL 或確認使用時段已清空，才可執行上述 pipe rotation。現有程式沒有
    maintenance switch；若無法保證這個 quiet window，就不要輪替，先另外設計並
    核准維護機制。
-3. `RESOLVED_MEDIA_GRANT_KEY`：停止產生新 grant 並等五分鐘，或明確接受已核發 grant
+3. `RESOLVED_MEDIA_GRANT_KEY`：停止產生新 grant 並等十分鐘，或明確接受已核發 grant
    失效後再換 key。
 4. `SESSION_SIGNING_KEY`：視為刻意的全站匿名 session reset；安排維護時段、更新後
    驗證 `/api/session` 能建立新 cookie。

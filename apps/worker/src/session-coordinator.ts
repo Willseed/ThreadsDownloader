@@ -1214,33 +1214,32 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       if (row['session_hash'] !== input.sessionHash) {
         return { status: 401 } as const;
       }
+      if (input.outcome === 'consume') {
+        if (row['reservation_id'] === input.reservationId) {
+          this.ctx.storage.sql.exec(
+            `UPDATE resolved_media_candidates
+             SET reservation_id = NULL, reservation_expires_at = NULL
+             WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
+            input.resolveId,
+            input.candidateId,
+            input.reservationId,
+          );
+        }
+        return { status: 200, record } as const;
+      }
       if (row['reservation_id'] !== input.reservationId) {
         return row['reservation_id'] === null && input.outcome === 'release'
           ? ({ status: 200, record } as const)
           : ({ status: 409 } as const);
       }
-      if (input.outcome === 'consume') {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO resolved_media_consumptions
-            (resolve_id, candidate_id, session_hash, reservation_id, expires_at)
-           VALUES (?, ?, ?, ?, ?)`,
-          input.resolveId,
-          input.candidateId,
-          input.sessionHash,
-          input.reservationId,
-          row['expires_at'],
-        );
-        this.deleteCandidateAndEmptyBatch(input.resolveId, input.candidateId);
-      } else {
-        this.ctx.storage.sql.exec(
-          `UPDATE resolved_media_candidates
-           SET reservation_id = NULL, reservation_expires_at = NULL
-           WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
-          input.resolveId,
-          input.candidateId,
-          input.reservationId,
-        );
-      }
+      this.ctx.storage.sql.exec(
+        `UPDATE resolved_media_candidates
+         SET reservation_id = NULL, reservation_expires_at = NULL
+         WHERE resolve_id = ? AND candidate_id = ? AND reservation_id = ?`,
+        input.resolveId,
+        input.candidateId,
+        input.reservationId,
+      );
       return { status: 200, record } as const;
     });
   }
