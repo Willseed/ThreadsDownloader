@@ -21,6 +21,7 @@ const EXPECTED_ASSETS = Object.freeze({
   not_found_handling: 'single-page-application',
   run_worker_first: true,
 });
+const EXPECTED_BROWSER = Object.freeze({ binding: 'BROWSER' });
 
 const EXPECTED_VAR_KEYS = Object.freeze(['EXPECTED_HOST', 'EXPECTED_ORIGIN', 'TURNSTILE_SITE_KEY']);
 const SAFE_TURNSTILE_SITE_KEY = /^[A-Za-z0-9_-]{1,128}$/u;
@@ -188,7 +189,7 @@ function bindingViolations(config) {
   if (!hasExactProperties(config.assets, EXPECTED_ASSETS)) {
     violations.push(WRANGLER_RULES.assets);
   }
-  if (Object.hasOwn(config, 'browser')) {
+  if (!hasExactProperties(config.browser, EXPECTED_BROWSER)) {
     violations.push(WRANGLER_RULES.browserBinding);
   }
   return violations;

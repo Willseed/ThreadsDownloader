@@ -33,6 +33,7 @@ function validConfig() {
       not_found_handling: 'single-page-application',
       run_worker_first: true,
     },
+    browser: { binding: 'BROWSER' },
   };
 }
 
@@ -143,15 +144,25 @@ describe('Wrangler exposure gate', () => {
       (config) => (config.assets.html_handling = 'none'),
       WRANGLER_RULES.assets,
     ],
-    [
-      'unapproved browser binding',
-      (config) => (config.browser = { binding: 'BROWSER' }),
-      WRANGLER_RULES.browserBinding,
-    ],
   ])('rejects %s', async (_name, mutate, rule) => {
     const config = validConfig();
     mutate(config);
     await expect(violationsFor(config)).resolves.toContain(rule);
+  });
+
+  it.each([
+    ['missing browser binding', (config) => delete config.browser],
+    ['wrong browser binding', (config) => (config.browser = { binding: 'OTHER' })],
+    ['remote browser binding', (config) => (config.browser = { binding: 'BROWSER', remote: true })],
+    [
+      'browser binding with an extra field',
+      (config) => (config.browser = { binding: 'BROWSER', fixture: false }),
+    ],
+    ['non-object browser binding', (config) => (config.browser = 'BROWSER')],
+  ])('rejects %s', async (_name, mutate) => {
+    const config = validConfig();
+    mutate(config);
+    await expect(violationsFor(config)).resolves.toContain(WRANGLER_RULES.browserBinding);
   });
 
   it.each([

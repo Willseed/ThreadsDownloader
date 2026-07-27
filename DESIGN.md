@@ -56,14 +56,14 @@ manually, each hop is validated, and fetches use bounded timeouts and response
 size limits. CDN targets are independently validated before streaming. No
 redirect policy delegates validation to a browser or default fetch behavior.
 
-The dormant rendered fallback is a narrower exception at an external browser
+The rendered fallback is a narrower exception at an external browser
 adapter whose Quick Action response does not expose its navigation redirect
-chain. It is not bound in production. The adapter restricts every browser
-subrequest with anchored patterns, accepts only one canonically deduplicated
-candidate, and sends that candidate back through the central CDN policy and
-ordinary media probe. Production activation requires separate approval and a
-remote credential-free proof; until then the Wrangler exposure gate rejects a
-browser binding.
+chain. Production binds exactly one `BROWSER` Browser Run binding after explicit
+approval and a credential-free remote proof. The adapter restricts every
+browser subrequest with anchored patterns, accepts only one canonically
+deduplicated candidate, and sends that candidate back through the central CDN
+policy and ordinary media probe. The Wrangler exposure gate rejects a missing,
+renamed, remote-development, non-object, or extended browser configuration.
 
 Encrypted resolver credentials or tokens live only in a server vault using
 AES-GCM. Keys and plaintext do not enter source, frontend bundles, logs, or
@@ -290,11 +290,16 @@ not establish any undocumented upstream Threads API semantics.
   lease, a crashed resolve can occupy its session/IP concurrency slot for at
   most 30 additional seconds; successful and handled failures still release
   immediately.
-- Production state: `Env.BROWSER` remains optional, no `wrangler*.jsonc` file
-  declares it, and the production exposure checker rejects an accidental
-  browser binding. Therefore this commit changes no production Browser Run
-  usage or cost. Enabling it requires a separate reviewed configuration change
-  that deliberately updates that gate.
+- Production state and cost decision: after the account holder explicitly
+  approved the metered Browser Run service and confirmed the paid Workers plan,
+  production now declares exactly `{ "binding": "BROWSER" }`. `Env.BROWSER`
+  remains optional in code so local and controlled tests can omit the external
+  port, but the production exposure checker requires that exact binding and
+  rejects `remote` or any additional field. Every rendered fallback consumes
+  metered Browser Run capacity. Operators must monitor Browser Run Overview and
+  Runs for total sessions, browser hours, Quick Action requests, failures, and
+  current quota before and after releases; repository configuration is not
+  evidence of current dashboard inventory, usage, or limits.
 - Anonymous remote evidence: the first bounded proof against the exact public
   single-video post `DbPp-bqiQEB` returned Quick Action HTTP 200 and hydrated one
   `video[src]`, but the configured `addScriptTag` did not leave its marker or
@@ -308,7 +313,13 @@ not establish any undocumented upstream Threads API semantics.
   present in body HTML but not visible text, and no Twitter URL metadata was
   present. Therefore article/main scope, visible-text identity, and Twitter
   metadata are not requirements.
-- Evidence boundary and remaining activation blockers: those remote results
+- Post-fix direct-import evidence: at local revision `9c09651`, the production
+  resolver module made exactly one credential-free remote Quick Action request
+  for that same normalized post and returned HTTP 200 in 3,379 ms with exactly
+  one `rendered-video` candidate on an allowed CDN hostname. This verifies the
+  production code seam selected for activation, but it does not expose or prove
+  the browser's final URL or redirect chain.
+- Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or
   deleted posts, login or challenge pages, redirect behavior, cross-post DOM
@@ -321,9 +332,9 @@ not establish any undocumented upstream Threads API semantics.
   cannot completely exclude a recommendation video; this remains a stated
   limitation of the single-video MVP rather than an inferred guarantee. A late
   provider response is rejected by the subsequent lease deadline gate, not
-  locally hard-cancelled. Activation still requires separate reviewed binding
-  and exposure-gate changes; failure must not cause automatic host, cookie,
-  header, or origin widening.
+  locally hard-cancelled. Activation changes only the reviewed binding and
+  exposure gate; failure must not cause automatic host, cookie, header, or
+  origin widening.
 
 ## Deployment inventory and decisions
 
@@ -348,8 +359,9 @@ model:
   `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, then probes the production
   homepage and health endpoint.
 - `wrangler.jsonc` disables `workers_dev` and preview URLs, omits route and
-  custom-domain declarations, binds the production static assets, declares the
-  expected host and origin, and exports four SQLite Durable Objects. It requires
+  custom-domain declarations, binds the production static assets and exact
+  `BROWSER` Browser Run port, declares the expected host and origin, and exports
+  four SQLite Durable Objects. It requires
   exactly the Worker secret names `DOWNLOAD_ENCRYPTION_KEY`,
   `RESOLVED_MEDIA_GRANT_KEY`, `SESSION_SIGNING_KEY`, and `TURNSTILE_SECRET`; no
   secret value is stored in the file.

@@ -2,8 +2,9 @@
 
 Threads Downloader 是公開 Threads 貼文的影片解析與同源串流服務。Angular SPA、
 API 與下載都由同一個 Cloudflare Worker origin 提供；瀏覽器只取得 opaque ID 與
-安全中繼資料，不會取得媒體來源 URL。Production resolver 僅使用 Worker
-`fetch`，不登入、不帶 Threads／Instagram Cookie，也不繞過任何存取控制。
+安全中繼資料，不會取得媒體來源 URL。Production resolver 先使用 Worker `fetch`；
+只有受控的靜態解析結果允許 fallback 時，才使用 Browser Run Quick Action。兩條路徑
+都不登入、不帶 Threads／Instagram Cookie，也不繞過任何存取控制。
 
 本文件是維運與部署 runbook。架構決策詳見 [DESIGN.md](../DESIGN.md)，外部狀態
 與平台證據邊界詳見 [研究紀錄](research)。
@@ -29,6 +30,8 @@ flowchart LR
   API --> Session["Session / CSRF / Turnstile / rate limits"]
   Session --> DO["Four SQLite Durable Objects"]
   API -->|"fetch-only public page"| Threads["Public Threads origin"]
+  API -->|"bounded fallback"| BrowserRun["Cloudflare Browser Run"]
+  BrowserRun -->|"anonymous /media render"| Threads
   API -->|"validate, seal, then stream"| Media["Allowed media origin"]
   Media -->|"bytes through this Worker"| Browser
 ```
@@ -36,15 +39,16 @@ flowchart LR
 - `apps/web`：Angular standalone SPA、typed reactive forms、signals、OnPush 與法律頁。
 - `apps/worker`：hostname guard、Hono API、上游解析、媒體驗證與串流。
 - `packages/contracts`：前後端共享的嚴格 request／response decoder。
-- `wrangler.jsonc`：Static Assets、production vars、四個 secret 名稱與四個 SQLite DO
-  export；不管理 Route、Custom Domain 或 DNS。
+- `wrangler.jsonc`：Static Assets、exact `BROWSER` binding、production vars、四個 secret
+  名稱與四個 SQLite DO export；不管理 Route、Custom Domain 或 DNS。
 - `wrangler.dev.jsonc`：只供本機 Wrangler dev，使用 localhost host/origin 與
   non-production Turnstile test site key。
 - `.github/workflows/main.yml`：唯一 workflow，依序執行 `verify → sonar → deploy`。
 
 完整流程是：瀏覽器建立匿名 session，提交權利確認與一次性 Turnstile token；
-Worker 驗證 exact host、Origin、CSRF、session 與 rate limit，再以 `fetch` 解析公開
-貼文並驗證候選。來源 URL 在伺服器端密封，前端只看到 opaque candidate ID。
+Worker 驗證 exact host、Origin、CSRF、session 與 rate limit，再先以 `fetch` 解析公開
+貼文；符合有限 fallback 條件時才以 Browser Run 解析並驗證候選。來源 URL 在伺服器
+端密封，前端只看到 opaque candidate ID。
 使用者選擇後建立綁定 session 的 Download DO，再由同 origin 下載端點串流 bytes。
 
 ## 固定工具鏈
@@ -163,6 +167,39 @@ Production 公開面必須同時符合：
 exact Worker 與 wildcard 上的 `header-rule` 自動串成 middleware chain；因此本
 Worker 必須維持自己的完整 security headers。`wrangler.jsonc`、CI 與 deployment
 token 都不得取得 Route／DNS／Custom Domain 管理能力。
+
+## Browser Run fallback 與用量監控
+
+Production configuration 已依帳號擁有者的明確付費授權選擇啟用 Browser Run；
+`wrangler.jsonc` 必須有且只能有 `{ "browser": { "binding": "BROWSER" } }`。
+`npm run security:wrangler` 會對 missing、名稱錯誤、`remote`、額外欄位與非 object
+設定 fail closed。本機 `wrangler.dev.jsonc` 與測試可不綁定 Browser Run，不能把
+production binding 改成 remote development 設定。
+
+每次 resolve 的 admission 與 fallback 順序固定如下：
+
+1. 驗證 exact host／Origin、session、CSRF 與輸入 URL，取得 session 及 IP resolve
+   permit，完成一次性 Turnstile 驗證。
+2. 先用較便宜的靜態 markup resolver。只有 JavaScript-required、找不到 media、
+   response-invalid 或 response-too-large 才能進入 Browser Run；login、access、bot、
+   rate、redirect 或 upstream failure 不得以渲染繞過。
+3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行一次匿名、
+   有界 Quick Action；不傳 Cookie、client headers 或 referrer。
+4. 只接受 canonical 與 Open Graph identity 都吻合、且恰好一個允許 CDN 候選的結果；
+   候選仍須通過既有 media probe、vault 與同源下載流程。
+
+Browser Run 是按用量計費且受平台 quota 限制。部署前後要在 Cloudflare Browser Run
+的 **Overview** 與 **Runs** 檢查總 sessions、browser hours、Quick Action requests、
+失敗情況與當下 quota；異常增加時先停止新的 rollout 並查明原因，不可放寬 host、
+Cookie、headers、origin、selector 或重試限制。repository 只證明預期 binding，不能
+證明目前 Dashboard inventory、用量、quota 或帳務狀態。
+
+2026-07-27 的 post-fix direct-import proof 在 local revision `9c09651` 對指定公開
+單影片貼文發出恰好一次無 credential Quick Action，HTTP 200，3,379 ms，得到恰好
+一個 `rendered-video` 候選且 hostname 通過既有 CDN policy。這份證據只涵蓋該貼文、
+單次匿名執行與當時區域；不證明 browser final URL／redirect chain，也不涵蓋
+carousel、圖片、私人／已刪除貼文、登入／challenge 頁、跨貼文 DOM 或 hostname 的
+長期穩定性。
 
 ## API 與下載契約
 
@@ -541,13 +578,14 @@ Rollback 前先確認目標 version 與目前 version 位於同一個 DO lifecyc
    deletion／tombstone。遇到 lifecycle boundary 時停止，自動 rollback 不適用，需
    另做相容版本與資料處置計畫並取得明確核准。
 
-## Fetch-only 與真實測試邊界
+## 真實解析與測試邊界
 
-Production resolver 只使用 Web Platform `fetch`、manual redirect、allowlist、timeout
-與大小限制。它不使用 Browser Rendering、Puppeteer、Playwright、遠端瀏覽器或第三
-方下載 API；Playwright 僅用於 mock E2E。若公開頁需要 JavaScript、登入、CAPTCHA、
-遭 bot block、地區／年齡限制或 markup 改變，解析可能失敗。必須回傳誠實錯誤，
-不能登入、上傳 Cookie、切換成瀏覽器解析、暴力重試或繞過控制。
+Production resolver 先使用 Web Platform `fetch`、manual redirect、allowlist、timeout
+與大小限制；只有上一節列出的四種靜態解析結果才可使用有界 Browser Run Quick
+Action。Browser Run 不是登入或存取控制繞過路徑，也不使用 Puppeteer、Playwright
+或第三方下載 API；Playwright 僅用於 mock E2E。若公開頁需要登入、CAPTCHA、遭 bot
+block、地區／年齡限制或 markup 改變，解析可能失敗。必須回傳誠實錯誤，不能登入、
+上傳 Cookie、暴力重試或放寬安全邊界。
 
 自動測試只用 mocks、fixtures 與受控 upstream。真實驗證最多使用使用者先前提供的
 單一公開貼文，不批次、不負載測試、不繞 rate limit；遇到登入牆、CAPTCHA 或 bot
