@@ -232,6 +232,14 @@ signal 會讓補 GET 立即安全失敗，不建立新 timeout 或 retry loop。
 每個候選最多兩個外部 subrequests；既有 redirect 上限與 DESIGN 的最壞五個 subrequests
 預算不變。
 
+media probe 與 download delivery 共用固定的 Chromium 119 User-Agent，值與本專案已安裝的
+Cloudflare Browser Run 型別所記載的預設值一致，用來對齊能成功載入同一公開候選的 renderer
+請求外觀。這是無 credential 的相容性設定，不是冒用登入身分：不加入 Cookie、Origin、
+Referer、client headers 或瀏覽器 `sec-*` headers，request 仍固定 `credentials: omit`、空
+referrer 與 `no-referrer`。host allowlist、redirect、timeout、retry、range 與 response
+metadata 規則都不變。此變更是否能排除 `MEDIA_PROBE_UNAVAILABLE`，仍須以 fresh production
+resolve 及同源 download 成功後才能確認。
+
 ## API 與下載契約
 
 主要端點為 `/api/health`、`/api/session`、`/api/resolve`、

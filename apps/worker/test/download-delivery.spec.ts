@@ -301,9 +301,18 @@ describe('download delivery setup', () => {
     expect(response.headers.get('server')).toBeNull();
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(response.headers.get('x-private-url')).toBeNull();
-    expect(requests[0]!.headers.get('accept')).toBe('*/*');
-    expect(requests[0]!.headers.get('accept-encoding')).toBe('identity');
-    expect(requests[0]!.headers.get('user-agent')).toBe('threads-downloader/0.1');
+    expect(requests[0]!.credentials).toBe('omit');
+    expect(requests[0]!.redirect).toBe('manual');
+    expect(requests[0]!.referrer).toBe('');
+    expect(requests[0]!.referrerPolicy).toBe('no-referrer');
+    expect([...requests[0]!.headers.entries()]).toEqual([
+      ['accept', '*/*'],
+      ['accept-encoding', 'identity'],
+      [
+        'user-agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      ],
+    ]);
     for (const name of ['authorization', 'cookie', 'origin', 'referer', 'sec-fetch-site']) {
       expect(requests[0]!.headers.get(name)).toBeNull();
     }

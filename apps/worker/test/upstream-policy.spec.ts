@@ -191,7 +191,10 @@ describe('upstreamHeaders', () => {
   it('returns only the fixed upstream headers', () => {
     expect([...upstreamHeaders().entries()]).toEqual([
       ['accept', '*/*'],
-      ['user-agent', 'threads-downloader/0.1'],
+      [
+        'user-agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      ],
     ]);
   });
 });

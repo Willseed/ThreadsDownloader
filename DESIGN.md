@@ -311,6 +311,17 @@ not establish any undocumented upstream Threads API semantics.
   same eight-second AbortSignal and existing request, redirect, CDN, identity
   encoding, status, and metadata policies; abort, policy, status, and metadata
   failures do not trigger another path.
+- CDN request compatibility: the shared media-probe and download-delivery
+  policy uses the fixed Chromium 119 user agent documented as the installed
+  Browser Run default instead of the application-specific bot-like user agent.
+  This aligns the two credential-free Worker fetches with the renderer that can
+  load the same public candidate. It is a bounded compatibility header, not
+  credential impersonation: Cookie, Origin, Referer, client headers, and
+  browser `sec-*` headers remain absent, and requests retain `credentials:
+  'omit'`, an empty referrer, and `no-referrer`. Host, redirect, retry, timeout,
+  response-metadata, and range policies are unchanged. Whether this resolves
+  the observed transport failure remains unconfirmed until a fresh production
+  resolve and download complete.
 - Lease decision: session and IP resolve permits are both 60 seconds. Deadline
   gates require at least 38 seconds before rendering, 26 seconds before probing,
   and 18 seconds before vault storage. These budgets cover the ten-second

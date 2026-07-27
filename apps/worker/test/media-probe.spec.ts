@@ -200,11 +200,15 @@ describe('MediaProbe HEAD', () => {
     expect(request.redirect).toBe('manual');
     expect(request.credentials).toBe('omit');
     expect(request.referrer).toBe('');
+    expect(request.referrerPolicy).toBe('no-referrer');
     expect(request.body).toBeNull();
     expect([...request.headers.entries()]).toEqual([
       ['accept', '*/*'],
       ['accept-encoding', 'identity'],
-      ['user-agent', 'threads-downloader/0.1'],
+      [
+        'user-agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      ],
     ]);
     for (const forbidden of ['authorization', 'cookie', 'origin', 'range', 'referer']) {
       expect(request.headers.has(forbidden)).toBe(false);
@@ -381,7 +385,10 @@ describe('MediaProbe range fallback', () => {
       ['accept', '*/*'],
       ['accept-encoding', 'identity'],
       ['range', 'bytes=0-0'],
-      ['user-agent', 'threads-downloader/0.1'],
+      [
+        'user-agent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      ],
     ]);
     expect(timeoutCalls).toEqual([8_000]);
     controller.abort();
