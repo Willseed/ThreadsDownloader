@@ -181,8 +181,10 @@ production binding 改成 remote development 設定。
 1. 驗證 exact host／Origin、session、CSRF 與輸入 URL，取得 session 及 IP resolve
    permit，完成一次性 Turnstile 驗證。
 2. 先用較便宜的靜態 markup resolver。只有 JavaScript-required、找不到 media、
-   response-invalid 或 response-too-large 才能進入 Browser Run；login、access、bot、
-   rate、redirect 或 upstream failure 不得以渲染繞過。
+   response-invalid、response-too-large 或 `THREADS_UPSTREAM_UNAVAILABLE` 才能進入
+   Browser Run；最後一項只代表同一個公開 Threads origin 的無 credential markup
+   transport 失敗。login、access、bot、rate、redirect 或 policy failure 不得以渲染
+   繞過。
 3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行一次匿名、
    有界 Quick Action；不傳 Cookie、client headers 或 referrer。
 4. 只接受 canonical 與 Open Graph identity 都吻合、且恰好一個允許 CDN 候選的結果；
@@ -200,6 +202,15 @@ Cookie、headers、origin、selector 或重試限制。repository 只證明預�
 單次匿名執行與當時區域；不證明 browser final URL／redirect chain，也不涵蓋
 carousel、圖片、私人／已刪除貼文、登入／challenge 頁、跨貼文 DOM 或 hostname 的
 長期穩定性。
+
+同日指定 production resolve 的 PII-free telemetry 在 `resolve` stage 記錄 exact code
+`THREADS_UPSTREAM_UNAVAILABLE`；不記錄 sensitive request ID。因為同一貼文的上述直接
+remote proof 已成功，這個 typed transport failure 納入 bounded fallback。這不是
+access-control bypass：兩條路徑都只匿名存取同一個公開 Threads origin，不傳 Cookie、
+client headers 或 credentials；renderer 仍只使用 server 建立的 canonical `/media`
+網址，要求 canonical 與 Open Graph identity 一致且只有一個候選，並繼續通過既有
+media probe、encrypted vault 與 same-origin download。login、access-denied、rate-limited、
+bot-blocked、redirect 與 policy failure 仍不得進入 Browser Run。
 
 ## API 與下載契約
 

@@ -749,6 +749,8 @@ describe('resolve public media workflow', () => {
           headers: { 'content-length': String(2 * 1024 * 1024 + 1), 'content-type': 'text/html' },
         }),
     ],
+    ['upstream failure response', () => new Response(null, { status: 503 })],
+    ['upstream transport rejection', () => Promise.reject(new Error('private markup transport'))],
   ] as const)(
     'falls back to rendered /media only for an allowed %s error',
     async (_name, markupResponse) => {
@@ -866,7 +868,6 @@ describe('resolve public media workflow', () => {
     ['login', () => new Response(null, { status: 401 })],
     ['access denial', () => new Response(null, { status: 403 })],
     ['rate limit', () => new Response(null, { status: 429 })],
-    ['upstream outage', () => new Response(null, { status: 503 })],
     [
       'bot block',
       () =>
@@ -897,19 +898,20 @@ describe('resolve public media workflow', () => {
     },
   );
 
-  it('keeps the original markup failure when the optional Browser binding is absent', async () => {
+  it('keeps the original safe upstream failure when the optional Browser binding is absent', async () => {
     const harness = createHarness({
-      markupResponse: () =>
-        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
-          headers: { 'content-type': 'text/html' },
-        }),
+      markupResponse: () => Promise.reject(new Error('private markup transport')),
     });
 
     const result = await execute(harness);
 
-    expect(result.response.status).toBe(422);
-    expectError(result.body, 'THREADS_JAVASCRIPT_REQUIRED');
+    expect(result.response.status).toBe(503);
+    expectError(result.body, 'RESOLVE_UNAVAILABLE');
     expect(harness.controls.rendererCalls).toEqual([]);
+    expect(harness.controls.failureEvents).toEqual([
+      { requestId: REQUEST_ID, stage: 'resolve', code: 'THREADS_UPSTREAM_UNAVAILABLE' },
+    ]);
+    expectPublicBodySafe(result.body, ['private markup transport']);
   });
 
   it('accepts each exact 60-second lease budget boundary through rendered probe and vault store', async () => {

@@ -268,8 +268,10 @@ not establish any undocumented upstream Threads API semantics.
   Browser rendering is an optional injected port. It can run only after session
   and IP admission, CSRF validation, and one-time Turnstile success, and only
   after the cheaper markup resolver returns JavaScript-required, media-missing,
-  response-invalid, or response-too-large. Login, access, bot, rate, redirect,
-  and upstream failures never use rendering as a bypass.
+  response-invalid, response-too-large, or upstream-unavailable. The last case
+  covers a credential-free public Threads markup transport failure; login,
+  access, bot, rate, and redirect or policy failures never use rendering as a
+  bypass.
 - Browser containment: the Quick Action has empty cookies, does not forward
   client headers or cookies or set an explicit referrer, uses zero cache TTL,
   and supplies provider-side navigation and action limits totalling ten seconds,
@@ -327,6 +329,17 @@ not establish any undocumented upstream Threads API semantics.
   one `rendered-video` candidate on an allowed CDN hostname. This verifies the
   production code seam selected for activation, but it does not expose or prove
   the browser's final URL or redirect chain.
+- Production failure evidence: the exact failed resolve was reported at the
+  `resolve` stage with code `THREADS_UPSTREAM_UNAVAILABLE`; its request ID is
+  intentionally not recorded. Since a direct remote run of the same anonymous
+  resolver and post succeeded, that typed transport failure now joins the
+  bounded fallback allowset. This is not an access-control bypass: both paths
+  access the same public Threads origin without cookies, forwarded headers, or
+  credentials; the server still constructs the canonical `/media` URL, requires
+  matching canonical and Open Graph identity with exactly one candidate, and
+  applies the existing media probe, encrypted vault, and same-origin download
+  boundary. Login, access-denied, rate-limited, bot-blocked, redirect, and policy
+  failures remain non-fallback.
 - Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or
