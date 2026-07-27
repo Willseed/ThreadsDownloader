@@ -109,25 +109,76 @@ describe('worker entry policy', () => {
     },
   );
 
-  it('delegates a download route shape while preserving its legacy JSON and HEAD 404s', async () => {
+  it.each([
+    [`/api/download/${'A'.repeat(32)}?debug=1`, 'GET'],
+    [`/api/download/%41${'A'.repeat(31)}`, 'GET'],
+    [`/api/download/A%2F${'A'.repeat(30)}`, 'GET'],
+    [`/api/%64ownload/${'A'.repeat(32)}`, 'GET'],
+    [`/%61pi/download/${'A'.repeat(32)}`, 'GET'],
+    ['/api/%64ownload-sessions', 'POST'],
+    ['/%61pi/preview-sessions', 'POST'],
+  ] as const)(
+    'keeps a normalized download family inside the handler-owned JSON 404: %s %s',
+    async (path, method) => {
+      const env = createEnv();
+      const response = await worker.fetch(
+        new Request(`https://${expectedHost}${path}`, { method }),
+        env,
+        {} as ExecutionContext,
+      );
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8');
+      await expect(response.json()).resolves.toMatchObject({ error: { code: 'NOT_FOUND' } });
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [`/api/preview/v1.${'A'.repeat(16)}.${'A'.repeat(22)}`, 'HEAD'],
+    [`/api/download-status/${'A'.repeat(32)}`, 'HEAD'],
+  ] as const)('keeps an owned non-download HEAD route bodyless: %s', async (path, method) => {
     const env = createEnv();
-    const path = `/api/download/${'A'.repeat(32)}?debug=1`;
-    const response = await fetchWorker(path, env);
-    const headResponse = await worker.fetch(
-      new Request(`https://${expectedHost}${path}`, { method: 'HEAD' }),
+    const response = await worker.fetch(
+      new Request(`https://${expectedHost}${path}`, { method }),
       env,
       {} as ExecutionContext,
     );
 
     expect(response.status).toBe(404);
-    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.body).toBeNull();
     expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8');
-    await expect(response.json()).resolves.toMatchObject({ error: { code: 'NOT_FOUND' } });
-    expect(headResponse.status).toBe(404);
-    expect(headResponse.body).toBeNull();
-    expect(headResponse.headers.get('content-type')).toBe('application/json; charset=UTF-8');
     expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [`/api/download/${'A'.repeat(32)}/`, 'GET'],
+    [`/api/download/${'A'.repeat(32)}/extra`, 'GET'],
+    ['/api/download/', 'GET'],
+    ['/api/missing', 'GET'],
+    ['/api/missing', 'HEAD'],
+    [`/api/download/${'A'.repeat(32)}`, 'DELETE'],
+  ] as const)(
+    'keeps a generic API route in the generic JSON fallback: %s %s',
+    async (path, method) => {
+      const env = createEnv();
+      const response = await worker.fetch(
+        new Request(`https://${expectedHost}${path}`, { method }),
+        env,
+        {} as ExecutionContext,
+      );
+
+      expect(response.status).toBe(404);
+      if (method === 'HEAD') {
+        expect(response.body).toBeNull();
+      } else {
+        expect(response.body).not.toBeNull();
+      }
+      expect(response.headers.get('content-type')).toBe('application/json');
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it('routes Hono HEAD through inspect only and preserves metadata with a null body', async () => {
     const inspectRequests: Request[] = [];

@@ -95,7 +95,8 @@ export type PublicDownloadApiOperationFactory = (
 export type PublicDownloadApiHandler = (
   request: Request,
   bindings: PublicDownloadApiBindings,
-) => Promise<Response>;
+  normalizedRoutingPathname: string,
+) => Promise<Response | null>;
 
 type PublicRoute =
   | { readonly kind: 'issue' }
@@ -103,8 +104,7 @@ type PublicRoute =
   | { readonly kind: 'preview'; readonly capability: string }
   | { readonly kind: 'download'; readonly downloadId: string }
   | { readonly kind: 'inspect'; readonly downloadId: string }
-  | { readonly kind: 'status'; readonly downloadId: string }
-  | { readonly kind: 'not-found'; readonly owner: 'download-route' | 'api-fallback' };
+  | { readonly kind: 'status'; readonly downloadId: string };
 
 interface PublicFailure {
   readonly code: ApiErrorCode;
@@ -136,50 +136,75 @@ function singlePathSegment(pathname: string, prefix: string): string | null {
   return segment !== '' && !segment.includes('/') ? segment : null;
 }
 
-function postRoute(pathname: string, hasQuery: boolean): PublicRoute {
+function ownsNormalizedPublicRoute(method: string, normalizedRoutingPathname: string): boolean {
+  if (method === 'POST') {
+    return (
+      normalizedRoutingPathname === '/api/download-sessions' ||
+      normalizedRoutingPathname === '/api/preview-sessions'
+    );
+  }
+  if (method !== 'GET' && method !== 'HEAD') {
+    return false;
+  }
+  return (
+    singlePathSegment(normalizedRoutingPathname, PREVIEW_PATH_PREFIX) !== null ||
+    singlePathSegment(normalizedRoutingPathname, DOWNLOAD_PATH_PREFIX) !== null ||
+    singlePathSegment(normalizedRoutingPathname, DOWNLOAD_STATUS_PATH_PREFIX) !== null
+  );
+}
+
+function canonicalPostRoute(pathname: string, hasQuery: boolean): PublicRoute | null {
+  if (hasQuery) {
+    return null;
+  }
   if (pathname === '/api/download-sessions') {
-    return hasQuery ? { kind: 'not-found', owner: 'download-route' } : { kind: 'issue' };
+    return { kind: 'issue' };
   }
   if (pathname === '/api/preview-sessions') {
-    return hasQuery ? { kind: 'not-found', owner: 'download-route' } : { kind: 'issue-preview' };
+    return { kind: 'issue-preview' };
   }
-  return { kind: 'not-found', owner: 'api-fallback' };
+  return null;
 }
 
-function readRoute(method: 'GET' | 'HEAD', pathname: string, hasQuery: boolean): PublicRoute {
+function canonicalReadRoute(
+  method: 'GET' | 'HEAD',
+  pathname: string,
+  hasQuery: boolean,
+): PublicRoute | null {
   const capability = singlePathSegment(pathname, PREVIEW_PATH_PREFIX);
-  if (capability !== null) {
-    if (method === 'GET' && !hasQuery && isCanonicalPreviewCapability(capability)) {
-      return { kind: 'preview', capability };
-    }
-    return { kind: 'not-found', owner: 'download-route' };
+  if (
+    capability !== null &&
+    method === 'GET' &&
+    !hasQuery &&
+    isCanonicalPreviewCapability(capability)
+  ) {
+    return { kind: 'preview', capability };
   }
   const downloadId = singlePathSegment(pathname, DOWNLOAD_PATH_PREFIX);
-  if (downloadId !== null) {
-    if (!hasQuery && isCanonicalDownloadId(downloadId)) {
-      return { kind: method === 'HEAD' ? 'inspect' : 'download', downloadId };
-    }
-    return { kind: 'not-found', owner: 'download-route' };
+  if (downloadId !== null && !hasQuery && isCanonicalDownloadId(downloadId)) {
+    return { kind: method === 'HEAD' ? 'inspect' : 'download', downloadId };
   }
   const statusDownloadId = singlePathSegment(pathname, DOWNLOAD_STATUS_PATH_PREFIX);
-  if (statusDownloadId !== null) {
-    if (method === 'GET' && !hasQuery && isCanonicalDownloadId(statusDownloadId)) {
-      return { kind: 'status', downloadId: statusDownloadId };
-    }
-    return { kind: 'not-found', owner: 'download-route' };
+  if (
+    statusDownloadId !== null &&
+    method === 'GET' &&
+    !hasQuery &&
+    isCanonicalDownloadId(statusDownloadId)
+  ) {
+    return { kind: 'status', downloadId: statusDownloadId };
   }
-  return { kind: 'not-found', owner: 'api-fallback' };
+  return null;
 }
 
-function publicRoute(request: Request): PublicRoute {
+function rawCanonicalRoute(request: Request): PublicRoute | null {
   const url = new URL(request.url);
   if (request.method === 'POST') {
-    return postRoute(url.pathname, url.search !== '');
+    return canonicalPostRoute(url.pathname, url.search !== '');
   }
   if (request.method === 'GET' || request.method === 'HEAD') {
-    return readRoute(request.method, url.pathname, url.search !== '');
+    return canonicalReadRoute(request.method, url.pathname, url.search !== '');
   }
-  return { kind: 'not-found', owner: 'api-fallback' };
+  return null;
 }
 
 function browserFailure(error: BrowserSessionError): PublicFailure {
@@ -301,15 +326,10 @@ function errorResponse(error: unknown, requestId: string, head: boolean): Respon
     : new Response(JSON.stringify(createApiError(mapped.code, mapped.message, requestId)), init);
 }
 
-function notFound(
-  requestId: string,
-  head: boolean,
-  owner: 'download-route' | 'api-fallback',
-): Response {
+function notFound(requestId: string, head: boolean): Response {
   const headers = new Headers({
     'cache-control': 'no-store',
-    'content-type':
-      owner === 'download-route' ? 'application/json; charset=UTF-8' : 'application/json',
+    'content-type': 'application/json; charset=UTF-8',
   });
   return head
     ? new Response(null, { status: 404, headers })
@@ -541,11 +561,14 @@ export function createPublicDownloadApiHandler(
   runtime: PublicDownloadApiRuntime,
   operationFactory: PublicDownloadApiOperationFactory = productionOperations,
 ): PublicDownloadApiHandler {
-  return async (request, bindings): Promise<Response> => {
+  return async (request, bindings, normalizedRoutingPathname): Promise<Response | null> => {
+    if (!ownsNormalizedPublicRoute(request.method, normalizedRoutingPathname)) {
+      return null;
+    }
+    const route = rawCanonicalRoute(request);
     const id = runtime.requestId();
-    const route = publicRoute(request);
-    if (route.kind === 'not-found') {
-      return notFound(id, request.method === 'HEAD', route.owner);
+    if (route === null) {
+      return notFound(id, request.method === 'HEAD');
     }
     try {
       const operations = operationFactory(bindings, runtime);

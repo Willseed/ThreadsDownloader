@@ -415,7 +415,12 @@ app.get('/', async (context) => {
 });
 
 app.all('/api', () => notFoundApi(requestId()));
-app.all('/api/*', (context) => publicDownloadApi(context.req.raw, context.env));
+app.all('/api/*', async (context) => {
+  return (
+    (await publicDownloadApi(context.req.raw, context.env, context.req.path)) ??
+    notFoundApi(requestId())
+  );
+});
 app.all('*', async (context) => {
   const response = await context.env.ASSETS.fetch(context.req.raw);
   return applyResponsePolicy(context.req.raw, response);

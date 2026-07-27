@@ -71,13 +71,18 @@ function status(overrides: Partial<DownloadSessionStatus> = {}): DownloadSession
 interface Harness {
   readonly bindings: PublicDownloadApiBindings;
   readonly deliver: ReturnType<typeof vi.fn>;
-  readonly handler: ReturnType<typeof createPublicDownloadApiHandler>;
+  readonly handler: (
+    request: Request,
+    bindings: PublicDownloadApiBindings,
+    routingPathname?: string,
+  ) => Promise<Response>;
   readonly inspect: ReturnType<typeof vi.fn>;
   readonly issue: ReturnType<typeof vi.fn>;
   readonly issuePreview: ReturnType<typeof vi.fn>;
   readonly openPreview: ReturnType<typeof vi.fn>;
   readonly operationFactory: ReturnType<typeof vi.fn>;
   readonly operations: PublicDownloadApiOperations;
+  readonly publicDownloadApi: ReturnType<typeof createPublicDownloadApiHandler>;
   readonly readStatus: ReturnType<typeof vi.fn>;
   readonly requestId: ReturnType<typeof vi.fn>;
 }
@@ -124,19 +129,32 @@ function createHarness(): Harness {
     SESSION_SIGNING_KEY: SIGNING_KEY,
     SESSIONS: {} as PublicDownloadApiBindings['SESSIONS'],
   };
+  const publicDownloadApi = createPublicDownloadApiHandler(
+    { fetcher: fetch, now: () => NOW, requestId },
+    operationFactory,
+  );
+  const handler: Harness['handler'] = async (
+    request,
+    requestedBindings,
+    routingPathname = new URL(request.url).pathname,
+  ) => {
+    const response = await publicDownloadApi(request, requestedBindings, routingPathname);
+    if (response === null) {
+      throw new Error('Expected the test request to belong to the public download workflow.');
+    }
+    return response;
+  };
   return {
     bindings,
     deliver,
-    handler: createPublicDownloadApiHandler(
-      { fetcher: fetch, now: () => NOW, requestId },
-      operationFactory,
-    ),
+    handler,
     inspect,
     issue,
     issuePreview,
     openPreview,
     operationFactory,
     operations,
+    publicDownloadApi,
     readStatus,
     requestId,
   };
@@ -767,28 +785,36 @@ describe('public browser-bound download API', () => {
   });
 
   it.each([
-    [`/api/download/${DOWNLOAD_ID}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
-    [`/api/download/${DOWNLOAD_ID}/`, 'GET', 'application/json'],
-    [`/api/download/${DOWNLOAD_ID}/extra`, 'GET', 'application/json'],
+    [`/api/download/${DOWNLOAD_ID}?debug=1`, 'GET', `/api/download/${DOWNLOAD_ID}`],
     [
       `/api/download/%${DOWNLOAD_ID.charCodeAt(0).toString(16)}${DOWNLOAD_ID.slice(1)}`,
       'GET',
-      'application/json; charset=UTF-8',
+      `/api/download/${DOWNLOAD_ID}`,
     ],
-    [`/api/download/A%2F${DOWNLOAD_ID.slice(3)}`, 'GET', 'application/json; charset=UTF-8'],
-    [`/api/download-status/${DOWNLOAD_ID}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
-    [`/api/download-status/${DOWNLOAD_ID}/`, 'GET', 'application/json'],
-    [`/api/preview/${PREVIEW_CAPABILITY}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
-    ['/api/preview/not-a-capability', 'GET', 'application/json; charset=UTF-8'],
-    ['/api/download-sessions?debug=1', 'POST', 'application/json; charset=UTF-8'],
-    ['/api/missing', 'GET', 'application/json'],
+    [
+      `/api/download/A%2F${DOWNLOAD_ID.slice(3)}`,
+      'GET',
+      `/api/download/A%2F${DOWNLOAD_ID.slice(3)}`,
+    ],
+    [`/api/download-status/${DOWNLOAD_ID}?debug=1`, 'GET', `/api/download-status/${DOWNLOAD_ID}`],
+    [`/api/preview/${PREVIEW_CAPABILITY}?debug=1`, 'GET', `/api/preview/${PREVIEW_CAPABILITY}`],
+    ['/api/preview/not-a-capability', 'GET', '/api/preview/not-a-capability'],
+    ['/api/download-sessions?debug=1', 'POST', '/api/download-sessions'],
+    ['/api/%64ownload-sessions', 'POST', '/api/download-sessions'],
+    ['/%61pi/preview-sessions', 'POST', '/api/preview-sessions'],
+    [`/api/%64ownload/${DOWNLOAD_ID}`, 'GET', `/api/download/${DOWNLOAD_ID}`],
+    [`/%61pi/download/${DOWNLOAD_ID}`, 'GET', `/api/download/${DOWNLOAD_ID}`],
   ] as const)(
-    'rejects a non-canonical public path without constructing operations: %s %s',
-    async (path, method, expectedContentType) => {
+    'owns a normalized family but rejects its non-canonical raw operation: %s %s',
+    async (path, method, routingPathname) => {
       const harness = createHarness();
-      const response = await harness.handler(await apiRequest(path, { method }), harness.bindings);
+      const response = await harness.handler(
+        await apiRequest(path, { method }),
+        harness.bindings,
+        routingPathname,
+      );
       expect(response.status).toBe(404);
-      expect(response.headers.get('content-type')).toBe(expectedContentType);
+      expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8');
       await expect(errorBody(response)).resolves.toMatchObject({
         error: { code: 'NOT_FOUND', requestId: REQUEST_ID },
       });
@@ -798,30 +824,45 @@ describe('public browser-bound download API', () => {
     },
   );
 
-  it('keeps an unknown HEAD bodyless without constructing operations', async () => {
+  it.each([
+    [`/api/preview/${PREVIEW_CAPABILITY}`, `/api/preview/${PREVIEW_CAPABILITY}`],
+    [`/api/download-status/${DOWNLOAD_ID}`, `/api/download-status/${DOWNLOAD_ID}`],
+  ])('keeps an owned non-download HEAD route bodyless: %s', async (path, routingPathname) => {
     const harness = createHarness();
     const response = await harness.handler(
-      await apiRequest('/api/missing', { method: 'HEAD' }),
+      await apiRequest(path, { method: 'HEAD' }),
       harness.bindings,
+      routingPathname,
     );
 
     expect(response.status).toBe(404);
     expect(response.body).toBeNull();
-    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8');
     expect(harness.requestId).toHaveBeenCalledOnce();
     expect(harness.operationFactory).not.toHaveBeenCalled();
     expectNoOperationCalls(harness);
   });
 
-  it('rejects wrong methods at the HTTP seam without touching operations', async () => {
+  it.each([
+    [`/api/download/${DOWNLOAD_ID}/`, 'GET'],
+    [`/api/download/${DOWNLOAD_ID}/extra`, 'GET'],
+    ['/api/download/', 'GET'],
+    [`/api/download-status/${DOWNLOAD_ID}/`, 'GET'],
+    ['/api/missing', 'GET'],
+    ['/api/missing', 'HEAD'],
+    [`/api/download/${DOWNLOAD_ID}`, 'DELETE'],
+    ['/api/download-sessions', 'GET'],
+  ] as const)('leaves a generic API route outside the workflow: %s %s', async (path, method) => {
     const harness = createHarness();
-    const response = await harness.handler(
-      await apiRequest(`/api/download/${DOWNLOAD_ID}`, { method: 'DELETE' }),
+    const request = await apiRequest(path, { method });
+    const response = await harness.publicDownloadApi(
+      request,
       harness.bindings,
+      new URL(request.url).pathname,
     );
-    expect(response.status).toBe(404);
-    expect(response.headers.get('content-type')).toBe('application/json');
-    expect(harness.requestId).toHaveBeenCalledOnce();
+
+    expect(response).toBeNull();
+    expect(harness.requestId).not.toHaveBeenCalled();
     expect(harness.operationFactory).not.toHaveBeenCalled();
     expectNoOperationCalls(harness);
   });
