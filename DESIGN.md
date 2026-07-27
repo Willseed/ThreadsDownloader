@@ -276,13 +276,16 @@ not establish any undocumented upstream Threads API semantics.
 - Browser containment: the Quick Action has empty cookies, does not forward
   client headers or cookies or set an explicit referrer, uses zero cache TTL,
   and supplies provider-side navigation and action limits totalling ten seconds,
-  a three-second bounded hydration wait, and anchored request patterns for exact
+  a provider-side visible `video[src]` wait of at most five seconds followed by
+  a 250 ms stabilization delay, and anchored request patterns for exact
   `www.threads.com`, the existing `cdninstagram.com` family, and the observed
-  exact Instagram FNA hostname shape. Its streamed JSON response, selectors,
-  element records, attributes, values, and candidate count are all bounded and
-  decoded exactly. Exactly one `link[rel="canonical"]` `href` and exactly one
-  `meta[property="og:url"]` `content` must both equal the normalized canonical
-  post. Candidates come only from full-page `video[src]` and
+  exact Instagram FNA hostname shape. The selector wait remains inside the
+  six-second action limit and does not enlarge the ten-second browser budget.
+  Its streamed JSON response, selectors, element records, attributes, values,
+  and candidate count are all bounded and decoded exactly. Exactly one
+  `link[rel="canonical"]` `href` and exactly one `meta[property="og:url"]`
+  `content` must both equal the normalized canonical post. Candidates come only
+  from full-page `video[src]` and
   `video source[src]`; zero canonically deduplicated CDN candidates is not found
   and more than one fails closed rather than guessing among post and
   recommendation videos. These upstream-authored DOM identity declarations are
@@ -341,6 +344,15 @@ not establish any undocumented upstream Threads API semantics.
   applies the existing media probe, encrypted vault, and same-origin download
   boundary. Login, access-denied, rate-limited, bot-blocked, redirect, and policy
   failures remain non-fallback.
+- Renderer timing evidence: a later fresh production session reached the
+  `resolve` stage with exact code `RENDERED_MEDIA_NOT_FOUND` while the renderer
+  used only a fixed three-second delay. An earlier anonymous Quick Action using
+  a provider-side visible `video[src]` wait (five-second maximum) plus 250 ms
+  stabilization completed in about 3.8 seconds and its diagnostic response
+  contained `video[src]`. This supports waiting for the actual media selector
+  instead of assuming a fixed hydration instant; it does not establish a
+  universal Threads hydration time or guarantee that every valid post renders
+  media.
 - Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or

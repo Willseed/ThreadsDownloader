@@ -123,7 +123,12 @@ describe('rendered Threads media resolver request policy', () => {
     expect(options.setJavaScriptEnabled).toBe(true);
     expect(options.gotoOptions).toEqual({ timeout: 4_000, waitUntil: 'domcontentloaded' });
     expect(options.actionTimeout).toBe(6_000);
-    expect(options.waitForTimeout).toBe(3_000);
+    expect(options.waitForSelector).toEqual({
+      selector: VIDEO_SELECTOR,
+      visible: true,
+      timeout: 5_000,
+    });
+    expect(options.waitForTimeout).toBe(250);
     expect(options.bestAttempt).toBe(false);
     expect(options.elements).toEqual([
       { selector: CANONICAL_SELECTOR },
@@ -141,6 +146,7 @@ describe('rendered Threads media resolver request policy', () => {
       'gotoOptions',
       'setJavaScriptEnabled',
       'url',
+      'waitForSelector',
       'waitForTimeout',
     ]);
   });
@@ -360,16 +366,16 @@ describe('rendered Threads media resolver response contract', () => {
     expect(actualCancellations).toBe(1);
   });
 
-  it('maps binding and body-read failures without provider details', async () => {
-    const bindingSecret = 'private-binding-stack';
+  it('maps provider and body-read failures without provider details', async () => {
+    const providerSecret = 'private-provider-selector-timeout';
     await expectResolverError(
       resolver({
         async quickAction() {
-          throw new Error(bindingSecret);
+          throw new Error(providerSecret);
         },
       }).resolve(post),
       'RENDERED_UNAVAILABLE',
-      [bindingSecret],
+      [providerSecret],
     );
 
     const readSecret = 'private-stream-stack';

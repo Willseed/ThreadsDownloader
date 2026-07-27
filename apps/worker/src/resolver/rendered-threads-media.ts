@@ -25,7 +25,6 @@ const VIDEO_SELECTOR = 'video[src]';
 const SOURCE_SELECTOR = 'video source[src]';
 const NAVIGATION_TIMEOUT_MS = 4_000;
 const ACTION_TIMEOUT_MS = 6_000;
-const HYDRATION_WAIT_MS = 3_000;
 export const RENDERED_BROWSER_BUDGET_MS = NAVIGATION_TIMEOUT_MS + ACTION_TIMEOUT_MS;
 export const RENDERED_RESPONSE_READ_TIMEOUT_MS = 2_000;
 export const RENDERED_RESOLVER_BUDGET_MS =
@@ -50,6 +49,11 @@ export interface RenderedBrowserScrapeOptions {
   };
   readonly setJavaScriptEnabled: true;
   readonly url: string;
+  readonly waitForSelector: {
+    readonly selector: 'video[src]';
+    readonly timeout: 5_000;
+    readonly visible: true;
+  };
   readonly waitForTimeout: number;
 }
 
@@ -165,7 +169,8 @@ function scrapeOptions(
     setJavaScriptEnabled: true,
     gotoOptions: { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: 'domcontentloaded' },
     actionTimeout: ACTION_TIMEOUT_MS,
-    waitForTimeout: HYDRATION_WAIT_MS,
+    waitForSelector: { selector: VIDEO_SELECTOR, visible: true, timeout: 5_000 },
+    waitForTimeout: 250,
     bestAttempt: false,
     elements: targets.map(({ selector }) => ({ selector })),
   };

@@ -186,7 +186,9 @@ production binding 改成 remote development 設定。
    transport 失敗。login、access、bot、rate、redirect 或 policy failure 不得以渲染
    繞過。
 3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行一次匿名、
-   有界 Quick Action；不傳 Cookie、client headers 或 referrer。
+   有界 Quick Action；不傳 Cookie、client headers 或 referrer。供應端最多等待五秒，
+   直到可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在既有六秒 action
+   limit 內，不增加十秒 browser budget。
 4. 只接受 canonical 與 Open Graph identity 都吻合、且恰好一個允許 CDN 候選的結果；
    候選仍須通過既有 media probe、vault 與同源下載流程。
 
@@ -211,6 +213,13 @@ client headers 或 credentials；renderer 仍只使用 server 建立的 canonica
 網址，要求 canonical 與 Open Graph identity 一致且只有一個候選，並繼續通過既有
 media probe、encrypted vault 與 same-origin download。login、access-denied、rate-limited、
 bot-blocked、redirect 與 policy failure 仍不得進入 Browser Run。
+
+後續 fresh production session 在固定等待三秒的版本中，於 `resolve` stage 記錄 exact
+code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `video[src]` 的五秒
+上限等待再加 250 ms 穩定時間，約 3.8 秒完成，diagnostic response 當時有
+`video[src]`。因此 renderer 改為等待實際 selector，而不是假設固定 hydration 時點；
+這份觀察不代表所有 Threads 貼文都會在相同時間出現影片，也不保證每個有效貼文都有
+可下載 media。
 
 ## API 與下載契約
 
