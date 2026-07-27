@@ -7,7 +7,7 @@ interface ModelContext {
       properties: Record<string, never>;
       required: string[];
     };
-    execute: () => Promise<unknown> | unknown;
+    execute: () => Promise<unknown>;
   }): Promise<unknown>;
 }
 
@@ -29,19 +29,25 @@ function registerAgentTools(modelContext: Pick<ModelContext, 'registerTool'>): v
     .catch(() => {});
 }
 
+function isModelContext(
+  modelContext: unknown,
+): modelContext is Pick<ModelContext, 'registerTool'> {
+  return (
+    typeof modelContext === 'object' &&
+    modelContext !== null &&
+    typeof (modelContext as { registerTool?: unknown }).registerTool === 'function'
+  );
+}
+
 ((navigatorObject) => {
   const modelContext = navigatorObject.modelContext;
   if (modelContext === undefined || modelContext === null) {
     return;
   }
 
-  const maybeModelContext = modelContext as Partial<ModelContext> & {
-    registerTool: unknown;
-  };
-
-  if (typeof maybeModelContext.registerTool !== 'function') {
+  if (!isModelContext(modelContext)) {
     return;
   }
 
-  registerAgentTools(maybeModelContext as ModelContext);
+  registerAgentTools(modelContext);
 })(globalThis.navigator as Navigator & { modelContext?: unknown });
