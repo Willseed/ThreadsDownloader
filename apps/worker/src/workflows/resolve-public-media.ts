@@ -24,6 +24,7 @@ import {
   RENDERED_RESOLVER_BUDGET_MS,
   RenderedThreadsMediaResolverError,
   type BrowserRunScrapePort,
+  type ResolvedThreadsMedia,
   type RenderedThreadsMediaResolverErrorCode,
 } from '../resolver/rendered-threads-media.js';
 import type { MediaCandidate } from '../resolver/structured-media.js';
@@ -80,13 +81,10 @@ const RENDERED_FALLBACK_ERRORS: ReadonlySet<PublicThreadsMarkupResolverErrorCode
 ]);
 const LEASE_DEADLINE_MARGIN_MS = 2_000;
 const RESOLVE_VAULT_TOTAL_BUDGET_MS = RESOLVE_VAULT_REQUEST_TIMEOUT_MS * 2;
-const FALLBACK_LEASE_BUDGET_MS =
-  RENDERED_RESOLVER_BUDGET_MS +
-  MEDIA_PROBE_TIMEOUT_MS +
-  RESOLVE_VAULT_TOTAL_BUDGET_MS +
-  LEASE_DEADLINE_MARGIN_MS;
 const POST_RENDER_LEASE_BUDGET_MS =
   MEDIA_PROBE_TIMEOUT_MS + RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
+const FALLBACK_LEASE_BUDGET_MS = RENDERED_RESOLVER_BUDGET_MS + POST_RENDER_LEASE_BUDGET_MS;
+const RENDER_RETRY_LEASE_BUDGET_MS = RENDERED_RESOLVER_BUDGET_MS + POST_RENDER_LEASE_BUDGET_MS;
 const POST_PROBE_LEASE_BUDGET_MS = RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
 const TRANSIENT_PROBE_FAILURE_PRIORITY: readonly MediaProbeErrorCode[] = [
   'MEDIA_PROBE_ABORTED',
@@ -514,9 +512,20 @@ async function resolveCandidates(
     }
   }
 
-  const rendered = await createRenderedThreadsMediaResolver({ browser: bindings.BROWSER }).resolve(
-    post,
-  );
+  const renderer = createRenderedThreadsMediaResolver({ browser: bindings.BROWSER });
+  let rendered: ResolvedThreadsMedia;
+  try {
+    rendered = await renderer.resolve(post);
+  } catch (error: unknown) {
+    if (
+      !(error instanceof RenderedThreadsMediaResolverError) ||
+      error.code !== 'RENDERED_MEDIA_NOT_FOUND' ||
+      !hasLeaseBudget(lease, runtime, RENDER_RETRY_LEASE_BUDGET_MS)
+    ) {
+      throw error;
+    }
+    rendered = await renderer.resolve(post);
+  }
   assertLeaseBudget(lease, runtime, POST_RENDER_LEASE_BUDGET_MS);
   return { candidates: rendered.candidates, rendered: true };
 }

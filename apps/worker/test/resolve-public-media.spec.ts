@@ -151,6 +151,17 @@ function renderedResponse(
   });
 }
 
+function emptyRenderedResponse(options: RenderedBrowserScrapeOptions): Response {
+  return jsonResponse({
+    success: true,
+    result: [
+      ...renderedIdentity(options),
+      { selector: options.elements[2]!.selector, results: [] },
+      { selector: options.elements[3]!.selector, results: [] },
+    ],
+  });
+}
+
 function browserBinding(options: HarnessOptions, controls: HarnessControls): BrowserRunScrapePort {
   return {
     async quickAction(action, scrapeOptions) {
@@ -823,20 +834,50 @@ describe('resolve public media workflow', () => {
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, secondUrl, 'private-related-token']);
   });
 
+  it('retries one empty rendered result with the same canonical post inside the lease', async () => {
+    let renderCall = 0;
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      rendererResponse(options) {
+        renderCall += 1;
+        return renderCall === 1 ? emptyRenderedResponse(options) : renderedResponse(options);
+      },
+      clock: (call) =>
+        [
+          NOW,
+          NOW,
+          NOW,
+          NOW + 10_000,
+          NOW + 22_000,
+          NOW + 34_000,
+          NOW + 42_000,
+          NOW + 42_000,
+          NOW + 42_100,
+        ][call]!,
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(200);
+    expect(harness.controls.rendererCalls).toHaveLength(2);
+    expect(harness.controls.rendererCalls.map(({ options }) => options.url)).toEqual([
+      'https://www.threads.com/@alice/post/Abcde/media',
+      'https://www.threads.com/@alice/post/Abcde/media',
+    ]);
+    expect(harness.controls.probeRequests).toHaveLength(1);
+    expect(harness.controls.vaultBodies).toHaveLength(1);
+  });
+
   it.each([
     [
       'valid empty result',
-      (options: RenderedBrowserScrapeOptions) =>
-        jsonResponse({
-          success: true,
-          result: [
-            ...renderedIdentity(options),
-            { selector: options.elements[2]!.selector, results: [] },
-            { selector: options.elements[3]!.selector, results: [] },
-          ],
-        }),
+      (options: RenderedBrowserScrapeOptions) => emptyRenderedResponse(options),
       422,
       'MEDIA_NOT_FOUND',
+      2,
     ],
     [
       'provider failure status',
@@ -847,10 +888,11 @@ describe('resolve public media workflow', () => {
         }),
       503,
       'RESOLVE_UNAVAILABLE',
+      1,
     ],
   ] as const)(
     'maps renderer $0 to a safe public error',
-    async (_name, rendererResponse, status, code) => {
+    async (_name, rendererResponse, status, code, rendererCalls) => {
       const harness = createHarness({
         markupResponse: () =>
           new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
@@ -863,7 +905,7 @@ describe('resolve public media workflow', () => {
 
       expect(result.response.status).toBe(status);
       expectError(result.body, code);
-      expect(harness.controls.rendererCalls).toHaveLength(1);
+      expect(harness.controls.rendererCalls).toHaveLength(rendererCalls);
       expect(harness.controls.probeRequests).toEqual([]);
       expect(harness.controls.vaultBodies).toEqual([]);
       expectPublicBodySafe(result.body, ['private-provider-error']);
@@ -947,6 +989,25 @@ describe('resolve public media workflow', () => {
     expect(harness.controls.rendererCalls).toHaveLength(1);
     expect(harness.controls.probeRequests).toHaveLength(1);
     expect(harness.controls.vaultBodies).toHaveLength(1);
+  });
+
+  it('does not retry when the fixed permit cannot cover a second rendered budget', async () => {
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      rendererResponse: (options) => emptyRenderedResponse(options),
+      clock: (call) => [NOW, NOW, NOW, NOW + 10_000, NOW + 22_001][call]!,
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(422);
+    expectError(result.body, 'MEDIA_NOT_FOUND');
+    expect(harness.controls.rendererCalls).toHaveLength(1);
+    expect(harness.controls.probeRequests).toEqual([]);
+    expect(harness.controls.vaultBodies).toEqual([]);
   });
 
   it.each([

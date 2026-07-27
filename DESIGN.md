@@ -327,7 +327,14 @@ not establish any undocumented upstream Threads API semantics.
   and 18 seconds before vault storage. These budgets cover the ten-second
   provider browser options, a two-second absolute response-body read limit, an
   eight-second media probe, two sequential eight-second vault operations, and a
-  two-second margin. Compared with the former 30-second
+  two-second margin. If and only if the first renderer result has matching
+  canonical identity but no allowed media candidate, the workflow may make one
+  fresh request for the same canonical post when at least another 38 seconds
+  remain. The worst case after that gate is twelve seconds for the second
+  rendered response plus the existing 26-second probe, vault, and margin
+  budget, so it remains within the fixed 60-second permit. A successful first
+  render and every unavailable, invalid-identity, multiple-candidate, or other
+  invalid response are never retried. Compared with the former 30-second
   lease, a crashed resolve can occupy its session/IP concurrency slot for at
   most 30 additional seconds; successful and handled failures still release
   immediately.
@@ -380,6 +387,16 @@ not establish any undocumented upstream Threads API semantics.
   instead of assuming a fixed hydration instant; it does not establish a
   universal Threads hydration time or guarantee that every valid post renders
   media.
+- Renderer variability evidence: repeated remote-dev runs through the exact
+  production resolver for the same anonymous public post reproduced both zero
+  candidates and a later single valid candidate; a separate run produced three
+  distinct allowed candidates while canonical and Open Graph identity still
+  matched. The retry therefore handles only the observed transient zero-result
+  state. It does not select among multiple videos or retry provider, transport,
+  identity, malformed-response, or policy failures. No competitor backend
+  behavior is inferred from browser timing observations. Two independent fresh
+  production requests also returned zero candidates, so one retry is not
+  claimed to guarantee recovery in every execution region.
 - Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or

@@ -185,10 +185,11 @@ production binding 改成 remote development 設定。
    Browser Run；最後一項只代表同一個公開 Threads origin 的無 credential markup
    transport 失敗。login、access、bot、rate、redirect 或 policy failure 不得以渲染
    繞過。
-3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行一次匿名、
-   有界 Quick Action；不傳 Cookie、client headers 或 referrer。供應端最多等待五秒，
-   直到可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在既有六秒 action
-   limit 內，不增加十秒 browser budget。
+3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行匿名、有界
+   Quick Action；不傳 Cookie、client headers 或 referrer。供應端最多等待五秒，直到
+   可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在每次既有六秒 action
+   limit 內。第一次只有在 exact `RENDERED_MEDIA_NOT_FOUND` 且仍有 38 秒租約時，才能對
+   相同 canonical post 再做一次；第二次之後不再重試。
 4. 只接受 canonical 與 Open Graph identity 都吻合、且恰好一個允許 CDN 候選的結果；
    候選仍須通過既有 media probe、vault 與同源下載流程。
 
@@ -220,6 +221,16 @@ code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `vid
 `video[src]`。因此 renderer 改為等待實際 selector，而不是假設固定 hydration 時點；
 這份觀察不代表所有 Threads 貼文都會在相同時間出現影片，也不保證每個有效貼文都有
 可下載 media。
+
+同日 exact production resolver 的重複 remote-dev 診斷，在相同匿名公開貼文上觀察到
+第一次零候選、後續一次單一有效候選，也另觀察到 canonical／Open Graph identity 皆
+吻合但有三個不同候選的結果。工作流程因此只吸收第一次 exact
+`RENDERED_MEDIA_NOT_FOUND` 的瞬時波動；首試成功不重試，多候選、identity、provider、
+transport、格式或 policy failure 都不重試。重試前至少須剩餘 38 秒，涵蓋第二次最多
+12 秒 rendered resolver、8 秒 probe、兩次各 8 秒 vault 與 2 秒 margin，總流程不超過
+既有 60 秒 permit；失敗路徑最多消耗兩次 Browser Run 計費請求。兩次獨立的 fresh
+production request 都曾得到零候選，因此這個重試只降低瞬時失敗機率，不保證不同執行
+區域都能恢復。
 
 renderer timing 修正後，fresh production resolve 已到達 media probe，PII-free telemetry
 只記錄 exact code `MEDIA_PROBE_UNAVAILABLE`；同一公開候選的 direct remote proof 則成功
