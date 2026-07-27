@@ -29,9 +29,7 @@ function registerAgentTools(modelContext: Pick<ModelContext, 'registerTool'>): v
     .catch(() => {});
 }
 
-function isModelContext(
-  modelContext: unknown,
-): modelContext is Pick<ModelContext, 'registerTool'> {
+function isModelContext(modelContext: unknown): modelContext is Pick<ModelContext, 'registerTool'> {
   return (
     typeof modelContext === 'object' &&
     modelContext !== null &&
