@@ -287,6 +287,68 @@ describe('worker entry policy', () => {
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
 
+  it('serves machine-readable agent discovery files on dedicated endpoints', async () => {
+    const env = createEnv();
+    const robots = await fetchWorker('/robots.txt', env);
+    const sitemap = await fetchWorker('/sitemap.xml', env);
+    const apiCatalog = await fetchWorker('/.well-known/api-catalog', env);
+    const mcpServerCard = await fetchWorker('/.well-known/mcp.json', env);
+    const agentSkills = await fetchWorker('/.well-known/agent-skills/index.json', env);
+
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get('content-type')).toBe('text/plain');
+    expect(await robots.text()).toContain('Content-Signal: ai-train=yes');
+
+    expect(sitemap.status).toBe(200);
+    expect(sitemap.headers.get('content-type')).toBe('application/xml');
+    expect(await sitemap.text()).toContain('<urlset');
+
+    expect(apiCatalog.status).toBe(200);
+    expect(apiCatalog.headers.get('content-type')).toBe('application/json');
+    const apiCatalogJson = await apiCatalog.json();
+    expect(apiCatalogJson).toMatchObject({
+      linkset: [
+        {
+          'service-desc': [
+            {
+              href: 'https://threads.pylot.dev/.well-known/mcp.json',
+              type: 'application/json',
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(await mcpServerCard.json()).toMatchObject({
+      serverInfo: { name: 'Threads Downloader' },
+      transport: { type: 'streamable-http' },
+    });
+
+    expect(await agentSkills.json()).toMatchObject({
+      $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
+    });
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it('supports Markdown negotiation on the homepage and adds Link headers', async () => {
+    const env = createEnv(new Response('<!doctype html><title>Threads Downloader</title>'));
+    const response = await fetchWorker('/', env);
+    const markdownResponse = await worker.fetch(
+      new Request(`https://${expectedHost}/`, {
+        headers: { accept: 'text/markdown' },
+      }),
+      env,
+      {} as ExecutionContext,
+    );
+    const markdownBody = await markdownResponse.text();
+
+    expect(response.headers.get('link')).toContain('</.well-known/api-catalog>');
+    expect(markdownResponse.headers.get('content-type')).toBe('text/markdown');
+    expect(markdownBody).toContain('# Threads Downloader');
+    expect(markdownResponse.status).toBe(200);
+    expect(env.ASSETS.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('copies immutable-like asset headers without buffering or losing response metadata', async () => {
     const assetResponse = new Response('immutable asset', {
       headers: {

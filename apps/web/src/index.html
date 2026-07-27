@@ -14,5 +14,28 @@
   </head>
   <body>
     <app-root></app-root>
+    <script>
+      (function () {
+        if (!('modelContext' in navigator) || navigator.modelContext === null) {
+          return;
+        }
+
+        navigator.modelContext
+          .registerTool({
+            name: 'threads_health',
+            description: 'Get Threads Downloader service health status.',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              required: [],
+            },
+            execute: async () => {
+              const response = await fetch('/api/health');
+              return response.json();
+            },
+          })
+          .catch(() => {});
+      })();
+    </script>
   </body>
 </html>

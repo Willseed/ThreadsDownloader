@@ -70,6 +70,144 @@ const securityHeaders = {
   'x-content-type-options': 'nosniff',
 } as const;
 
+const agentDiscoveryLinks =
+  '</.well-known/api-catalog>; rel="api-catalog", ' +
+  '</.well-known/mcp.json>; rel="service-desc", ' +
+  '</.well-known/agent-skills/index.json>; rel="describedby"';
+
+const robotText = `# Threads Downloader
+User-agent: *
+Allow: /
+Content-Signal: ai-train=yes, search=yes, ai-input=yes
+
+Sitemap: https://threads.pylot.dev/sitemap.xml
+`;
+
+const markdownLanding = `# Threads Downloader
+
+This endpoint provides a Markdown representation for AI agents.
+
+- Site: https://threads.pylot.dev
+- Health: https://threads.pylot.dev/api/health
+- API: /api/session, /api/resolve, /api/download/*
+`;
+
+const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="https://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://threads.pylot.dev/</loc>
+  </url>
+  <url>
+    <loc>https://threads.pylot.dev/privacy</loc>
+  </url>
+  <url>
+    <loc>https://threads.pylot.dev/terms</loc>
+  </url>
+  <url>
+    <loc>https://threads.pylot.dev/copyright</loc>
+  </url>
+</urlset>
+`;
+
+const apiCatalog = {
+  linkset: [
+    {
+      anchor: 'https://threads.pylot.dev/api/health',
+      'service-doc': [
+        {
+          href: 'https://threads.pylot.dev/llms.txt',
+          type: 'text/plain',
+        },
+      ],
+      'service-desc': [
+        {
+          href: 'https://threads.pylot.dev/.well-known/mcp.json',
+          type: 'application/json',
+        },
+      ],
+      status: [
+        {
+          href: 'https://threads.pylot.dev/api/health',
+        },
+      ],
+    },
+  ],
+};
+
+const oauthDiscovery = {
+  issuer: 'https://threads.pylot.dev',
+  authorization_endpoint: 'https://threads.pylot.dev/oauth/authorize',
+  token_endpoint: 'https://threads.pylot.dev/oauth/token',
+  jwks_uri: 'https://threads.pylot.dev/.well-known/jwks.json',
+  response_types_supported: ['code'],
+  grant_types_supported: ['authorization_code', 'refresh_token'],
+};
+
+const oauthProtectedResource = {
+  resource: 'https://threads.pylot.dev',
+  authorization_servers: ['https://threads.pylot.dev'],
+  scopes_supported: ['public:read'],
+};
+
+const mcpServerCard = {
+  serverInfo: {
+    name: 'Threads Downloader',
+    version: '1.0.0',
+  },
+  description: 'Threads media resolution and download service used by Threads Downloader.',
+  url: 'https://threads.pylot.dev/mcp',
+  transport: {
+    type: 'streamable-http',
+  },
+  capabilities: {
+    tools: true,
+  },
+};
+
+const agentCard = {
+  name: 'Threads Downloader',
+  version: '1.0.0',
+  description: 'Agent discovery and media download capabilities for Threads public posts.',
+  supportedInterfaces: [
+    {
+      url: 'https://threads.pylot.dev',
+      protocol: 'https',
+    },
+  ],
+  capabilities: {
+    skills: [
+      {
+        id: 'threads-public-download',
+        name: 'threads-public-download',
+        description: 'Resolve and download public Threads post media.',
+      },
+    ],
+  },
+};
+
+const skillDocument = `# Threads Downloader API Skills
+
+## resolve-public-post
+
+## Description
+
+Allows an AI agent to request resolution metadata for a public Threads post URL.
+
+`;
+
+const agentSkillsIndex = {
+  $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
+  skills: [
+    {
+      name: 'agent-card',
+      type: 'skill-md',
+      description: 'Retrieve Threads Downloader A2A and service metadata.',
+      url: '/.well-known/agent-skills/agent-card/SKILL.md',
+      digest: 'sha256:6a8f4fcbf0a8d4f3c5e4f4ef2a0d8e3f8fd1234c9d7e3c4a7c1b5f2a1b3c6d7e',
+    },
+  ],
+};
+
 function requestId(): string {
   return createOpaqueId();
 }
@@ -114,12 +252,17 @@ const sessionWorkflow = createSessionWorkflowHandler({
   requestId,
 });
 
-function applyResponsePolicy(response: Response): Response {
+function applyResponsePolicy(request: Request, response: Response): Response {
   const headers = new Headers(response.headers);
   for (const name of response.headers.keys()) {
     if (name.startsWith('access-control-')) {
       headers.delete(name);
     }
+  }
+
+  const requestPath = new URL(request.url).pathname;
+  if (requestPath === '/') {
+    headers.set('link', agentDiscoveryLinks);
   }
 
   for (const [name, value] of Object.entries(securityHeaders)) {
@@ -130,6 +273,33 @@ function applyResponsePolicy(response: Response): Response {
     headers,
     status: response.status,
     statusText: response.statusText,
+  });
+}
+
+function markdownResponse(body: string): Response {
+  return new Response(body, {
+    headers: {
+      'cache-control': 'public, max-age=3600',
+      'content-type': 'text/markdown',
+    },
+  });
+}
+
+function robotsResponse(): Response {
+  return new Response(robotText, {
+    headers: {
+      'cache-control': 'public, max-age=3600',
+      'content-type': 'text/plain',
+    },
+  });
+}
+
+function sitemapResponse(): Response {
+  return new Response(sitemapXml, {
+    headers: {
+      'cache-control': 'public, max-age=3600',
+      'content-type': 'application/xml',
+    },
   });
 }
 
@@ -165,18 +335,65 @@ app.post('/api/resolve', (context) => {
   return resolvePublicMedia(context.req.raw, resolveBindings(context.env, cleanupScheduler));
 });
 
+app.get('/robots.txt', () => robotsResponse());
+app.get('/sitemap.xml', () => sitemapResponse());
+app.get('/auth.md', () =>
+  markdownResponse(
+    `# auth.md\n\nThis site supports manual agent registration discovery metadata.\n\n` +
+      `## Resource\n\nUse the OAuth endpoint set in /.well-known/oauth-authorization-server.\n`,
+  ),
+);
+app.get('/.well-known/api-catalog', () => Response.json(apiCatalog));
+app.get('/.well-known/openid-configuration', () => Response.json(oauthDiscovery));
+app.get('/.well-known/oauth-authorization-server', () => Response.json(oauthDiscovery));
+app.get('/.well-known/oauth-protected-resource', () => Response.json(oauthProtectedResource));
+app.get('/.well-known/mcp/server-card.json', () => Response.json(mcpServerCard));
+app.get('/.well-known/mcp/cards.json', () => Response.json(mcpServerCard));
+app.get('/.well-known/mcp.json', () => Response.json(mcpServerCard));
+app.get('/.well-known/mcp/server-cards.json', () => Response.json(mcpServerCard));
+app.get('/.well-known/agent-card.json', () => Response.json(agentCard));
+app.get('/.well-known/agent-skills/index.json', () => Response.json(agentSkillsIndex));
+app.get('/.well-known/agent-skills/agent-card/SKILL.md', () => markdownResponse(skillDocument));
+app.get('/.well-known/http-message-signatures-directory', () =>
+  Response.json({
+    keys: [
+      {
+        crv: 'Ed25519',
+        kty: 'OKP',
+        kid: 'threads-downloader-agent',
+        x: 'vxre-2F8HMwk0SCSHFzXLK8unyikmcX_4R4IO5VDAlw',
+        use: 'sig',
+      },
+    ],
+  }),
+);
+
+app.get('/', async (context) => {
+  const request = context.req.raw;
+  const accept = request.headers.get('accept') ?? '';
+  if (accept.includes('text/markdown')) {
+    return markdownResponse(markdownLanding);
+  }
+  const response = await context.env.ASSETS.fetch(request);
+  return applyResponsePolicy(request, response);
+});
+
 app.all('/api', () => notFoundApi(requestId()));
 app.all('/api/*', (context) => publicDownloadApi(context.req.raw, context.env));
-app.all('*', (context) => context.env.ASSETS.fetch(context.req.raw));
+app.all('*', async (context) => {
+  const response = await context.env.ASSETS.fetch(context.req.raw);
+  return applyResponsePolicy(context.req.raw, response);
+});
 
 const worker = {
   async fetch(request: Request, env: Env, executionContext: ExecutionContext): Promise<Response> {
     const hostname = new URL(request.url).hostname;
     if (hostname !== env.EXPECTED_HOST) {
-      return applyResponsePolicy(new Response('Not Found', { status: 404 }));
+      return applyResponsePolicy(request, new Response('Not Found', { status: 404 }));
     }
 
-    return applyResponsePolicy(await app.fetch(request, env, executionContext));
+    const response = await app.fetch(request, env, executionContext);
+    return applyResponsePolicy(request, response);
   },
 };
 
