@@ -221,6 +221,17 @@ code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `vid
 這份觀察不代表所有 Threads 貼文都會在相同時間出現影片，也不保證每個有效貼文都有
 可下載 media。
 
+renderer timing 修正後，fresh production resolve 已到達 media probe，PII-free telemetry
+只記錄 exact code `MEDIA_PROBE_UNAVAILABLE`；同一公開候選的 direct remote proof 則成功
+完成 HEAD。這只支持「Worker fetch transport 曾短暫失敗」，不證明 CDN 長期行為。初始
+HEAD 只有在拋出該 typed unavailable error 時，才會對原始已重新驗證候選補一次
+`Range: bytes=0-0` GET；沿用同一個八秒 AbortSignal、零起始 redirect count、manual
+redirect、CDN allowlist、identity encoding 與既有 response metadata 驗證。HEAD abort、
+policy、status 或 metadata failure 不得補 GET；HEAD 若已耗盡 deadline，已 aborted 的
+signal 會讓補 GET 立即安全失敗，不建立新 timeout 或 retry loop。一般無 redirect 路徑
+每個候選最多兩個外部 subrequests；既有 redirect 上限與 DESIGN 的最壞五個 subrequests
+預算不變。
+
 ## API 與下載契約
 
 主要端點為 `/api/health`、`/api/session`、`/api/resolve`、

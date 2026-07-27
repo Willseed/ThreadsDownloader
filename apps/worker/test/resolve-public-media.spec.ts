@@ -699,11 +699,12 @@ describe('resolve public media workflow', () => {
 
   it('keeps successful probes in source order while skipping typed candidate failures', async () => {
     const harness = createHarness({
-      probeResponse: async (_request, index) => {
-        if (index === 1) {
+      probeResponse: async (request) => {
+        const pathname = new URL(request.url).pathname;
+        if (pathname === '/media-1.mp4') {
           return new Response(null, { status: 404 });
         }
-        if (index === 2) {
+        if (pathname === '/media-2.mp4') {
           throw new Error('private transient probe failure');
         }
         return videoResponse(77);

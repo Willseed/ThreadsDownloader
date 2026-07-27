@@ -295,6 +295,17 @@ not establish any undocumented upstream Threads API semantics.
   extra labels, non-default ports, credentials, fragments, or lookalikes.
   Rendered candidates still pass the existing HEAD/range media probe, encrypted
   vault, same-origin download delivery, and per-hop download redirect checks.
+- Media probe transport evidence: after the rendered-video timing fix, a fresh
+  production resolve reached the probe and returned the typed
+  `MEDIA_PROBE_UNAVAILABLE` code, while a direct remote proof against the same
+  public candidate completed HEAD successfully. No sensitive request or media
+  identifier was retained. This establishes only a transient Worker fetch
+  transport failure, not a CDN contract. The probe therefore makes one bounded
+  `Range: bytes=0-0` attempt against the original revalidated candidate only
+  when the initial HEAD throws that exact typed unavailable error. It reuses the
+  same eight-second AbortSignal and existing request, redirect, CDN, identity
+  encoding, status, and metadata policies; abort, policy, status, and metadata
+  failures do not trigger another path.
 - Lease decision: session and IP resolve permits are both 60 seconds. Deadline
   gates require at least 38 seconds before rendering, 26 seconds before probing,
   and 18 seconds before vault storage. These budgets cover the ten-second

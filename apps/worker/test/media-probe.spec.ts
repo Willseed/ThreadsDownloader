@@ -347,6 +347,48 @@ describe('MediaProbe HEAD', () => {
 });
 
 describe('MediaProbe range fallback', () => {
+  it('uses the original candidate for one Range GET after a HEAD transport failure', async () => {
+    const networkSecret = 'private HEAD transport failure';
+    const partial = cancellableResponse(
+      206,
+      partialVideoHeaders({ 'content-encoding': 'identity' }),
+    );
+    const requests: Request[] = [];
+    const fetcher = vi.fn(async (request: Request) => {
+      requests.push(request);
+      if (requests.length === 1) {
+        throw new Error(networkSecret);
+      }
+      return partial.response;
+    });
+    const timeoutCalls: number[] = [];
+    const controller = new AbortController();
+
+    await expect(
+      subject(fetcher, controller, timeoutCalls).probe(candidate),
+    ).resolves.toMatchObject({
+      contentLength: 42,
+      rangeCapability: 'bytes',
+      completionReliable: true,
+      probeMethod: 'range-get',
+    });
+
+    expect(requests.map((request) => [request.method, request.url])).toEqual([
+      ['HEAD', PRIVATE_CANDIDATE],
+      ['GET', PRIVATE_CANDIDATE],
+    ]);
+    expect([...requests[1]!.headers.entries()]).toEqual([
+      ['accept', '*/*'],
+      ['accept-encoding', 'identity'],
+      ['range', 'bytes=0-0'],
+      ['user-agent', 'threads-downloader/0.1'],
+    ]);
+    expect(timeoutCalls).toEqual([8_000]);
+    controller.abort();
+    expect(requests.every((request) => request.signal.aborted)).toBe(true);
+    expectCancelledWithoutRead(partial);
+  });
+
   it.each([405, 501])('falls back only from HEAD %i to an exact one-byte GET', async (status) => {
     const unsupportedHead = cancellableResponse(status, {
       'content-encoding': 'gzip',
@@ -411,17 +453,7 @@ describe('MediaProbe range fallback', () => {
     expectCancelledWithoutRead(terminal);
   });
 
-  it('does not fallback after network, abort, or timeout-factory failures', async () => {
-    const networkSecret = 'private network failure';
-    const networkFetch = vi.fn(async () => {
-      throw new Error(networkSecret);
-    });
-    await expectProbeError(subject(networkFetch).probe(candidate), 'MEDIA_PROBE_UNAVAILABLE', [
-      networkSecret,
-      PRIVATE_CANDIDATE,
-    ]);
-    expect(networkFetch).toHaveBeenCalledTimes(1);
-
+  it('does not fallback after abort or timeout-factory failures', async () => {
     const abortSecret = 'private abort reason';
     const abortFetch = vi.fn(async () => {
       throw new DOMException(abortSecret, 'AbortError');
@@ -451,6 +483,30 @@ describe('MediaProbe range fallback', () => {
       'private timer failure',
     ]);
     expect(timeoutFetch).not.toHaveBeenCalled();
+  });
+
+  it('maps transport and terminal status failures from the transport fallback', async () => {
+    const rangeSecret = 'private Range transport failure';
+    const transportFetch = vi
+      .fn<MediaProbeFetch>()
+      .mockRejectedValueOnce(new Error('private HEAD transport failure'))
+      .mockRejectedValueOnce(new Error(rangeSecret));
+    await expectProbeError(subject(transportFetch).probe(candidate), 'MEDIA_PROBE_UNAVAILABLE', [
+      rangeSecret,
+      PRIVATE_CANDIDATE,
+    ]);
+    expect(transportFetch).toHaveBeenCalledTimes(2);
+
+    const invalid = cancellableResponse(500, { 'content-type': 'text/html' });
+    const invalidFetch = vi
+      .fn<MediaProbeFetch>()
+      .mockRejectedValueOnce(new Error('private HEAD transport failure'))
+      .mockResolvedValueOnce(invalid.response);
+    await expectProbeError(subject(invalidFetch).probe(candidate), 'MEDIA_PROBE_STATUS_INVALID', [
+      PRIVATE_CANDIDATE,
+    ]);
+    expect(invalidFetch).toHaveBeenCalledTimes(2);
+    expectCancelledWithoutRead(invalid);
   });
 
   it.each([

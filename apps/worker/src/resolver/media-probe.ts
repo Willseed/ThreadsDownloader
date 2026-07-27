@@ -452,20 +452,30 @@ export function createMediaProbe(dependencies: MediaProbeDependencies): MediaPro
     async probe(candidate: CdnUrl): Promise<ProbedMedia> {
       const initialUrl = revalidateCandidate(candidate);
       const signal = createSignal(timeoutSignal);
-      const head = await fetchTerminalResponse(dependencies.fetch, initialUrl, 0, 'HEAD', signal);
-      let fallbackUrl: CdnUrl;
-      let redirectCount: number;
+      let fallbackUrl = initialUrl;
+      let redirectCount = 0;
+      let head: TerminalResponse | undefined;
       try {
-        if (head.response.status === 200) {
-          return inspectSuccessfulResponse(head, 'head');
+        head = await fetchTerminalResponse(dependencies.fetch, initialUrl, 0, 'HEAD', signal);
+      } catch (error: unknown) {
+        if (!(error instanceof MediaProbeError) || error.code !== 'MEDIA_PROBE_UNAVAILABLE') {
+          throw error;
         }
-        if (head.response.status !== 405 && head.response.status !== 501) {
-          return fail('MEDIA_PROBE_STATUS_INVALID');
+      }
+
+      if (head !== undefined) {
+        try {
+          if (head.response.status === 200) {
+            return inspectSuccessfulResponse(head, 'head');
+          }
+          if (head.response.status !== 405 && head.response.status !== 501) {
+            return fail('MEDIA_PROBE_STATUS_INVALID');
+          }
+          fallbackUrl = head.finalUrl;
+          redirectCount = head.redirectCount;
+        } finally {
+          cancelBody(head.response);
         }
-        fallbackUrl = head.finalUrl;
-        redirectCount = head.redirectCount;
-      } finally {
-        cancelBody(head.response);
       }
 
       const rangeGet = await fetchTerminalResponse(
