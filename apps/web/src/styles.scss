@@ -838,6 +838,16 @@ h3 {
 }
 
 @media (max-width: 22rem) {
+  .site-header {
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-2);
+  }
+
+  .site-nav {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
   .downloader-page,
   .workbench form {
     padding-inline: 0.25rem;

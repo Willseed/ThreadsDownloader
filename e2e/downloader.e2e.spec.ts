@@ -11,6 +11,7 @@ import {
 } from './fixtures/downloader-mock.js';
 
 const MAX_PRIMARY_SUCCESS_ACTIONS = 10;
+const LOCALIZED_RESOLVE_UNAVAILABLE = '暫時無法解析此貼文，請稍後再試。';
 const PRIMARY_SUCCESS_ACTIONS = [
   'fill-post-url',
   'confirm-content-rights',
@@ -134,9 +135,10 @@ test('exposes a safe API error through an alert without duplicate busy submissio
     .locator('button.primary-action')
     .evaluate((element) => (element as HTMLButtonElement).click());
 
-  const error = page.getByRole('alert').filter({ hasText: SAFE_API_ERROR_MESSAGE });
+  const error = page.getByRole('alert').filter({ hasText: LOCALIZED_RESOLVE_UNAVAILABLE });
   await expect(error).toBeVisible();
   await expect(error).toContainText(`參考編號：${SAFE_REQUEST_ID}`);
+  await expect(error).not.toContainText(SAFE_API_ERROR_MESSAGE);
   await expect(page.getByText('無法取得影片，請查看下方訊息。')).toHaveCount(0);
   expect(mockApi.calls.resolve).toBe(1);
 });

@@ -44,6 +44,7 @@ test('offers visible keyboard focus in a logical entry sequence', async ({ page 
     skipLink,
     wordmark,
     page.getByRole('link', { name: '開始下載', exact: true }),
+    page.getByRole('combobox', { name: '選擇語言' }),
     input,
   ];
 
