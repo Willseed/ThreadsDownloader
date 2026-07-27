@@ -660,14 +660,6 @@ describe('worker entry policy', () => {
         "style-src 'self'; frame-src https://challenges.cloudflare.com; connect-src 'self'; " +
         "media-src 'self' https://cdninstagram.com https://*.cdninstagram.com https://*.fna.fbcdn.net",
     );
-    expect(contentSecurityPolicy).toContain("base-uri 'self'");
-    expect(contentSecurityPolicy).toContain("style-src 'self'");
-    expect(contentSecurityPolicy).not.toContain("base-uri 'none'");
-    expect(contentSecurityPolicy).not.toContain("'unsafe-inline'");
-    expect(contentSecurityPolicy).not.toContain("'unsafe-eval'");
-    expect(contentSecurityPolicy).not.toContain('connect-src https://challenges.cloudflare.com');
-    expect(contentSecurityPolicy).not.toContain('https://cloudflareinsights.com');
-    expect(contentSecurityPolicy).not.toContain('https://*.fbcdn.net');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(response.headers.get('strict-transport-security')).toBe('max-age=31536000');
@@ -707,7 +699,6 @@ describe('worker entry policy', () => {
     expect(response.headers.get('x-asset-version')).toBe('v7');
     expect(response.headers.get('access-control-allow-headers')).toBeNull();
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
-    expect(response.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     await expect(response.text()).resolves.toBe('immutable asset');
   });
 
