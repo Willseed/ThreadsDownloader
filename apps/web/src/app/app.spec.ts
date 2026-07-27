@@ -93,6 +93,7 @@ describe('AppComponent routing', () => {
       ['zh-TW', '繁體中文'],
       ['zh-CN', '简体中文'],
       ['en', 'English'],
+      ['es', 'Español'],
     ]);
 
     select!.value = 'zh-CN';
@@ -118,6 +119,21 @@ describe('AppComponent routing', () => {
       'Download public Threads videos',
     );
     expect(select?.getAttribute('aria-label')).toBe('Select language');
+
+    select!.value = 'es';
+    select!.dispatchEvent(new Event('change'));
+    TestBed.flushEffects();
+    fixture.detectChanges();
+
+    expect(document.documentElement.lang).toBe('es');
+    expect(document.title).toBe(
+      'Threads Downloader — Herramienta de investigación de contenido multimedia público',
+    );
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('Iniciar descarga');
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe(
+      'Descargar videos públicos de Threads',
+    );
+    expect(select?.getAttribute('aria-label')).toBe('Seleccionar idioma');
   });
 
   it.each([

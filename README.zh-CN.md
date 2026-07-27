@@ -1,6 +1,6 @@
 # Threads Downloader
 
-[English](README.md) | [繁體中文](README.zh-TW.md) | **简体中文**
+[English](README.md) | [繁體中文](README.zh-TW.md) | **简体中文** | [Español](README.es.md)
 
 [立即打开 Threads Downloader 正式服务](https://threads.pylot.dev/)
 

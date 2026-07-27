@@ -79,3 +79,33 @@
 - 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否以 `Intl.NumberFormat('en')` 處理數字分隔與小數。
 - 隱私頁的資料流、Cloudflare 接收者與保存期限沿用目前程式碼及既有已測法務契約；本輪只審閱英文表述，未重新驗證 production 設定。
 - SpaceX 沿用既有非隸屬名單；本輪未重新研究列名原因，也未改變既定法務範圍。
+
+## es 細項查核（2026-07-27）
+
+### 證據與範圍
+
+- 本輪只研究 `es` 的中性／國際西班牙文 UI、ARIA、API 錯誤、metadata、法務、隱私、著作權、技術詞與 README；沒有重複研究 runtime signal service、typed catalog、fallback 或 route metadata 架構。
+- 依使用者指定，以 `ask-bridge 0.2.9 --provider chatgpt --model medium --timeout 1500 --headless=true` 查核。第一次附加四個對照檔時，送出按鈕未啟用，未取得回覆且不視為完成；依 skill 保留失敗後，縮減為 `es.ts` 與 `README.es.md` 單次重試成功。有效回覆是外部 AI 的語言候選，不是官方規範、法律意見、伺服器契約或測試證據。
+- 本輪沒有使用 Web Search；語言自然度由 ask-bridge 輔助審閱，catalog 完整性、API code 封閉映射、DOM metadata 與 route 行為由本機型別及測試驗證。
+
+### 結論
+
+1. locale 使用 `es`、`ltr` 與原生名稱 `Español`；為兼顧國際可讀性，全文一致使用 `video`，主要 UI 固定使用 `versión de video`、`verificación de seguridad`、`sesión segura`、`publicación pública` 與 `trabajo de descarga`。
+2. metadata 使用 `resuelve`，避免把解析版本誤寫成保證取得或下載；`same-origin` 依情境固定表達為 `del mismo origen`、`desde el mismo origen` 與 `solicitudes del mismo origen`。
+3. ask-bridge 找到隱私草稿的否定範圍反轉；最終使用「本服務不聲稱資料不由第三方處理」，保留 Cloudflare 與其他接收者的既有界線。
+4. 技術詞保留 `hash`、`hash con clave`、`intervalos de bytes` 與解析層 `candidatos`，不改寫成加密或匿名化；sealed URL 描述為「以密封形式保存」，lease 描述為有期限的執行／傳輸權，不誤作一般租賃。
+5. 著作權流程以 `puerto seguro («safe harbor»)` 保留概念名稱，同時明確否認任何特定法域制度已適用；其他法務文案保留公開可見不等於授權、研究或非商業目的不當然合法、不繞過限制、非官方隸屬，以及不宣稱全加密、完全無紀錄或立即物理刪除。
+6. 四份 README 使用一致的 `English | 繁體中文 | 简体中文 | Español` 導覽並將當前語言加粗；`README.es.md` 完整保留免登入範圍、受限內容排除、不繞過限制、權利要求、無法保證每則貼文，以及不得在公開 issue 發布私人內容或帳號資訊等 canonical 限制。
+
+### 適用範圍
+
+- 上述用詞適用於目前 Angular SPA 的使用者介面、輔助科技標籤、錯誤提示、法務頁與獨立西文 README；不代表特定國家或地區的法律意見。
+- API error 的持續時間與恢復建議沿用現有 worker 契約；本輪只在該證據範圍內翻譯，未重新研究 Threads、Cloudflare 或 production 設定。
+
+### 尚未確認
+
+- locale 仍未進入 URL，且 SSR/prerender、`hreflang` 與 crawler 可讀的每語言 metadata 仍未確認；metadata 長度也未在搜尋結果預覽中測試。
+- `lease` 的使用者層級譯法採 `concesión temporal`；若未來向維護者暴露精確狀態機欄位，是否同時保留英文 `lease` 尚未確認。
+- sealed authorization 與 sealed source URL 沿用既有技術界線；本輪未重新研究其密碼學實作，也不將其擴張為所有資料均已加密。
+- `LEGAL / A SOLICITUD` 沿用目前 eyebrow 的按需開啟角色；尚未透過實際畫面使用性測試比較更長的 `DISPONIBLE AL ABRIR`。
+- 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否使用 `Intl.NumberFormat('es')`。
