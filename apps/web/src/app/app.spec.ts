@@ -95,6 +95,7 @@ describe('AppComponent routing', () => {
       ['en', 'English'],
       ['es', 'Español'],
       ['ko', '한국어'],
+      ['ja', '日本語'],
     ]);
 
     select!.value = 'zh-CN';
@@ -148,6 +149,19 @@ describe('AppComponent routing', () => {
       '공개 Threads 동영상 다운로드',
     );
     expect(select?.getAttribute('aria-label')).toBe('언어 선택');
+
+    select!.value = 'ja';
+    select!.dispatchEvent(new Event('change'));
+    TestBed.flushEffects();
+    fixture.detectChanges();
+
+    expect(document.documentElement.lang).toBe('ja');
+    expect(document.title).toBe('Threads Downloader — 公開コンテンツ研究ツール');
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('ダウンロードを開始');
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe(
+      '公開Threads動画をダウンロード',
+    );
+    expect(select?.getAttribute('aria-label')).toBe('言語を選択');
   });
 
   it.each([

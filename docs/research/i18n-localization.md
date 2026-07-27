@@ -139,3 +139,34 @@
 - `법률 정보` 簡化了原 eyebrow 的按需開啟角色；尚未透過實際畫面使用性測試比較是否應保留品牌式 `LEGAL / ON DEMAND`。
 - Cookie 屬性、保存期限、Cloudflare 接收者與 SpaceX 非隸屬名單沿用現有已測契約；本輪只審閱韓文表述，未重新驗證 production 設定或列名原因。
 - 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否使用 `Intl.NumberFormat('ko')`。
+
+## ja 細項查核（2026-07-27）
+
+### 證據與範圍
+
+- 本輪只研究 `ja` 的自然日文軟體 UI、簡潔標籤與です／ます調、ARIA、API 錯誤、metadata、route title、法務、隱私、著作權、外來語、技術詞與 README；沒有重複研究 runtime i18n 架構、語言偵測或 IP。
+- 依使用者指定，以 `ask-bridge 0.2.9 --provider chatgpt --model medium --timeout 1500 --headless=true --new` 附上 `ja.ts` 與 `README.ja.md` 查核。第一次即取得只審閱日文附件的有效回覆，沒有交叉污染，因此沒有重試。
+- ask-bridge 回覆只是外部 AI 的語言審閱候選，不是官方日文規範、法律意見、API 契約或測試證據；最終採用項目已對照英文 catalog、typed catalog 與可重現的本機契約篩選。
+- 本輪沒有使用 Web Search；附件中的日文自然度可由 ask-bridge 輔助審閱，完整性、API code 封閉映射、DOM metadata 與 route 行為由本機型別及測試驗證。
+
+### 結論
+
+1. locale 使用 `ja`、`ltr` 與原生名稱「日本語」；按鈕、見出し與 ARIA 採短句，說明、錯誤與法務內文使用一致的です／ます調。
+2. 主要 UI 固定使用「動画のバージョン」「セキュリティ確認」「セッション」「公開Threads投稿」與「ダウンロードジョブ」。「同一オリジン」用於 same-origin，不把 secure 擴張成安全保證。
+3. ARIA 使用助詞完整的「Threads Downloaderのホーム」，候選動作標籤改為動作優先的語序；HTTP range error 明示「バイト範囲」，API error code 維持封閉本地映射。
+4. 技術用語保留 `Cookie`、`CSRF`、`Turnstile`、ハッシュ、不透明な識別子、封印された形式、リース與バイト範囲的差異；鍵付きハッシュ不誤譯為公開鍵密碼的秘密鍵。
+5. 法務日文保留公開可見不等於授權、研究或非商業目的不當然合法、不繞過限制、非官方隸屬，也不宣稱全加密、完全無紀錄、立即物理刪除或特定法域程序。權利確認以「予定する利用」避免只縮減為保存。
+6. 六份 README 使用對稱的 `English | 繁體中文 | 简体中文 | Español | 한국어 | 日本語` 導覽並將當前語言加粗；`README.ja.md` 完整保留免登入範圍、受限內容排除、不繞過限制、權利要求、無法保證每則投稿，以及不得在公開 Issue 發布私密內容或帳號資料等限制。
+
+### 適用範圍
+
+- 上述用詞適用於目前 Angular SPA 的日文 UI、輔助科技標籤、錯誤提示、法務頁與獨立 README，不代表日本或其他法域的法律意見。
+- API error 的持續時間、恢復建議與下載行為沿用現有 worker 與英文 catalog 契約；本輪只在該證據範圍內翻譯。
+
+### 尚未確認
+
+- locale 仍未進入 URL，且 SSR/prerender、`hreflang`、crawler 可讀的每語言 metadata 與日文搜尋結果截斷效果仍未確認。
+- `lease` 在實作中可能分別表示執行權、串流所有權或其他狀態；若未來對技術讀者暴露精確欄位，「実行リース」的最終日文需依狀態機重審。
+- 「法的情報」簡化了原 eyebrow 的按需開啟角色；尚未透過實際畫面使用性測試比較是否應保留 `LEGAL / ON DEMAND` 的品牌感。
+- Cookie 屬性、保存期限、Cloudflare 接收者、production 隱私設定與 SpaceX 非隸屬名單沿用現有已測契約；本輪未重新驗證 production 設定或列名原因。
+- 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否使用 `Intl.NumberFormat('ja')`。

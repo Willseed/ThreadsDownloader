@@ -46,12 +46,12 @@ describe('I18nService', () => {
   it('switches metadata at runtime and falls back safely', () => {
     const service = TestBed.inject(I18nService);
 
-    expect(service.setLocale('ko')).toBe('ko');
+    expect(service.setLocale('ja')).toBe('ja');
     TestBed.flushEffects();
-    expect(document.documentElement.lang).toBe('ko');
-    expect(document.title).toBe(MESSAGE_CATALOGS.ko.routes.home);
+    expect(document.documentElement.lang).toBe('ja');
+    expect(document.title).toBe(MESSAGE_CATALOGS.ja.routes.home);
     expect(document.querySelector('meta[name="description"]')?.getAttribute('content')).toBe(
-      MESSAGE_CATALOGS.ko.metadata.description,
+      MESSAGE_CATALOGS.ja.metadata.description,
     );
 
     expect(service.setLocale('unsupported')).toBe(DEFAULT_LOCALE);
@@ -82,7 +82,7 @@ describe('I18nService', () => {
     const service = TestBed.inject(I18nService);
     const strategy = TestBed.inject(LocalizedTitleStrategy);
 
-    service.setLocale('ko');
+    service.setLocale('ja');
 
     strategy.updateTitle({
       root: {
@@ -91,6 +91,6 @@ describe('I18nService', () => {
     } as unknown as RouterStateSnapshot);
     TestBed.flushEffects();
 
-    expect(document.title).toBe(MESSAGE_CATALOGS.ko.routes.privacy);
+    expect(document.title).toBe(MESSAGE_CATALOGS.ja.routes.privacy);
   });
 });
