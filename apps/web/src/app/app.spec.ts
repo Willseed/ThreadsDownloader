@@ -98,7 +98,7 @@ describe('AppComponent routing', () => {
     expect(root.querySelectorAll('#main-content')).toHaveLength(1);
     expect(main?.getAttribute('aria-labelledby')).toBe('page-title');
     expect(main?.querySelector('#page-title')?.textContent?.trim()).toBe(heading);
-    expect(headerLinks).toEqual(['/', '/terms', '/privacy', '/copyright']);
+    expect(headerLinks).toEqual(['/#download-workflow']);
     expect(footerLinks).toEqual(['/terms', '/privacy', '/copyright']);
   });
 
@@ -110,7 +110,7 @@ describe('AppComponent routing', () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    const trigger = root.querySelector<HTMLAnchorElement>('.site-nav a[href="/privacy"]');
+    const trigger = root.querySelector<HTMLAnchorElement>('.site-footer a[href="/privacy"]');
     expect(root.textContent).not.toContain('__Host-td_session');
     expect(root.querySelector('.legal-modal[open]')).toBeNull();
 

@@ -30,12 +30,12 @@ async function performPrimarySuccessAction(
 }
 
 async function waitForVerifiedChallenge(page: Page): Promise<void> {
-  await expect(page.getByText('安全驗證已通過，可提交解析。')).toBeVisible();
+  await expect(page.getByText('安全驗證已就緒。')).toBeVisible();
 }
 
 async function completeResolveForm(page: Page): Promise<void> {
-  await page.getByRole('textbox', { name: 'Threads 公開貼文網址' }).fill(THREADS_POST_URL);
-  await page.getByRole('checkbox', { name: /我確認我擁有內容/u }).check();
+  await page.getByRole('textbox', { name: 'Threads 貼文網址' }).fill(THREADS_POST_URL);
+  await page.getByRole('checkbox', { name: /我確認我有權下載/u }).check();
 }
 
 test('hands a resolved candidate to the browser without claiming download completion', async ({
@@ -46,10 +46,10 @@ test('hands a resolved candidate to the browser without claiming download comple
   await page.goto('/');
 
   await performPrimarySuccessAction(completedActions, 'fill-post-url', () =>
-    page.getByRole('textbox', { name: 'Threads 公開貼文網址' }).fill(THREADS_POST_URL),
+    page.getByRole('textbox', { name: 'Threads 貼文網址' }).fill(THREADS_POST_URL),
   );
   await performPrimarySuccessAction(completedActions, 'confirm-content-rights', () =>
-    page.getByRole('checkbox', { name: /我確認我擁有內容/u }).check(),
+    page.getByRole('checkbox', { name: /我確認我有權下載/u }).check(),
   );
   // The fake completes automatically, but the external challenge remains one semantic user action.
   await performPrimarySuccessAction(completedActions, 'complete-turnstile', () =>
@@ -57,7 +57,7 @@ test('hands a resolved candidate to the browser without claiming download comple
   );
 
   await performPrimarySuccessAction(completedActions, 'submit-resolution', () =>
-    page.getByRole('button', { name: '解析影片候選' }).click(),
+    page.getByRole('button', { name: '取得影片' }).click(),
   );
   await expect(page.getByRole('heading', { name: 'research-video-01.mp4' })).toBeVisible();
   expect(mockApi.calls.session).toBe(1);
@@ -65,7 +65,7 @@ test('hands a resolved candidate to the browser without claiming download comple
 
   const downloadEvent = page.waitForEvent('download');
   await performPrimarySuccessAction(completedActions, 'handoff-candidate-download', () =>
-    page.getByRole('button', { name: '交給瀏覽器下載' }).click(),
+    page.getByRole('button', { name: /^下載影片/u }).click(),
   );
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe('research-video-01.mp4');
@@ -93,8 +93,8 @@ test('rejects invalid URL and missing rights before resolve is requested', async
   await page.goto('/');
   await waitForVerifiedChallenge(page);
 
-  const input = page.getByRole('textbox', { name: 'Threads 公開貼文網址' });
-  const submit = page.getByRole('button', { name: '解析影片候選' });
+  const input = page.getByRole('textbox', { name: 'Threads 貼文網址' });
+  const submit = page.getByRole('button', { name: '取得影片' });
   await input.fill('not-a-url');
   await submit.click();
   await expect(
@@ -120,9 +120,9 @@ test('exposes a safe API error through an alert without duplicate busy submissio
   await waitForVerifiedChallenge(page);
   await completeResolveForm(page);
 
-  const submit = page.getByRole('button', { name: '解析影片候選' });
+  const submit = page.getByRole('button', { name: '取得影片' });
   await submit.click();
-  await expect(page.getByRole('button', { name: '正在解析' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '正在取得影片……' })).toBeDisabled();
   await page
     .locator('button.primary-action')
     .evaluate((element) => (element as HTMLButtonElement).click());
@@ -130,7 +130,7 @@ test('exposes a safe API error through an alert without duplicate busy submissio
   const error = page.getByRole('alert').filter({ hasText: SAFE_API_ERROR_MESSAGE });
   await expect(error).toBeVisible();
   await expect(error).toContainText(`參考編號：${SAFE_REQUEST_ID}`);
-  await expect(page.getByText('操作未完成，請依錯誤訊息處理。')).toBeVisible();
+  await expect(page.getByText('無法取得影片，請查看下方訊息。')).toBeVisible();
   expect(mockApi.calls.resolve).toBe(1);
 });
 
@@ -141,7 +141,7 @@ test('keeps legal documents optional while preserving direct shareable routes', 
   await page.goto('/');
   await waitForVerifiedChallenge(page);
 
-  const termsTrigger = page.locator('.site-nav').getByRole('link', { name: '條款', exact: true });
+  const termsTrigger = page.getByRole('link', { name: '查看內容使用責任', exact: true });
   await expect(page.locator('.service-boundary')).toHaveCount(0);
   await expect(page.getByText('法務與資料處理全文採需要時載入')).toHaveCount(0);
   await expect(page.getByText('本服務不授予任何第三方內容權利')).toHaveCount(0);

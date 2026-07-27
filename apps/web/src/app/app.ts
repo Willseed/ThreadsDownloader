@@ -14,20 +14,16 @@ import {
     <a class="skip-link" href="#main-content">跳到主要內容</a>
     <header class="site-header" aria-label="網站標頭">
       <a class="wordmark" routerLink="/" aria-label="Threads Downloader 首頁">
-        <span aria-hidden="true">TD / 01</span>
         <span>Threads Downloader</span>
       </a>
       <nav class="site-nav" aria-label="主要導覽">
-        <a routerLink="/">下載工具</a>
-        <a href="/terms" legalModalTrigger="terms">條款</a>
-        <a href="/privacy" legalModalTrigger="privacy">隱私</a>
-        <a href="/copyright" legalModalTrigger="copyright">著作權</a>
+        <a routerLink="/" fragment="download-workflow">使用說明</a>
       </nav>
     </header>
     <router-outlet />
     <app-legal-modal-outlet />
     <footer class="site-footer">
-      <p>Public media research utility</p>
+      <p>僅支援免登入的公開 Threads 貼文</p>
       <nav aria-label="法務資訊">
         <a href="/terms" legalModalTrigger="terms">使用條款</a>
         <a href="/privacy" legalModalTrigger="privacy">隱私與資料處理</a>

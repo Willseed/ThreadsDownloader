@@ -5,7 +5,7 @@ import { expect, test } from './fixtures/downloader-mock.js';
 
 async function waitForReadyPage(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.getByText('安全驗證已通過，可提交解析。')).toBeVisible();
+  await expect(page.getByText('安全驗證已就緒。')).toBeVisible();
 }
 
 function cssTimeToMilliseconds(value: string): number {
@@ -35,14 +35,11 @@ test('offers visible keyboard focus in a logical entry sequence', async ({ page 
 
   const skipLink = page.getByRole('link', { name: '跳到主要內容' });
   const wordmark = page.getByRole('link', { name: 'Threads Downloader 首頁' });
-  const input = page.getByRole('textbox', { name: 'Threads 公開貼文網址' });
+  const input = page.getByRole('textbox', { name: 'Threads 貼文網址' });
   const tabOrder = [
     skipLink,
     wordmark,
-    page.getByRole('link', { name: '下載工具', exact: true }),
-    page.getByRole('link', { name: '條款', exact: true }),
-    page.getByRole('link', { name: '隱私', exact: true }),
-    page.getByRole('link', { name: '著作權', exact: true }),
+    page.getByRole('link', { name: '使用說明', exact: true }),
     input,
   ];
 
@@ -68,7 +65,7 @@ test('offers visible keyboard focus in a logical entry sequence', async ({ page 
 test('contains focus in an on-demand legal dialog and restores its trigger', async ({ page }) => {
   await waitForReadyPage(page);
 
-  const trigger = page.locator('.site-nav').getByRole('link', { name: '隱私', exact: true });
+  const trigger = page.locator('.site-footer').getByRole('link', { name: /隱私/u });
   await trigger.focus();
   await page.keyboard.press('Enter');
 
@@ -88,8 +85,8 @@ test('keeps the primary form operable in the 1280 by 800 initial viewport', asyn
   await page.setViewportSize({ width: 1280, height: 800 });
   await waitForReadyPage(page);
 
-  const postUrl = page.getByRole('textbox', { name: 'Threads 公開貼文網址' });
-  const submit = page.getByRole('button', { name: '解析影片候選' });
+  const postUrl = page.getByRole('textbox', { name: 'Threads 貼文網址' });
+  const submit = page.getByRole('button', { name: '取得影片' });
   const viewport = await page.evaluate(() => ({
     height: window.innerHeight,
     scrollY: window.scrollY,
@@ -112,6 +109,24 @@ test('keeps the primary form operable in the 1280 by 800 initial viewport', asyn
   await expect(postUrl).toHaveValue(exampleUrl);
   await submit.focus();
   await expect(submit).toBeFocused();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+});
+
+test('shows the URL input in the initial 390 by 844 mobile viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await waitForReadyPage(page);
+
+  const postUrl = page.getByRole('textbox', { name: 'Threads 貼文網址' });
+  await expect(
+    page.getByRole('heading', { level: 1, name: '下載公開 Threads 影片' }),
+  ).toBeVisible();
+  await expect(postUrl).toBeVisible();
+  await expect(postUrl).toBeInViewport({ ratio: 1 });
+
+  const box = await postUrl.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 });
 
@@ -139,9 +154,9 @@ test('reflows at 320 CSS pixels with compact verification and readable reduced m
   expect(turnstileBox!.x + turnstileBox!.width).toBeLessThanOrEqual(viewport.innerWidth);
 
   const controls = [
-    page.getByRole('textbox', { name: 'Threads 公開貼文網址' }),
-    page.getByRole('checkbox', { name: /我確認我擁有內容/u }),
-    page.getByRole('button', { name: '解析影片候選' }),
+    page.getByRole('textbox', { name: 'Threads 貼文網址' }),
+    page.locator('.rights-confirmation'),
+    page.getByRole('button', { name: '取得影片' }),
   ];
   for (const control of controls) {
     const box = await control.boundingBox();
@@ -160,7 +175,10 @@ test('reflows at 320 CSS pixels with compact verification and readable reduced m
   expect(cssTimeToMilliseconds(motionStyle.animationDuration)).toBeLessThanOrEqual(0.001);
   expect(cssTimeToMilliseconds(motionStyle.transitionDuration)).toBeLessThanOrEqual(0.001);
 
-  await page.locator('.site-nav').getByRole('link', { name: '著作權', exact: true }).click();
+  await page
+    .locator('.site-footer')
+    .getByRole('link', { name: /著作權/u })
+    .click();
   const dialog = page.getByRole('dialog', { name: '著作權與下架通知' });
   await expect(dialog).toBeVisible();
   const dialogBox = await dialog.boundingBox();

@@ -146,6 +146,20 @@ describe('DownloaderPageComponent', () => {
     await render();
   });
 
+  it('renders one concise download flow without a separate system-status section', () => {
+    const root = fixture.nativeElement as HTMLElement;
+
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe('下載公開 Threads 影片');
+    expect(root.querySelector('.hero-copy')?.textContent?.trim()).toBe(
+      '貼上貼文網址，驗證後選擇影片版本。',
+    );
+    expect(root.querySelector('.system-status')).toBeNull();
+    expect(root.querySelector<HTMLButtonElement>('.primary-action')?.textContent?.trim()).toBe(
+      '取得影片',
+    );
+    expect(root.querySelector('.operation-feedback')?.closest('.workbench')).not.toBeNull();
+  });
+
   it('bootstraps once and owns one widget across same-site-key state changes', async () => {
     expect(bootstrap).toHaveBeenCalledOnce();
     expect(mount).toHaveBeenCalledOnce();
@@ -154,7 +168,7 @@ describe('DownloaderPageComponent', () => {
     expect(attachChallenge).toHaveBeenCalledWith(widgets[0]?.handle);
     expect(
       (fixture.nativeElement as HTMLElement).querySelector('.status-line')?.textContent?.trim(),
-    ).toBe('工作階段已就緒。');
+    ).toBe('貼上網址並完成驗證後，即可取得影片。');
     const verificationMessage = (fixture.nativeElement as HTMLElement).querySelector(
       '.challenge-block [aria-live="polite"]',
     );
@@ -284,7 +298,7 @@ describe('DownloaderPageComponent', () => {
     expect(urlInput?.getAttribute('aria-invalid')).toBe('true');
     expect(urlInput?.getAttribute('aria-describedby')).toBe('post-url-help post-url-error');
     expect(rightsInput?.getAttribute('aria-invalid')).toBe('true');
-    expect(rightsInput?.getAttribute('aria-describedby')).toBe('rights-help rights-error');
+    expect(rightsInput?.getAttribute('aria-describedby')).toBe('rights-detail rights-error');
     expect(root.ownerDocument.activeElement).toBe(urlInput);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
       '學術或非商業目的本身不構成授權',
@@ -329,11 +343,15 @@ describe('DownloaderPageComponent', () => {
     const actions = [...root.querySelectorAll<HTMLButtonElement>('.candidate-action')];
 
     expect(root.textContent).toContain('threads_Abcde_1.mp4');
-    expect(root.textContent).toContain('1920 × 1080 / 12.5 秒 / 2.0 MB');
+    expect(
+      [...root.querySelectorAll('.candidate-card-topline dd')].map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(['1920 × 1080', '00:13', '2.0 MB']);
     expect(root.textContent).not.toContain(CANDIDATE_ID);
     expect(actions.map((action) => action.getAttribute('aria-label'))).toEqual([
-      '交給瀏覽器下載，候選 1：threads_Abcde_1.mp4',
-      '交給瀏覽器下載，候選 2：threads_Abcde_2.mp4',
+      '下載影片，版本 1：threads_Abcde_1.mp4',
+      '下載影片，版本 2：threads_Abcde_2.mp4',
     ]);
     expect(new Set(actions.map((action) => action.getAttribute('aria-label'))).size).toBe(2);
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.candidate-section'));
@@ -374,11 +392,11 @@ describe('DownloaderPageComponent', () => {
     ];
 
     expect(actions[0]?.disabled).toBe(true);
-    expect(actions[0]?.textContent?.trim()).toBe('正在建立下載');
+    expect(actions[0]?.textContent?.trim()).toBe('正在準備下載……');
     expect(actions[0]?.getAttribute('aria-label')).toBe(
-      '正在建立下載，候選 1：threads_Abcde_1.mp4',
+      '正在準備下載，版本 1：threads_Abcde_1.mp4',
     );
-    expect(actions[1]?.textContent?.trim()).toBe('交給瀏覽器下載');
+    expect(actions[1]?.textContent?.trim()).toBe('下載影片');
 
     finishDownload?.();
     await operation;
@@ -442,7 +460,7 @@ describe('DownloaderPageComponent', () => {
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.error-panel'));
   });
 
-  it('omits legal documents and legal navigation from the downloader surface', () => {
+  it('keeps full legal documents on demand behind the concise rights summary', () => {
     const root = fixture.nativeElement as HTMLElement;
 
     expect(root.querySelector('.service-boundary')).toBeNull();
@@ -452,8 +470,10 @@ describe('DownloaderPageComponent', () => {
       '本服務之設置與營運目的僅為技術及學術研究，營運者不藉提供本服務獲取任何商業或經濟利益。',
     );
     expect(root.textContent).not.toContain('__Host-td_session');
-    expect(
-      root.querySelectorAll('a[href="/terms"], a[href="/privacy"], a[href="/copyright"]'),
-    ).toHaveLength(0);
+    expect(root.querySelectorAll('a[href="/terms"]')).toHaveLength(1);
+    expect(root.querySelector<HTMLAnchorElement>('a[href="/terms"]')?.textContent?.trim()).toBe(
+      '查看內容使用責任',
+    );
+    expect(root.querySelectorAll('a[href="/privacy"], a[href="/copyright"]')).toHaveLength(0);
   });
 });
