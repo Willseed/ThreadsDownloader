@@ -159,6 +159,7 @@ const oauthProtectedResource = {
   resource: 'https://threads.pylot.dev',
   authorization_servers: ['https://threads.pylot.dev'],
   scopes_supported: ['public:read'],
+  bearer_methods_supported: ['header'],
 };
 
 const mcpServerCard = {

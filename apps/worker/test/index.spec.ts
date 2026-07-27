@@ -295,6 +295,7 @@ describe('worker entry policy', () => {
     const mcpServerCard = await fetchWorker('/.well-known/mcp.json', env);
     const agentSkills = await fetchWorker('/.well-known/agent-skills/index.json', env);
     const agentCard = await fetchWorker('/.well-known/agent-card.json', env);
+    const oauthProtectedResource = await fetchWorker('/.well-known/oauth-protected-resource', env);
     const authMd = await fetchWorker('/auth.md', env);
 
     expect(robots.status).toBe(200);
@@ -343,6 +344,15 @@ describe('worker entry policy', () => {
     });
     expect(agentCard.headers.get('content-type')).toBe('application/json');
     expect(agentCard.status).toBe(200);
+
+    expect(oauthProtectedResource.status).toBe(200);
+    expect(oauthProtectedResource.headers.get('content-type')).toBe('application/json');
+    expect(await oauthProtectedResource.json()).toMatchObject({
+      resource: 'https://threads.pylot.dev',
+      authorization_servers: ['https://threads.pylot.dev'],
+      scopes_supported: ['public:read'],
+      bearer_methods_supported: ['header'],
+    });
 
     const authMdBody = await authMd.text();
     expect(authMdBody).toContain('## Agent registration');
