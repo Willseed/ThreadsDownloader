@@ -64,6 +64,11 @@ describe('AppComponent routing', () => {
     expect(mainTargets).toHaveLength(1);
     expect(mainTargets[0]?.tagName).toBe('MAIN');
     expect(document.querySelector('script[src*="challenges.cloudflare.com"]')).toBeNull();
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('開始下載');
+    expect(root.querySelector('.site-footer > p')?.textContent).toContain(
+      '本服務非 Threads 官方服務',
+    );
+    expect(root.querySelector('.site-footer > p')?.textContent).not.toContain('僅支援免登入');
 
     await router.navigateByUrl('/unknown-path');
     fixture.detectChanges();

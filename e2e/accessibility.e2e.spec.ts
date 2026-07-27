@@ -43,7 +43,7 @@ test('offers visible keyboard focus in a logical entry sequence', async ({ page 
   const tabOrder = [
     skipLink,
     wordmark,
-    page.getByRole('link', { name: '使用說明', exact: true }),
+    page.getByRole('link', { name: '開始下載', exact: true }),
     input,
   ];
 
@@ -123,7 +123,9 @@ test('keeps the primary form operable in the 1280 by 800 initial viewport', asyn
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 });
 
-test('shows the URL input in the initial 390 by 844 mobile viewport', async ({ page }) => {
+test('keeps the complete primary flow in the initial 390 by 844 mobile viewport', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await waitForReadyPage(page);
 
@@ -131,16 +133,25 @@ test('shows the URL input in the initial 390 by 844 mobile viewport', async ({ p
   await expect(
     page.getByRole('heading', { level: 1, name: '下載公開 Threads 影片' }),
   ).toBeVisible();
-  await expect(postUrl).toBeVisible();
-  await expect(postUrl).toBeInViewport({ ratio: 1 });
-
-  const box = await postUrl.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+  const primaryFlow = [
+    postUrl,
+    page.locator('.rights-confirmation'),
+    page.locator('.turnstile-container'),
+    page.getByRole('button', { name: '取得影片' }),
+  ];
+  for (const control of primaryFlow) {
+    await expect(control).toBeVisible();
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const controlBox = await control.boundingBox();
+    expect(controlBox).not.toBeNull();
+    expect(controlBox!.y).toBeGreaterThanOrEqual(0);
+    expect(controlBox!.y + controlBox!.height).toBeLessThanOrEqual(844);
+  }
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
 
+  const box = await postUrl.boundingBox();
   const turnstileBox = await page.locator('.turnstile-container').boundingBox();
+  expect(box).not.toBeNull();
   expect(turnstileBox).not.toBeNull();
   expect(Math.round(turnstileBox!.width)).toBe(Math.round(box!.width));
   expect(Math.round(turnstileBox!.height)).toBe(65);

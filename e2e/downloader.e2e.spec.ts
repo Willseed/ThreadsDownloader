@@ -135,7 +135,7 @@ test('exposes a safe API error through an alert without duplicate busy submissio
   const error = page.getByRole('alert').filter({ hasText: SAFE_API_ERROR_MESSAGE });
   await expect(error).toBeVisible();
   await expect(error).toContainText(`參考編號：${SAFE_REQUEST_ID}`);
-  await expect(page.getByText('無法取得影片，請查看下方訊息。')).toBeVisible();
+  await expect(page.getByText('無法取得影片，請查看下方訊息。')).toHaveCount(0);
   expect(mockApi.calls.resolve).toBe(1);
 });
 

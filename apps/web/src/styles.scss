@@ -191,7 +191,6 @@ h3 {
 }
 
 .eyebrow,
-.site-footer > p,
 .field > label,
 .request-reference,
 .candidate-card-topline dt {
@@ -202,7 +201,10 @@ h3 {
 }
 
 .site-footer > p {
+  max-width: 42rem;
   color: var(--muted);
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
 }
 
 .visually-hidden {
@@ -232,17 +234,10 @@ h3 {
 }
 
 .eyebrow,
-.availability-note,
 .field-help,
 .candidate-fallback,
 .hero-copy {
   color: var(--muted);
-}
-
-.availability-note {
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
 }
 
 .hero h1 {
@@ -262,7 +257,7 @@ h3 {
 
 .workbench form {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-3);
   padding: clamp(var(--space-3), 4vw, var(--space-5));
 }
 
@@ -347,13 +342,6 @@ h3 {
   background: #282826;
 }
 
-.operation-feedback {
-  display: grid;
-  gap: var(--space-3);
-  padding-block-start: var(--space-3);
-  border-block-start: 1px solid var(--line);
-}
-
 .status-line {
   color: var(--muted);
   font-size: 0.9rem;
@@ -376,6 +364,16 @@ h3 {
   margin-block-end: var(--space-3);
   font-size: clamp(1.25rem, 5vw, 1.6rem);
   letter-spacing: -0.02em;
+}
+
+.candidate-status,
+.candidate-error {
+  margin-block-end: var(--space-3);
+}
+
+.candidate-status {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .candidate-list {
@@ -698,6 +696,27 @@ h3 {
   .downloader-page,
   .legal-page {
     padding-inline: var(--space-3);
+  }
+
+  .downloader-page {
+    padding-block: var(--space-4) var(--space-6);
+  }
+
+  .hero {
+    gap: 0.375rem;
+    padding-block-end: var(--space-3);
+  }
+
+  .hero h1 {
+    font-size: clamp(1.8rem, 8vw, 2.4rem);
+  }
+
+  .workbench form {
+    padding: var(--space-3);
+  }
+
+  .field {
+    gap: var(--space-1);
   }
 
   .candidate-handoff {

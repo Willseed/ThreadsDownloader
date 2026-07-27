@@ -157,7 +157,9 @@ describe('DownloaderPageComponent', () => {
     expect(root.querySelector<HTMLButtonElement>('.primary-action')?.textContent?.trim()).toBe(
       '取得影片',
     );
-    expect(root.querySelector('.operation-feedback')?.closest('.workbench')).not.toBeNull();
+    expect(root.querySelector('.status-line')).toBeNull();
+    expect(root.querySelector('.error-panel')).toBeNull();
+    expect(root.textContent).not.toContain('僅支援免登入公開貼文');
     expect(root.textContent).not.toContain('PUBLIC THREADS MEDIA / RESEARCH INTERFACE');
     expect(root.textContent).not.toContain('Public media.');
     expect(root.textContent).not.toContain('Direct handoff.');
@@ -169,9 +171,7 @@ describe('DownloaderPageComponent', () => {
     expect(mount.mock.calls[0]?.[0]).toMatchObject({ siteKey: SITE_KEY });
     expect(mount.mock.calls[0]?.[0].container.isConnected).toBe(true);
     expect(attachChallenge).toHaveBeenCalledWith(widgets[0]?.handle);
-    expect(
-      (fixture.nativeElement as HTMLElement).querySelector('.status-line')?.textContent?.trim(),
-    ).toBe('貼上網址並完成驗證後，即可取得影片。');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.status-line')).toBeNull();
     const root = fixture.nativeElement as HTMLElement;
     const container = root.querySelector('.turnstile-container');
     expect(container?.getAttribute('role')).toBe('group');
@@ -409,19 +409,27 @@ describe('DownloaderPageComponent', () => {
     await operation;
   });
 
-  it('disables mutation controls throughout every busy workflow state', async () => {
+  it('keeps form fields editable while establishing a session and locks them for operations', async () => {
     fixture.componentInstance.form.setValue({
       postUrl: 'https://threads.com/@alice/post/Abcde',
       rightsConfirmed: true,
     });
     const root = fixture.nativeElement as HTMLElement;
-    const busyStates: readonly DownloaderWorkflowState[] = [
-      { kind: 'bootstrapping' },
+    state.set({ kind: 'bootstrapping' });
+    await render();
+
+    expect(root.querySelector('form')?.getAttribute('aria-busy')).toBe('true');
+    expect(root.querySelector<HTMLInputElement>('#post-url')?.disabled).toBe(false);
+    expect(root.querySelector<HTMLInputElement>('#rights-confirmed')?.disabled).toBe(false);
+    expect(root.querySelector<HTMLButtonElement>('.primary-action')?.disabled).toBe(true);
+    expect(root.querySelector('.status-line')?.textContent?.trim()).toBe('正在建立安全工作階段……');
+
+    const operationStates: readonly DownloaderWorkflowState[] = [
       { kind: 'resolving', siteKey: SITE_KEY },
       { kind: 'issuing', siteKey: SITE_KEY, candidates: [candidate] },
     ];
 
-    for (const busyState of busyStates) {
+    for (const busyState of operationStates) {
       state.set(busyState);
       await render();
 
@@ -444,7 +452,8 @@ describe('DownloaderPageComponent', () => {
     await render();
     let root = fixture.nativeElement as HTMLElement;
 
-    expect(root.querySelector('.status-line')?.textContent?.trim()).toBe(
+    expect(root.querySelector('.status-line')).toBeNull();
+    expect(root.querySelector('.candidate-status')?.textContent?.trim()).toBe(
       '已交由瀏覽器下載管理器處理。',
     );
     expect(root.textContent).not.toContain('檔案已成功儲存');
@@ -464,6 +473,7 @@ describe('DownloaderPageComponent', () => {
       '操作過於頻繁，請稍後再試。',
     );
     expect(root.textContent).toContain(`參考編號：${REQUEST_ID}`);
+    expect(root.querySelector('.candidate-section .error-panel')).not.toBeNull();
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.error-panel'));
   });
 

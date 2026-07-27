@@ -75,23 +75,20 @@ function candidatesFrom(state: DownloaderWorkflowState): readonly ResolveCandida
   return state.kind === 'error' ? (state.candidates ?? []) : [];
 }
 
-function statusText(state: DownloaderWorkflowState): string {
+function statusText(state: DownloaderWorkflowState): string | null {
   switch (state.kind) {
     case 'idle':
-    case 'bootstrapping':
-      return '正在準備下載工具……';
     case 'ready':
-      return '貼上網址並完成驗證後，即可取得影片。';
+    case 'candidates':
+    case 'error':
+      return null;
+    case 'bootstrapping':
+      return '正在建立安全工作階段……';
     case 'resolving':
       return '正在解析公開貼文……';
-    case 'candidates':
-      return `已找到 ${state.candidates.length} 個可下載版本。`;
     case 'issuing':
-      return '正在準備下載影片……';
     case 'handed-off':
-      return state.message;
-    case 'error':
-      return '無法取得影片，請查看下方訊息。';
+      return null;
   }
 }
 
@@ -102,7 +99,6 @@ function statusText(state: DownloaderWorkflowState): string {
   template: `
     <main id="main-content" class="downloader-page" aria-labelledby="page-title">
       <header class="hero">
-        <p class="availability-note">僅支援免登入公開貼文</p>
         <h1 id="page-title">下載公開 Threads 影片</h1>
         <p class="hero-copy">貼上貼文網址，驗證後選擇影片版本。</p>
       </header>
@@ -207,11 +203,13 @@ function statusText(state: DownloaderWorkflowState): string {
               取得影片
             }
           </button>
-          <div class="operation-feedback">
+          @if (statusMessage(); as message) {
             <p class="status-line" aria-live="polite" aria-atomic="true">
-              {{ statusMessage() }}
+              {{ message }}
             </p>
-            @if (errorState(); as error) {
+          }
+          @if (errorState(); as error) {
+            @if (candidates().length === 0) {
               <div #workflowErrorPanel class="error-panel" role="alert" tabindex="-1">
                 <p>{{ error.message }}</p>
                 @if (error.requestId !== null) {
@@ -229,7 +227,7 @@ function statusText(state: DownloaderWorkflowState): string {
                 }
               </div>
             }
-          </div>
+          }
         </form>
       </section>
 
@@ -241,6 +239,19 @@ function statusText(state: DownloaderWorkflowState): string {
           tabindex="-1"
         >
           <h2 id="candidate-title">找到 {{ candidates().length }} 個可下載版本</h2>
+          @if (candidateStatusMessage(); as message) {
+            <p class="candidate-status" aria-live="polite" aria-atomic="true">
+              {{ message }}
+            </p>
+          }
+          @if (errorState(); as error) {
+            <div #workflowErrorPanel class="error-panel candidate-error" role="alert" tabindex="-1">
+              <p>{{ error.message }}</p>
+              @if (error.requestId !== null) {
+                <p class="request-reference">參考編號：{{ error.requestId }}</p>
+              }
+            </div>
+          }
           <ul class="candidate-list">
             @for (candidate of candidates(); track candidate.candidateId; let index = $index) {
               <li>
@@ -367,10 +378,14 @@ export class DownloaderPageComponent implements OnDestroy {
     const kind = this.state().kind;
     return kind === 'bootstrapping' || kind === 'resolving' || kind === 'issuing';
   });
+  private readonly formLocked = computed(() => {
+    const kind = this.state().kind;
+    return kind === 'resolving' || kind === 'issuing';
+  });
   private readonly synchronizeFormAvailability = effect(() => {
-    const busy = this.busy();
+    const formLocked = this.formLocked();
     untracked(() => {
-      if (busy) {
+      if (formLocked) {
         this.form.disable({ emitEvent: false });
       } else {
         this.form.enable({ emitEvent: false });
@@ -391,6 +406,10 @@ export class DownloaderPageComponent implements OnDestroy {
     return this.widgetMountFailed() || this.widgetValue()?.status() === 'error';
   });
   readonly statusMessage = computed(() => statusText(this.state()));
+  readonly candidateStatusMessage = computed(() => {
+    const state = this.state();
+    return state.kind === 'handed-off' ? state.message : null;
+  });
   readonly errorState = computed(() => {
     const state = this.state();
     return state.kind === 'error' ? state : null;
