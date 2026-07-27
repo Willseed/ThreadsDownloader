@@ -244,11 +244,13 @@ not establish any undocumented upstream Threads API semantics.
 - Question: can the resolver support a public Threads post whose initial HTML
   is only a JavaScript application shell, without accepting a client-supplied
   CDN URL or silently enabling a metered browser service?
-- Research order and evidence: the existing ask-bridge research found no
-  official contract for a Threads `/post/{shortcode}/media` route. Bounded
-  credential-free HTTP reproduction showed that both the canonical post and
-  its `/media` route return HTML rather than media bytes or a CDN redirect. A
-  browser observation found a playable `currentSrc` under the exact shape
+- Research order and evidence: ask-bridge found no public contract that
+  establishes Browser Run Quick Action `addScriptTag` ordering. CSP and timing
+  are both possible explanations for a missing injected marker, but neither is
+  confirmed. It also confirmed that the `scrape` response exposes no final URL.
+  Bounded credential-free HTTP reproduction showed that both the canonical post
+  and its `/media` route return HTML rather than media bytes or a CDN redirect.
+  A browser observation found a playable `currentSrc` under the exact shape
   `instagram.<single-label>.fna.fbcdn.net`; this is observational evidence, not
   an official hostname contract. The installed Cloudflare types establish the
   `quickAction('scrape', ...)` input and response shape. No new Web Search was
@@ -263,15 +265,17 @@ not establish any undocumented upstream Threads API semantics.
 - Browser containment: the Quick Action has empty cookies, does not forward
   client headers or cookies or set an explicit referrer, uses zero cache TTL,
   and supplies provider-side navigation and action limits totalling ten seconds,
-  a bounded wait, and anchored request patterns for exact
+  a three-second bounded hydration wait, and anchored request patterns for exact
   `www.threads.com`, the existing `cdninstagram.com` family, and the observed
   exact Instagram FNA hostname shape. Its streamed JSON response, selectors,
   element records, attributes, values, and candidate count are all bounded and
-  decoded exactly. A fresh 128-bit marker ties every scraped candidate and its
-  bridge-stamped `location.href` to one invocation; the stamped location must
-  equal the exact canonical `/media` target. Zero unique candidates is not found
+  decoded exactly. Exactly one `link[rel="canonical"]` `href` and exactly one
+  `meta[property="og:url"]` `content` must both equal the normalized canonical
+  post. Candidates come only from full-page `video[src]` and
+  `video source[src]`; zero canonically deduplicated CDN candidates is not found
   and more than one fails closed rather than guessing among post and
-  recommendation videos.
+  recommendation videos. These upstream-authored DOM identity declarations are
+  not described as proof of the browser's final location.
 - Downstream enforcement: the observed FNA hostname shape was added to the one
   central CDN parser without allowing the `fbcdn.net` apex, broad subdomains,
   extra labels, non-default ports, credentials, fragments, or lookalikes.
@@ -291,19 +295,35 @@ not establish any undocumented upstream Threads API semantics.
   browser binding. Therefore this commit changes no production Browser Run
   usage or cost. Enabling it requires a separate reviewed configuration change
   that deliberately updates that gate.
-- Unconfirmed and activation blockers: anonymous Browser Run hydration of this
-  route, script injection timing, provider completion within its declared
-  limits, completeness of the conservative request patterns, stability of the
-  observed CDN hostname shape, and resistance to active same-page JavaScript
-  copying the invocation marker remain unconfirmed. `quickAction()` exposes no
-  final URL or redirect chain and accepts no AbortSignal; request patterns
-  contain each browser request's origin but do not prove every redirect hop.
-  The stamped exact location rejects an observed final same-host redirect, but
-  it cannot by itself prove that one valid video is the post rather than a
-  recommendation when active page code interferes. A late provider response is
-  rejected by the subsequent lease deadline gate, not locally hard-cancelled.
-  A remote credential-free proof must succeed before activation; failure must
-  not cause automatic host, cookie, header, or origin widening.
+- Anonymous remote evidence: the first bounded proof against the exact public
+  single-video post `DbPp-bqiQEB` returned Quick Action HTTP 200 and hydrated one
+  `video[src]`, but the configured `addScriptTag` did not leave its marker or
+  location attributes. The marker-based selectors therefore returned no
+  candidates and that contract was removed rather than widened. A second proof
+  made one credential-free Quick Action request using only scrape selectors. It
+  completed in 3.583 seconds with one canonical link and one Open Graph URL,
+  both equal to the normalized post, one full-page `video[src]`, and one unique
+  allowed CDN candidate under `scontent-nrt6-1.cdninstagram.com`. Neither
+  `article video[src]` nor `main video[src]` matched, the exact shortcode was
+  present in body HTML but not visible text, and no Twitter URL metadata was
+  present. Therefore article/main scope, visible-text identity, and Twitter
+  metadata are not requirements.
+- Evidence boundary and remaining activation blockers: those remote results
+  cover only that exact public single-video post, one anonymous run, and the
+  observed execution region. Multi-video or carousel posts, images, private or
+  deleted posts, login or challenge pages, redirect behavior, cross-post DOM
+  stability, and long-term CDN hostname stability remain unconfirmed. The
+  canonical and Open Graph values are fail-closed upstream-authored identity
+  evidence, not a direct final-location proof. `quickAction()` exposes no final
+  URL or redirect chain and accepts no AbortSignal; request patterns contain
+  each browser request's origin but do not prove every redirect hop. With no
+  stable post-scoped selector, canonical identity plus a unique full-page video
+  cannot completely exclude a recommendation video; this remains a stated
+  limitation of the single-video MVP rather than an inferred guarantee. A late
+  provider response is rejected by the subsequent lease deadline gate, not
+  locally hard-cancelled. Activation still requires separate reviewed binding
+  and exposure-gate changes; failure must not cause automatic host, cookie,
+  header, or origin widening.
 
 ## Deployment inventory and decisions
 

@@ -100,20 +100,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
 
-function rendererMarker(options: RenderedBrowserScrapeOptions): string {
-  const marker = /data-threads-downloader-render-marker="([A-Za-z0-9_-]{22})"/u.exec(
-    options.elements[0]!.selector,
-  )?.[1];
-  if (marker === undefined) {
-    throw new Error('expected a bounded renderer marker');
-  }
-  return marker;
-}
-
-function renderedElement(
-  url: string,
-  options: RenderedBrowserScrapeOptions,
-): Record<string, unknown> {
+function renderedElement(attributes: readonly { readonly name: string; readonly value: string }[]) {
   return {
     html: '<video></video>',
     text: '',
@@ -121,12 +108,22 @@ function renderedElement(
     height: 360,
     top: 0,
     left: 0,
-    attributes: [
-      { name: 'src', value: url },
-      { name: 'data-threads-downloader-render-marker', value: rendererMarker(options) },
-      { name: 'data-threads-downloader-render-location', value: options.url },
-    ],
+    attributes,
   };
+}
+
+function renderedIdentity(options: RenderedBrowserScrapeOptions): readonly unknown[] {
+  const canonicalUrl = options.url.slice(0, -'/media'.length);
+  return [
+    {
+      selector: options.elements[0]!.selector,
+      results: [renderedElement([{ name: 'href', value: canonicalUrl }])],
+    },
+    {
+      selector: options.elements[1]!.selector,
+      results: [renderedElement([{ name: 'content', value: canonicalUrl }])],
+    },
+  ];
 }
 
 function renderedResponse(
@@ -136,9 +133,12 @@ function renderedResponse(
   return jsonResponse({
     success: true,
     result: [
-      { selector: options.elements[0]!.selector, results: [renderedElement(url, options)] },
-      { selector: options.elements[1]!.selector, results: [] },
-      { selector: options.elements[2]!.selector, results: [] },
+      ...renderedIdentity(options),
+      {
+        selector: options.elements[2]!.selector,
+        results: [renderedElement([{ name: 'src', value: url }])],
+      },
+      { selector: options.elements[3]!.selector, results: [] },
     ],
   });
 }
@@ -759,15 +759,15 @@ describe('resolve public media workflow', () => {
         jsonResponse({
           success: true,
           result: [
+            ...renderedIdentity(options),
             {
-              selector: options.elements[0]!.selector,
+              selector: options.elements[2]!.selector,
               results: [
-                renderedElement(RENDERED_PRIVATE_URL, options),
-                renderedElement(secondUrl, options),
+                renderedElement([{ name: 'src', value: RENDERED_PRIVATE_URL }]),
+                renderedElement([{ name: 'src', value: secondUrl }]),
               ],
             },
-            { selector: options.elements[1]!.selector, results: [] },
-            { selector: options.elements[2]!.selector, results: [] },
+            { selector: options.elements[3]!.selector, results: [] },
           ],
         }),
     });
@@ -789,9 +789,9 @@ describe('resolve public media workflow', () => {
         jsonResponse({
           success: true,
           result: [
-            { selector: options.elements[0]!.selector, results: [] },
-            { selector: options.elements[1]!.selector, results: [] },
+            ...renderedIdentity(options),
             { selector: options.elements[2]!.selector, results: [] },
+            { selector: options.elements[3]!.selector, results: [] },
           ],
         }),
       422,

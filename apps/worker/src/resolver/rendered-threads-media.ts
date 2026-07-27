@@ -1,6 +1,5 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
-import { createOpaqueId } from '../security/cryptography.js';
 import {
   parseCdnUrl,
   type NormalizedThreadsPost,
@@ -20,12 +19,13 @@ const MAX_CANDIDATES = 1;
 const MAX_LAYOUT_MAGNITUDE = 10_000_000;
 const CANONICAL_CONTENT_LENGTH = /^(?:0|[1-9]\d*)$/u;
 const JSON_MEDIA_TYPE = 'application/json';
-const CURRENT_SRC_ATTRIBUTE = 'data-threads-downloader-current-src';
-const RENDER_MARKER_ATTRIBUTE = 'data-threads-downloader-render-marker';
-const RENDER_LOCATION_ATTRIBUTE = 'data-threads-downloader-render-location';
-const BRIDGE_MARKER = /^[A-Za-z0-9_-]{22}$/u;
+const CANONICAL_LINK_SELECTOR = 'link[rel="canonical"]';
+const OPEN_GRAPH_URL_SELECTOR = 'meta[property="og:url"]';
+const VIDEO_SELECTOR = 'video[src]';
+const SOURCE_SELECTOR = 'video source[src]';
 const NAVIGATION_TIMEOUT_MS = 4_000;
 const ACTION_TIMEOUT_MS = 6_000;
+const HYDRATION_WAIT_MS = 3_000;
 export const RENDERED_BROWSER_BUDGET_MS = NAVIGATION_TIMEOUT_MS + ACTION_TIMEOUT_MS;
 export const RENDERED_RESPONSE_READ_TIMEOUT_MS = 2_000;
 export const RENDERED_RESOLVER_BUDGET_MS =
@@ -39,7 +39,6 @@ export const RENDERED_ALLOWED_REQUEST_PATTERNS = [
 
 export interface RenderedBrowserScrapeOptions {
   readonly actionTimeout: number;
-  readonly addScriptTag: Array<{ readonly content: string }>;
   readonly allowRequestPattern: string[];
   readonly bestAttempt: false;
   readonly cacheTTL: 0;
@@ -51,11 +50,6 @@ export interface RenderedBrowserScrapeOptions {
   };
   readonly setJavaScriptEnabled: true;
   readonly url: string;
-  readonly waitForSelector: {
-    readonly selector: 'video';
-    readonly timeout: number;
-    readonly visible: true;
-  };
   readonly waitForTimeout: number;
 }
 
@@ -94,7 +88,6 @@ export interface PublicThreadsMediaResolver {
 
 export interface RenderedThreadsMediaResolverDependencies {
   readonly browser: BrowserRunScrapePort;
-  readonly marker?: () => string;
   readonly timeoutSignal?: (milliseconds: number) => AbortSignal;
 }
 
@@ -107,13 +100,21 @@ interface DecodedElement {
   readonly attributes: readonly DecodedAttribute[];
 }
 
-interface ScrapeTarget {
+interface IdentityScrapeTarget {
   readonly attribute: string;
-  readonly expectedLocation: string;
-  readonly marker: string;
+  readonly expectedValue: string;
+  readonly kind: 'identity';
+  readonly selector: string;
+}
+
+interface MediaScrapeTarget {
+  readonly attribute: 'src';
+  readonly kind: 'media';
   readonly selector: string;
   readonly source: RenderedMediaCandidateSource;
 }
+
+type ScrapeTarget = IdentityScrapeTarget | MediaScrapeTarget;
 
 function fail(code: RenderedThreadsMediaResolverErrorCode): never {
   throw new RenderedThreadsMediaResolverError(code);
@@ -123,40 +124,37 @@ function renderedMediaUrl(post: NormalizedThreadsPost): string {
   return `${post.canonicalUrl}/media`;
 }
 
-function currentSrcBridgeScript(marker: string): string {
-  return `(() => { const currentSrcAttribute = '${CURRENT_SRC_ATTRIBUTE}'; const markerAttribute = '${RENDER_MARKER_ATTRIBUTE}'; const locationAttribute = '${RENDER_LOCATION_ATTRIBUTE}'; const marker = '${marker}'; const stamp = (element) => { element.setAttribute(markerAttribute, marker); element.setAttribute(locationAttribute, location.href); }; const copy = () => { for (const video of document.querySelectorAll('video')) { stamp(video); for (const source of video.querySelectorAll('source')) stamp(source); if (video.currentSrc) video.setAttribute(currentSrcAttribute, video.currentSrc); else video.removeAttribute(currentSrcAttribute); } }; copy(); new MutationObserver(copy).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] }); document.addEventListener('loadedmetadata', copy, true); setInterval(copy, 100); })();`;
-}
-
-function scrapeTargets(marker: string, expectedLocation: string): readonly ScrapeTarget[] {
-  const markerSelector = `[${RENDER_MARKER_ATTRIBUTE}="${marker}"]`;
+function scrapeTargets(post: NormalizedThreadsPost): readonly ScrapeTarget[] {
   return [
     {
-      selector: `video[src]${markerSelector}`,
+      selector: CANONICAL_LINK_SELECTOR,
+      attribute: 'href',
+      expectedValue: post.canonicalUrl,
+      kind: 'identity',
+    },
+    {
+      selector: OPEN_GRAPH_URL_SELECTOR,
+      attribute: 'content',
+      expectedValue: post.canonicalUrl,
+      kind: 'identity',
+    },
+    {
+      selector: VIDEO_SELECTOR,
       attribute: 'src',
-      marker,
-      expectedLocation,
+      kind: 'media',
       source: 'rendered-video',
     },
     {
-      selector: `video source[src]${markerSelector}`,
+      selector: SOURCE_SELECTOR,
       attribute: 'src',
-      marker,
-      expectedLocation,
+      kind: 'media',
       source: 'rendered-source',
-    },
-    {
-      selector: `video[${CURRENT_SRC_ATTRIBUTE}]${markerSelector}`,
-      attribute: CURRENT_SRC_ATTRIBUTE,
-      marker,
-      expectedLocation,
-      source: 'rendered-current-src',
     },
   ];
 }
 
 function scrapeOptions(
   post: NormalizedThreadsPost,
-  marker: string,
   targets: readonly ScrapeTarget[],
 ): RenderedBrowserScrapeOptions {
   const options: RenderedBrowserScrapeOptions = {
@@ -167,10 +165,8 @@ function scrapeOptions(
     setJavaScriptEnabled: true,
     gotoOptions: { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: 'domcontentloaded' },
     actionTimeout: ACTION_TIMEOUT_MS,
-    waitForSelector: { selector: 'video', visible: true, timeout: 5_000 },
-    waitForTimeout: 250,
+    waitForTimeout: HYDRATION_WAIT_MS,
     bestAttempt: false,
-    addScriptTag: [{ content: currentSrcBridgeScript(marker) }],
     elements: targets.map(({ selector }) => ({ selector })),
   };
   options satisfies BrowserRunScrapeOptions;
@@ -367,17 +363,10 @@ function decodeElement(value: unknown): DecodedElement | null {
 
 function candidateFrom(
   attributes: readonly DecodedAttribute[],
-  target: ScrapeTarget,
+  target: MediaScrapeTarget,
 ): MediaCandidate | undefined {
   const rawValue = attributes.find(({ name }) => name === target.attribute)?.value;
   if (rawValue === undefined) {
-    return fail('RENDERED_RESPONSE_INVALID');
-  }
-  if (
-    attributes.find(({ name }) => name === RENDER_MARKER_ATTRIBUTE)?.value !== target.marker ||
-    attributes.find(({ name }) => name === RENDER_LOCATION_ATTRIBUTE)?.value !==
-      target.expectedLocation
-  ) {
     return fail('RENDERED_RESPONSE_INVALID');
   }
   try {
@@ -413,7 +402,7 @@ function decodeSelectorElements(value: unknown, target: ScrapeTarget): readonly 
 
 function collectCandidates(
   elements: readonly DecodedElement[],
-  target: ScrapeTarget,
+  target: MediaScrapeTarget,
   candidates: Map<string, MediaCandidate>,
 ): void {
   for (const element of elements) {
@@ -425,6 +414,16 @@ function collectCandidates(
     if (candidates.size > MAX_CANDIDATES) {
       return fail('RENDERED_RESPONSE_INVALID');
     }
+  }
+}
+
+function assertIdentity(elements: readonly DecodedElement[], target: IdentityScrapeTarget): void {
+  if (elements.length !== 1) {
+    return fail('RENDERED_RESPONSE_INVALID');
+  }
+  const values = elements[0]!.attributes.filter(({ name }) => name === target.attribute);
+  if (values.length !== 1 || values[0]!.value !== target.expectedValue) {
+    return fail('RENDERED_RESPONSE_INVALID');
   }
 }
 
@@ -449,7 +448,11 @@ function decodeCandidates(
     if (totalResults > MAX_TOTAL_RESULTS) {
       return fail('RENDERED_RESPONSE_INVALID');
     }
-    collectCandidates(elements, target, candidates);
+    if (target.kind === 'identity') {
+      assertIdentity(elements, target);
+    } else {
+      collectCandidates(elements, target, candidates);
+    }
   }
   return [...candidates.values()];
 }
@@ -488,23 +491,10 @@ export function createRenderedThreadsMediaResolver(
   const timeoutSignal = dependencies.timeoutSignal ?? AbortSignal.timeout;
   return {
     async resolve(post): Promise<ResolvedThreadsMedia> {
-      let marker: string;
-      try {
-        marker = dependencies.marker?.() ?? createOpaqueId(128);
-      } catch {
-        return fail('RENDERED_UNAVAILABLE');
-      }
-      if (!BRIDGE_MARKER.test(marker)) {
-        return fail('RENDERED_UNAVAILABLE');
-      }
-      const expectedLocation = renderedMediaUrl(post);
-      const targets = scrapeTargets(marker, expectedLocation);
+      const targets = scrapeTargets(post);
       let response: Response;
       try {
-        response = await dependencies.browser.quickAction(
-          'scrape',
-          scrapeOptions(post, marker, targets),
-        );
+        response = await dependencies.browser.quickAction('scrape', scrapeOptions(post, targets));
       } catch {
         return fail('RENDERED_UNAVAILABLE');
       }

@@ -11,35 +11,20 @@ import {
 } from '../src/resolver/rendered-threads-media.js';
 import { parseThreadsPostUrl } from '../src/security/upstream-policy.js';
 
-const MARKER = 'M'.repeat(22);
 const insecureHttp = 'http:';
+const CANONICAL_URL = 'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB';
 const TARGET_URL = 'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB/media';
-const markerSelector = (marker = MARKER): string =>
-  `[data-threads-downloader-render-marker="${marker}"]`;
-const videoSelector = (marker = MARKER): string => `video[src]${markerSelector(marker)}`;
-const sourceSelector = (marker = MARKER): string => `video source[src]${markerSelector(marker)}`;
-const currentSelector = (marker = MARKER): string =>
-  `video[data-threads-downloader-current-src]${markerSelector(marker)}`;
-const selectors = (marker = MARKER) => ({
-  video: videoSelector(marker),
-  source: sourceSelector(marker),
-  current: currentSelector(marker),
-});
+const CANONICAL_SELECTOR = 'link[rel="canonical"]';
+const OPEN_GRAPH_SELECTOR = 'meta[property="og:url"]';
+const VIDEO_SELECTOR = 'video[src]';
+const SOURCE_SELECTOR = 'video source[src]';
 const PRIVATE_URL =
   'https://instagram.ftpe7-2.fna.fbcdn.net/media/video.mp4?token=private-render-token';
 const post = parseThreadsPostUrl(
   'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB?xmt=private-input-token',
 );
 
-function element(
-  attributes: readonly { readonly name: string; readonly value: string }[],
-  provenance: {
-    readonly location?: string | null;
-    readonly marker?: string | null;
-  } = {},
-) {
-  const marker = provenance.marker === undefined ? MARKER : provenance.marker;
-  const location = provenance.location === undefined ? TARGET_URL : provenance.location;
+function element(attributes: readonly { readonly name: string; readonly value: string }[]) {
   return {
     html: '<video></video>',
     text: '',
@@ -47,30 +32,23 @@ function element(
     height: 360,
     top: 0,
     left: 0,
-    attributes: [
-      ...attributes,
-      ...(marker === null
-        ? []
-        : [{ name: 'data-threads-downloader-render-marker', value: marker }]),
-      ...(location === null
-        ? []
-        : [{ name: 'data-threads-downloader-render-location', value: location }]),
-    ],
+    attributes,
   };
 }
 
 function successBody(
   videoResults: readonly unknown[] = [],
   sourceResults: readonly unknown[] = [],
-  currentResults: readonly unknown[] = [],
-  targets = selectors(),
+  canonicalResults: readonly unknown[] = [element([{ name: 'href', value: CANONICAL_URL }])],
+  openGraphResults: readonly unknown[] = [element([{ name: 'content', value: CANONICAL_URL }])],
 ): Record<string, unknown> {
   return {
     success: true,
     result: [
-      { selector: targets.video, results: videoResults },
-      { selector: targets.source, results: sourceResults },
-      { selector: targets.current, results: currentResults },
+      { selector: CANONICAL_SELECTOR, results: canonicalResults },
+      { selector: OPEN_GRAPH_SELECTOR, results: openGraphResults },
+      { selector: VIDEO_SELECTOR, results: videoResults },
+      { selector: SOURCE_SELECTOR, results: sourceResults },
     ],
   };
 }
@@ -95,12 +73,10 @@ function browserReturning(
 
 function resolver(
   browser: BrowserRunScrapePort,
-  marker: () => string = () => MARKER,
   timeoutSignal?: (milliseconds: number) => AbortSignal,
 ) {
   return createRenderedThreadsMediaResolver({
     browser,
-    marker,
     ...(timeoutSignal === undefined ? {} : { timeoutSignal }),
   });
 }
@@ -147,19 +123,16 @@ describe('rendered Threads media resolver request policy', () => {
     expect(options.setJavaScriptEnabled).toBe(true);
     expect(options.gotoOptions).toEqual({ timeout: 4_000, waitUntil: 'domcontentloaded' });
     expect(options.actionTimeout).toBe(6_000);
-    expect(options.waitForSelector).toEqual({ selector: 'video', visible: true, timeout: 5_000 });
-    expect(options.waitForTimeout).toBe(250);
+    expect(options.waitForTimeout).toBe(3_000);
     expect(options.bestAttempt).toBe(false);
-    expect(options.addScriptTag).toHaveLength(1);
-    const bridgeScript = options.addScriptTag[0]!.content;
     expect(options.elements).toEqual([
-      { selector: videoSelector() },
-      { selector: sourceSelector() },
-      { selector: currentSelector() },
+      { selector: CANONICAL_SELECTOR },
+      { selector: OPEN_GRAPH_SELECTOR },
+      { selector: VIDEO_SELECTOR },
+      { selector: SOURCE_SELECTOR },
     ]);
     expect(Object.keys(options).sort()).toEqual([
       'actionTimeout',
-      'addScriptTag',
       'allowRequestPattern',
       'bestAttempt',
       'cacheTTL',
@@ -168,16 +141,8 @@ describe('rendered Threads media resolver request policy', () => {
       'gotoOptions',
       'setJavaScriptEnabled',
       'url',
-      'waitForSelector',
       'waitForTimeout',
     ]);
-    expect(bridgeScript).toContain('video.currentSrc');
-    expect(bridgeScript).toContain('data-threads-downloader-current-src');
-    expect(bridgeScript).toContain('data-threads-downloader-render-location');
-    expect(bridgeScript).toContain('location.href');
-    expect(bridgeScript).toContain('removeAttribute(currentSrcAttribute)');
-    expect(bridgeScript).toContain(MARKER);
-    expect(bridgeScript).not.toContain('private');
   });
 
   it('anchors Browser Run subrequests to Threads and the two approved CDN families', () => {
@@ -201,53 +166,15 @@ describe('rendered Threads media resolver request policy', () => {
       expect(allowed(unsafe), unsafe).toBe(false);
     }
   });
-
-  it('creates a fresh secure bridge marker for every resolve call', async () => {
-    const calls: Array<{
-      readonly action: string;
-      readonly options: RenderedBrowserScrapeOptions;
-    }> = [];
-    const browser = browserReturning((options) => {
-      const marker = /data-threads-downloader-render-marker="([A-Za-z0-9_-]{22})"/u.exec(
-        options.elements[0]!.selector,
-      )?.[1];
-      if (marker === undefined) {
-        throw new Error('expected a bounded bridge marker');
-      }
-      return jsonResponse(
-        successBody([element([{ name: 'src', value: PRIVATE_URL }], { marker })], [], [], {
-          video: options.elements[0]!.selector,
-          source: options.elements[1]!.selector,
-          current: options.elements[2]!.selector,
-        }),
-      );
-    }, calls);
-    const subject = createRenderedThreadsMediaResolver({ browser });
-
-    await subject.resolve(post);
-    await subject.resolve(post);
-
-    const selectors = calls.map(({ options }) => options.elements[2]!.selector);
-    expect(selectors[0]).toMatch(
-      /^video\[data-threads-downloader-current-src\]\[data-threads-downloader-render-marker="[A-Za-z0-9_-]{22}"\]$/u,
-    );
-    expect(selectors[1]).not.toBe(selectors[0]);
-  });
 });
 
 describe('rendered Threads media resolver response contract', () => {
-  it('bridges currentSrc, ignores unsafe attributes, and canonically deduplicates one candidate', async () => {
+  it('validates post identity, ignores unsafe media, and canonically deduplicates one candidate', async () => {
     const body = successBody(
       [element([{ name: 'src', value: ` ${PRIVATE_URL} ` }])],
       [
         element([{ name: 'src', value: PRIVATE_URL }]),
         element([{ name: 'src', value: 'https://attacker.example/private' }]),
-      ],
-      [
-        element([
-          { name: 'src', value: 'blob:https://www.threads.com/private' },
-          { name: 'data-threads-downloader-current-src', value: PRIVATE_URL },
-        ]),
       ],
     );
 
@@ -258,71 +185,51 @@ describe('rendered Threads media resolver response contract', () => {
     ]);
   });
 
-  it('accepts currentSrc only through the dedicated bridge attribute', async () => {
-    const result = await resolver(
-      browserReturning(() =>
-        jsonResponse(
-          successBody(
-            [],
-            [],
-            [element([{ name: 'data-threads-downloader-current-src', value: PRIVATE_URL }])],
-          ),
-        ),
-      ),
-    ).resolve(post);
-
-    expect(result.candidates.map(({ source, value }) => [source, value.url.href])).toEqual([
-      ['rendered-current-src', PRIVATE_URL],
-    ]);
-  });
-
   it.each([
-    ['missing', null],
-    ['foreign', 'F'.repeat(22)],
-  ] as const)(
-    'rejects a %s bridge marker on an alleged currentSrc result',
-    async (_name, marker) => {
-      const body = successBody(
+    ['missing canonical link', successBody([], [], [])],
+    [
+      'duplicate canonical links',
+      successBody(
         [],
         [],
         [
-          element([{ name: 'data-threads-downloader-current-src', value: PRIVATE_URL }], {
-            marker,
-          }),
+          element([{ name: 'href', value: CANONICAL_URL }]),
+          element([{ name: 'href', value: CANONICAL_URL }]),
         ],
-      );
-      await expectResolverError(
-        resolver(browserReturning(() => jsonResponse(body))).resolve(post),
-        'RENDERED_RESPONSE_INVALID',
-        [PRIVATE_URL],
-      );
-    },
-  );
-
-  it.each([
-    ['missing final location', null],
-    ['same-host redirect location', 'https://www.threads.com/@hitostartup.tw/post/Related/media'],
-    ['target location with a query', `${TARGET_URL}?redirected=private`],
-  ] as const)('rejects a candidate stamped with %s', async (_name, location) => {
-    const body = successBody([element([{ name: 'src', value: PRIVATE_URL }], { location })]);
+      ),
+    ],
+    [
+      'canonical link without href',
+      successBody([], [], [element([{ name: 'rel', value: 'canonical' }])]),
+    ],
+    [
+      'foreign canonical link',
+      successBody(
+        [],
+        [],
+        [
+          element([
+            {
+              name: 'href',
+              value: 'https://www.threads.com/@hitostartup.tw/post/Related',
+            },
+          ]),
+        ],
+      ),
+    ],
+    ['missing Open Graph URL', successBody([], [], undefined, [])],
+    [
+      'Open Graph URL with query',
+      successBody([], [], undefined, [
+        element([{ name: 'content', value: `${CANONICAL_URL}?private=redirected` }]),
+      ]),
+    ],
+  ] as const)('rejects identity evidence with %s', async (_name, body) => {
     await expectResolverError(
       resolver(browserReturning(() => jsonResponse(body))).resolve(post),
       'RENDERED_RESPONSE_INVALID',
-      ['Related', 'redirected=private', PRIVATE_URL],
+      ['Related', 'private=redirected', PRIVATE_URL],
     );
-  });
-
-  it('rejects a malformed marker before calling Browser Run', async () => {
-    const quickAction = vi.fn<BrowserRunScrapePort['quickAction']>();
-    await expectResolverError(
-      createRenderedThreadsMediaResolver({
-        browser: { quickAction },
-        marker: () => 'private-invalid-marker!',
-      }).resolve(post),
-      'RENDERED_UNAVAILABLE',
-      ['private-invalid-marker!'],
-    );
-    expect(quickAction).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -333,9 +240,10 @@ describe('rendered Threads media resolver response contract', () => {
       {
         success: true,
         result: [
-          { selector: sourceSelector(), results: [] },
-          { selector: videoSelector(), results: [] },
-          { selector: currentSelector(), results: [] },
+          { selector: OPEN_GRAPH_SELECTOR, results: [] },
+          { selector: CANONICAL_SELECTOR, results: [] },
+          { selector: VIDEO_SELECTOR, results: [] },
+          { selector: SOURCE_SELECTOR, results: [] },
         ],
       },
     ],
@@ -494,7 +402,6 @@ describe('rendered Threads media resolver response contract', () => {
       browserReturning(
         () => new Response(stream, { headers: { 'content-type': 'application/json' } }),
       ),
-      () => MARKER,
       (milliseconds) => {
         timeoutCalls.push(milliseconds);
         return controller.signal;
