@@ -62,6 +62,30 @@ interface SessionDownloadPermitRow {
   readonly expires_at: number;
 }
 
+interface SessionDownloadPermitMutationCountRow {
+  readonly [key: string]: SqlValue;
+  readonly count: number;
+}
+
+interface SessionDownloadPermitIdRow {
+  readonly [key: string]: SqlValue;
+  readonly permit_id: string;
+}
+
+interface SessionDownloadSnapshot {
+  readonly alarmAt: number | null;
+  readonly permits: readonly SessionDownloadPermitRow[];
+}
+
+type SessionDownloadPermitOperation = 'acquire' | 'release' | 'renew';
+
+interface SessionDownloadPermitRequestInput {
+  readonly sessionHash: string;
+  readonly downloadId: string;
+  readonly permitId: string;
+  readonly sequence?: number;
+}
+
 interface ClaimedVaultCandidate {
   readonly reservationId: string;
   readonly reservedAt: number;
@@ -202,13 +226,8 @@ async function releasePermit(
 
 async function sessionDownloadPermit(
   stub: DurableObjectStub<SessionCoordinator>,
-  operation: 'acquire' | 'release' | 'renew',
-  input: {
-    readonly sessionHash: string;
-    readonly downloadId: string;
-    readonly permitId: string;
-    readonly sequence?: number;
-  },
+  operation: SessionDownloadPermitOperation,
+  input: SessionDownloadPermitRequestInput,
 ): Promise<Response> {
   return stub.fetch(`https://session.internal/download-permits/${operation}`, {
     method: 'POST',
@@ -218,13 +237,8 @@ async function sessionDownloadPermit(
 }
 
 function sessionDownloadPermitRequest(
-  operation: 'acquire' | 'release' | 'renew',
-  input: {
-    readonly sessionHash: string;
-    readonly downloadId: string;
-    readonly permitId: string;
-    readonly sequence?: number;
-  },
+  operation: SessionDownloadPermitOperation,
+  input: SessionDownloadPermitRequestInput,
 ): Request {
   return new Request(`https://session.internal/download-permits/${operation}`, {
     method: 'POST',
@@ -233,73 +247,178 @@ function sessionDownloadPermitRequest(
   });
 }
 
+async function withFailNextAlarm<T>(
+  instance: SessionCoordinator,
+  beforeFailure: () => void | Promise<void>,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const storage = (
+    instance as unknown as { readonly ctx: { readonly storage: DurableObjectStorage } }
+  ).ctx.storage;
+  const previousDescriptor = Object.getOwnPropertyDescriptor(storage, 'setAlarm');
+  const setAlarm = storage.setAlarm.bind(storage);
+  let intercept = true;
+  Object.defineProperty(storage, 'setAlarm', {
+    configurable: true,
+    async value(...args: Parameters<DurableObjectStorage['setAlarm']>): Promise<void> {
+      if (!intercept) {
+        await setAlarm(...args);
+        return;
+      }
+      intercept = false;
+      await beforeFailure();
+      throw new Error('alarm unavailable');
+    },
+  });
+  try {
+    return await operation();
+  } finally {
+    if (previousDescriptor === undefined) {
+      Reflect.deleteProperty(storage, 'setAlarm');
+    } else {
+      Object.defineProperty(storage, 'setAlarm', previousDescriptor);
+    }
+  }
+}
+
 async function concurrentAlarmFailure(
   stub: DurableObjectStub<SessionCoordinator>,
-  operation: 'acquire' | 'renew',
-  input: {
-    readonly sessionHash: string;
-    readonly downloadId: string;
-    readonly permitId: string;
-    readonly sequence?: number;
-  },
+  operation: Extract<SessionDownloadPermitOperation, 'acquire' | 'renew'>,
+  input: SessionDownloadPermitRequestInput,
 ): Promise<{
   readonly firstStatus: number;
   readonly replayBlocked: boolean;
   readonly replayStatus: number;
 }> {
-  return runInDurableObject(stub, async (instance) => {
+  return runInDurableObject(stub, (instance) => {
     const started = deferred<void>();
     const failure = deferred<void>();
-    const storage = (
-      instance as unknown as { readonly ctx: { readonly storage: DurableObjectStorage } }
-    ).ctx.storage;
-    const setAlarm = storage.setAlarm.bind(storage);
-    let intercept = true;
-    Object.defineProperty(storage, 'setAlarm', {
-      configurable: true,
-      async value(timestamp: number): Promise<void> {
-        if (!intercept) {
-          await setAlarm(timestamp);
-          return;
-        }
-        intercept = false;
+    return withFailNextAlarm(
+      instance,
+      async () => {
         started.resolve(undefined);
         await failure.promise;
-        throw new Error('alarm unavailable');
       },
-    });
+      async () => {
+        const first = instance.fetch(sessionDownloadPermitRequest(operation, input));
+        await started.promise;
+        let replaySettled = false;
+        const replay = instance
+          .fetch(sessionDownloadPermitRequest(operation, input))
+          .then((response) => {
+            replaySettled = true;
+            return response;
+          });
+        await Promise.resolve();
+        const replayBlocked = !replaySettled;
+        failure.resolve(undefined);
+        return {
+          firstStatus: (await first).status,
+          replayBlocked,
+          replayStatus: (await replay).status,
+        };
+      },
+    );
+  });
+}
 
-    const first = instance.fetch(sessionDownloadPermitRequest(operation, input));
-    await started.promise;
-    let replaySettled = false;
-    const replay = instance
-      .fetch(sessionDownloadPermitRequest(operation, input))
-      .then((response) => {
-        replaySettled = true;
-        return response;
-      });
-    await Promise.resolve();
-    const replayBlocked = !replaySettled;
-    failure.resolve(undefined);
-    return {
-      firstStatus: (await first).status,
-      replayBlocked,
-      replayStatus: (await replay).status,
-    };
+async function renewSessionDownloadPermitWithAlarmFailure(
+  stub: DurableObjectStub<SessionCoordinator>,
+  input: SessionDownloadPermitRequestInput,
+): Promise<Response> {
+  return runInDurableObject(stub, (instance) =>
+    withFailNextAlarm(
+      instance,
+      () => undefined,
+      () => instance.fetch(sessionDownloadPermitRequest('renew', input)),
+    ),
+  );
+}
+
+async function readSessionDownloadSnapshot(
+  stub: DurableObjectStub<SessionCoordinator>,
+): Promise<SessionDownloadSnapshot> {
+  return runInDurableObject(stub, async (_instance, state) => ({
+    alarmAt: await state.storage.getAlarm(),
+    permits: state.storage.sql
+      .exec<SessionDownloadPermitRow>(
+        `SELECT permit_id, download_id, sequence, acquired_at, renewed_at, expires_at
+         FROM session_download_permits ORDER BY permit_id`,
+      )
+      .toArray(),
+  }));
+}
+
+async function resetSessionDownloadPermitMutationAudit(
+  stub: DurableObjectStub<SessionCoordinator>,
+): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(
+      `CREATE TABLE IF NOT EXISTS test_session_download_permit_mutations (
+         mutation_id INTEGER PRIMARY KEY
+       )`,
+    );
+    for (const operation of ['INSERT', 'UPDATE', 'DELETE'] as const) {
+      state.storage.sql.exec(
+        `CREATE TRIGGER IF NOT EXISTS test_session_download_permit_${operation.toLowerCase()}
+         AFTER ${operation} ON session_download_permits
+         BEGIN
+           INSERT INTO test_session_download_permit_mutations (mutation_id) VALUES (NULL);
+         END`,
+      );
+    }
+    state.storage.sql.exec('DELETE FROM test_session_download_permit_mutations');
+  });
+}
+
+async function readSessionDownloadPermitMutationCount(
+  stub: DurableObjectStub<SessionCoordinator>,
+): Promise<number> {
+  return runInDurableObject(
+    stub,
+    (_instance, state) =>
+      state.storage.sql
+        .exec<SessionDownloadPermitMutationCountRow>(
+          'SELECT COUNT(*) AS count FROM test_session_download_permit_mutations',
+        )
+        .one().count,
+  );
+}
+
+async function expectSessionDownloadStorageUnchanged(
+  stub: DurableObjectStub<SessionCoordinator>,
+  before: SessionDownloadSnapshot,
+): Promise<void> {
+  expect(await readSessionDownloadPermitMutationCount(stub)).toBe(0);
+  expect(await readSessionDownloadSnapshot(stub)).toEqual(before);
+}
+
+async function expireSessionDownloadPermit(
+  stub: DurableObjectStub<SessionCoordinator>,
+  permitId: string,
+): Promise<readonly string[]> {
+  return runInDurableObject(stub, (_instance, state) => {
+    const expiredAt = Date.now() - 1;
+    return state.storage.sql
+      .exec<SessionDownloadPermitIdRow>(
+        `UPDATE session_download_permits
+         SET acquired_at = ?, renewed_at = ?, expires_at = ?
+         WHERE permit_id = ?
+         RETURNING permit_id`,
+        expiredAt - 2,
+        expiredAt - 1,
+        expiredAt,
+        permitId,
+      )
+      .toArray()
+      .map((row) => row.permit_id);
   });
 }
 
 async function readSessionDownloadPermits(
   stub: DurableObjectStub<SessionCoordinator>,
 ): Promise<SessionDownloadPermitRow[]> {
-  return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql
-      .exec<SessionDownloadPermitRow>(
-        `SELECT permit_id, download_id, sequence, acquired_at, renewed_at, expires_at
-         FROM session_download_permits ORDER BY permit_id`,
-      )
-      .toArray(),
-  );
+  return [...(await readSessionDownloadSnapshot(stub)).permits];
 }
 
 function probedMedia(overrides: Partial<ProbedMedia> = {}): ProbedMedia {
@@ -673,7 +792,8 @@ describe('SessionCoordinator in workerd', () => {
         })
       ).status,
     ).toBe(429);
-    const beforeWrongHash = await readSessionDownloadPermits(stub);
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeWrongHash = await readSessionDownloadSnapshot(stub);
     const wrongHash = await hashIdentifier('wrong-download-session');
     for (const [operation, request] of [
       ['acquire', { sessionHash: wrongHash, downloadId, permitId: createOpaqueId() }],
@@ -682,7 +802,7 @@ describe('SessionCoordinator in workerd', () => {
     ] as const) {
       expect((await sessionDownloadPermit(stub, operation, request)).status).toBe(401);
     }
-    expect(await readSessionDownloadPermits(stub)).toEqual(beforeWrongHash);
+    await expectSessionDownloadStorageUnchanged(stub, beforeWrongHash);
     const replay = await sessionDownloadPermit(stub, 'acquire', {
       sessionHash,
       downloadId,
@@ -699,6 +819,14 @@ describe('SessionCoordinator in workerd', () => {
       ).status,
     ).toBe(409);
 
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeRenewal = await readSessionDownloadSnapshot(stub);
+    const targetBeforeRenewal = beforeRenewal.permits.find(
+      (row) => row.permit_id === permitIds[0],
+    )!;
+    const peersBeforeRenewal = beforeRenewal.permits.filter(
+      (row) => row.permit_id !== permitIds[0],
+    );
     const renewed = await sessionDownloadPermit(stub, 'renew', {
       sessionHash,
       downloadId,
@@ -708,6 +836,24 @@ describe('SessionCoordinator in workerd', () => {
     const renewedBody = (await renewed.json()) as Record<string, unknown>;
     expect(renewed.status).toBe(200);
     expect(renewedBody).toMatchObject({ ok: true, sequence: 1 });
+    const afterRenewal = await readSessionDownloadSnapshot(stub);
+    expect(await readSessionDownloadPermitMutationCount(stub)).toBe(1);
+    expect(afterRenewal.permits.filter((row) => row.permit_id !== permitIds[0])).toEqual(
+      peersBeforeRenewal,
+    );
+    const renewedTarget = afterRenewal.permits.find((row) => row.permit_id === permitIds[0])!;
+    expect(renewedTarget).toMatchObject({
+      permit_id: targetBeforeRenewal.permit_id,
+      download_id: targetBeforeRenewal.download_id,
+      sequence: 1,
+      acquired_at: targetBeforeRenewal.acquired_at,
+      expires_at: renewedBody['expiresAt'],
+    });
+    expect(renewedTarget.renewed_at).toBeGreaterThanOrEqual(targetBeforeRenewal.renewed_at);
+    expect(renewedTarget.renewed_at).toBeLessThan(renewedTarget.expires_at);
+
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeRenewReplay = await readSessionDownloadSnapshot(stub);
     const renewReplay = await sessionDownloadPermit(stub, 'renew', {
       sessionHash,
       downloadId,
@@ -715,6 +861,10 @@ describe('SessionCoordinator in workerd', () => {
       sequence: 1,
     });
     await expect(renewReplay.json()).resolves.toEqual(renewedBody);
+    await expectSessionDownloadStorageUnchanged(stub, beforeRenewReplay);
+
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeSkippedSequence = await readSessionDownloadSnapshot(stub);
     expect(
       (
         await sessionDownloadPermit(stub, 'renew', {
@@ -725,6 +875,7 @@ describe('SessionCoordinator in workerd', () => {
         })
       ).status,
     ).toBe(409);
+    await expectSessionDownloadStorageUnchanged(stub, beforeSkippedSequence);
     expect(
       (
         await sessionDownloadPermit(stub, 'release', {
@@ -772,35 +923,144 @@ describe('SessionCoordinator in workerd', () => {
     expect(JSON.stringify(stored)).not.toContain(privateMediaUrl);
   });
 
-  it('prunes expired session download permits through the coordinator alarm', async () => {
+  it('prunes only the expired download row and preserves the live alarm deadline', async () => {
     const rawId = 'expiring-download-permit-session';
     const sessionHash = await hashIdentifier(rawId);
     const csrfHash = await hashIdentifier('expiring-download-permit-csrf');
     const now = Date.now();
     const stub = sessionStub(rawId);
     await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const downloadId = createOpaqueId();
+    const livePermitId = createOpaqueId();
+    const expiredPermitId = createOpaqueId();
     expect(
       (
         await sessionDownloadPermit(stub, 'acquire', {
           sessionHash,
-          downloadId: createOpaqueId(),
-          permitId: createOpaqueId(),
+          downloadId,
+          permitId: livePermitId,
         })
       ).status,
     ).toBe(201);
-
-    await runInDurableObject(stub, (_instance, state) => {
-      const expiredAt = Date.now() - 1;
-      state.storage.sql.exec(
-        `UPDATE session_download_permits
-         SET acquired_at = ?, renewed_at = ?, expires_at = ?`,
-        expiredAt - 2,
-        expiredAt - 1,
-        expiredAt,
-      );
-    });
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'acquire', {
+          sessionHash,
+          downloadId,
+          permitId: expiredPermitId,
+        })
+      ).status,
+    ).toBe(201);
+    await expect(expireSessionDownloadPermit(stub, expiredPermitId)).resolves.toEqual([
+      expiredPermitId,
+    ]);
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeAlarm = await readSessionDownloadSnapshot(stub);
+    const livePermit = beforeAlarm.permits.find((row) => row.permit_id === livePermitId)!;
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
-    expect(await readSessionDownloadPermits(stub)).toEqual([]);
+    const afterAlarm = await readSessionDownloadSnapshot(stub);
+    expect(await readSessionDownloadPermitMutationCount(stub)).toBe(1);
+    expect(afterAlarm.permits).toEqual([livePermit]);
+    expect(afterAlarm.alarmAt).toBe(livePermit.expires_at);
+  });
+
+  it('renews one target and deletes only expired siblings', async () => {
+    const rawId = 'targeted-download-renewal-session';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('targeted-download-renewal-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const downloadId = createOpaqueId();
+    const targetPermitId = createOpaqueId();
+    const livePeerId = createOpaqueId();
+    const expiredPeerId = createOpaqueId();
+    for (const permitId of [targetPermitId, livePeerId, expiredPeerId]) {
+      expect(
+        (await sessionDownloadPermit(stub, 'acquire', { sessionHash, downloadId, permitId }))
+          .status,
+      ).toBe(201);
+    }
+    await expect(expireSessionDownloadPermit(stub, expiredPeerId)).resolves.toEqual([
+      expiredPeerId,
+    ]);
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const before = await readSessionDownloadSnapshot(stub);
+    const targetBefore = before.permits.find((row) => row.permit_id === targetPermitId)!;
+    const livePeerBefore = before.permits.find((row) => row.permit_id === livePeerId)!;
+
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'renew', {
+          sessionHash,
+          downloadId,
+          permitId: targetPermitId,
+          sequence: 1,
+        })
+      ).status,
+    ).toBe(200);
+    const after = await readSessionDownloadSnapshot(stub);
+    expect(await readSessionDownloadPermitMutationCount(stub)).toBe(2);
+    expect(after.permits.find((row) => row.permit_id === expiredPeerId)).toBeUndefined();
+    expect(after.permits.find((row) => row.permit_id === livePeerId)).toEqual(livePeerBefore);
+    expect(after.permits.find((row) => row.permit_id === targetPermitId)).toMatchObject({
+      permit_id: targetBefore.permit_id,
+      download_id: targetBefore.download_id,
+      sequence: 1,
+      acquired_at: targetBefore.acquired_at,
+    });
+  });
+
+  it('rejects renewal when a peer permit is corrupt without mutating storage', async () => {
+    const rawId = 'corrupt-peer-download-session';
+    const sessionHash = await hashIdentifier(rawId);
+    const csrfHash = await hashIdentifier('corrupt-peer-download-csrf');
+    const now = Date.now();
+    const stub = sessionStub(rawId);
+    await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 600_000 });
+    const downloadId = createOpaqueId();
+    const targetPermitId = createOpaqueId();
+    const corruptPeerId = createOpaqueId();
+    for (const permitId of [targetPermitId, corruptPeerId]) {
+      expect(
+        (await sessionDownloadPermit(stub, 'acquire', { sessionHash, downloadId, permitId }))
+          .status,
+      ).toBe(201);
+    }
+    const corruptedRows = await runInDurableObject(
+      stub,
+      (_instance, state) =>
+        state.storage.sql.exec(
+          'UPDATE session_download_permits SET sequence = -1 WHERE permit_id = ?',
+          corruptPeerId,
+        ).rowsWritten,
+    );
+    expect(corruptedRows).toBe(1);
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const before = await readSessionDownloadSnapshot(stub);
+
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'renew', {
+          sessionHash,
+          downloadId,
+          permitId: createOpaqueId(),
+          sequence: 1,
+        })
+      ).status,
+    ).toBe(409);
+    await expectSessionDownloadStorageUnchanged(stub, before);
+    expect(
+      (
+        await sessionDownloadPermit(stub, 'renew', {
+          sessionHash,
+          downloadId,
+          permitId: targetPermitId,
+          sequence: 1,
+        })
+      ).status,
+    ).toBe(500);
+    await expectSessionDownloadStorageUnchanged(stub, before);
   });
 
   it('rejects acquire and renew without a useful session lease window and preserves capacity', async () => {
@@ -859,7 +1119,7 @@ describe('SessionCoordinator in workerd', () => {
     expect(await readSessionDownloadPermits(stub)).toHaveLength(1);
   });
 
-  it('serializes renew rollback before the same sequence can replay successfully', async () => {
+  it('reverse-CASes a failed renewal exactly before a serialized replay', async () => {
     const rawId = 'serialized-download-renew';
     const sessionHash = await hashIdentifier(rawId);
     const csrfHash = await hashIdentifier('serialized-download-renew-csrf');
@@ -871,11 +1131,49 @@ describe('SessionCoordinator in workerd', () => {
       downloadId: createOpaqueId(),
       permitId: createOpaqueId(),
     };
-    expect((await sessionDownloadPermit(stub, 'acquire', binding)).status).toBe(201);
+    const livePeerIds = [createOpaqueId(), createOpaqueId()];
+    const expiredPeerId = createOpaqueId();
+    for (const permitId of [binding.permitId, ...livePeerIds, expiredPeerId]) {
+      expect(
+        (
+          await sessionDownloadPermit(stub, 'acquire', {
+            sessionHash,
+            downloadId: binding.downloadId,
+            permitId,
+          })
+        ).status,
+      ).toBe(201);
+    }
+    await expect(expireSessionDownloadPermit(stub, expiredPeerId)).resolves.toEqual([
+      expiredPeerId,
+    ]);
     const renewal = { ...binding, sequence: 1 };
+
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeFailure = await readSessionDownloadSnapshot(stub);
+    expect((await renewSessionDownloadPermitWithAlarmFailure(stub, renewal)).status).toBe(500);
+    const afterFailure = await readSessionDownloadSnapshot(stub);
+    expect(await readSessionDownloadPermitMutationCount(stub)).toBe(3);
+    expect(afterFailure.permits).toEqual(
+      beforeFailure.permits.filter((row) => row.permit_id !== expiredPeerId),
+    );
+    expect(afterFailure.alarmAt).toBe(beforeFailure.alarmAt);
+
+    await resetSessionDownloadPermitMutationAudit(stub);
+    const beforeSerializedReplay = await readSessionDownloadSnapshot(stub);
+    const peersBeforeSerializedReplay = beforeSerializedReplay.permits.filter(
+      (row) => row.permit_id !== binding.permitId,
+    );
     const result = await concurrentAlarmFailure(stub, 'renew', renewal);
     expect(result).toEqual({ firstStatus: 500, replayBlocked: true, replayStatus: 200 });
-    expect((await readSessionDownloadPermits(stub))[0]?.['sequence']).toBe(1);
+    const afterSerializedReplay = await readSessionDownloadSnapshot(stub);
+    expect(await readSessionDownloadPermitMutationCount(stub)).toBe(3);
+    expect(
+      afterSerializedReplay.permits.filter((row) => row.permit_id !== binding.permitId),
+    ).toEqual(peersBeforeSerializedReplay);
+    expect(
+      afterSerializedReplay.permits.find((row) => row.permit_id === binding.permitId)?.sequence,
+    ).toBe(1);
   });
 
   it('persists only opaque permit state and cleans an expired lease by alarm', async () => {

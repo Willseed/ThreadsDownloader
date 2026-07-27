@@ -69,17 +69,6 @@ function clonePermit(permit: SessionDownloadPermit): SessionDownloadPermit {
   return { ...permit };
 }
 
-function samePermit(left: SessionDownloadPermit, right: SessionDownloadPermit): boolean {
-  return (
-    left.permitId === right.permitId &&
-    left.downloadId === right.downloadId &&
-    left.sequence === right.sequence &&
-    left.acquiredAt === right.acquiredAt &&
-    left.renewedAt === right.renewedAt &&
-    left.expiresAt === right.expiresAt
-  );
-}
-
 function validatePermit(permit: SessionDownloadPermit): void {
   if (
     !isSessionDownloadPermitId(permit.permitId) ||
@@ -253,32 +242,6 @@ export function releaseSessionDownloadPermit(
     permits: current.permits
       .filter((permit) => permit.permitId !== input.permitId)
       .map(clonePermit),
-  };
-}
-
-export function restoreSessionDownloadPermitAfterAlarmFailure(
-  state: SessionDownloadAdmissionState,
-  input: {
-    readonly previous: SessionDownloadPermit;
-    readonly attempted: SessionDownloadPermit;
-  },
-): SessionDownloadAdmissionState {
-  validateState(state);
-  validatePermit(input.previous);
-  validatePermit(input.attempted);
-  if (
-    input.previous.permitId !== input.attempted.permitId ||
-    input.previous.downloadId !== input.attempted.downloadId ||
-    input.previous.acquiredAt !== input.attempted.acquiredAt ||
-    input.attempted.sequence !== input.previous.sequence + 1 ||
-    input.attempted.renewedAt < input.previous.renewedAt
-  ) {
-    return fail('SESSION_DOWNLOAD_INVALID');
-  }
-  return {
-    permits: state.permits.map((permit) =>
-      samePermit(permit, input.attempted) ? clonePermit(input.previous) : clonePermit(permit),
-    ),
   };
 }
 

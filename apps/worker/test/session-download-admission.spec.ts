@@ -5,7 +5,6 @@ import {
   MAX_CONCURRENT_SESSION_DOWNLOADS,
   nextSessionDownloadPermitDeadline,
   releaseSessionDownloadPermit,
-  restoreSessionDownloadPermitAfterAlarmFailure,
   renewSessionDownloadPermit,
   SESSION_DOWNLOAD_PERMIT_LEASE_MS,
   SessionDownloadAdmissionStateError,
@@ -157,50 +156,6 @@ describe('session download admission state', () => {
         }),
       ),
     ).toBe('SESSION_DOWNLOAD_INVALID');
-  });
-
-  it('restores the previous lease after alarm failure without exposing a fifth slot', () => {
-    let state = empty;
-    for (let index = 0; index < MAX_CONCURRENT_SESSION_DOWNLOADS; index += 1) {
-      state = acquireSessionDownloadPermit(state, {
-        now: 1_000,
-        sessionExpiresAt: 1_000_000,
-        permitId: opaque24(index + 1),
-        downloadId,
-      }).state;
-    }
-    const previous = state.permits[0]!;
-    const renewal = renewSessionDownloadPermit(state, {
-      now: 30_000,
-      sessionExpiresAt: 1_000_000,
-      permitId: previous.permitId,
-      downloadId,
-      sequence: 1,
-    });
-    const restored = restoreSessionDownloadPermitAfterAlarmFailure(renewal.state, {
-      previous,
-      attempted: renewal.permit,
-    });
-
-    expect(restored.permits[0]).toEqual(previous);
-    expect(
-      errorCode(() =>
-        acquireSessionDownloadPermit(restored, {
-          now: previous.expiresAt - 1,
-          sessionExpiresAt: 1_000_000,
-          permitId: opaque24(10),
-          downloadId,
-        }),
-      ),
-    ).toBe('SESSION_DOWNLOAD_LIMIT');
-    expect(
-      acquireSessionDownloadPermit(restored, {
-        now: previous.expiresAt,
-        sessionExpiresAt: 1_000_000,
-        permitId: opaque24(10),
-        downloadId,
-      }).state.permits,
-    ).toHaveLength(1);
   });
 
   it('releases only an exact live binding and reports the earliest alarm deadline', () => {

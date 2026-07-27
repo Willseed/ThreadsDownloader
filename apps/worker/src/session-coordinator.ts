@@ -25,7 +25,6 @@ import {
   nextSessionDownloadPermitDeadline,
   pruneSessionDownloadPermits,
   releaseSessionDownloadPermit,
-  restoreSessionDownloadPermitAfterAlarmFailure,
   renewSessionDownloadPermit,
   SessionDownloadAdmissionStateError,
   SESSION_DOWNLOAD_PERMIT_MIN_REMAINING_MS,
@@ -166,8 +165,10 @@ interface PreparedVaultCandidate {
   readonly media: ResolveVaultStoreRequest['candidates'][number];
 }
 
+type SqlValue = string | number | ArrayBuffer | null;
+
 interface VaultCandidateRow {
-  readonly [key: string]: string | number | ArrayBuffer | null;
+  readonly [key: string]: SqlValue;
   readonly session_hash: string;
   readonly state: string;
   readonly issued_at: number;
@@ -180,6 +181,19 @@ interface VaultCandidateRow {
   readonly sealed_grant: string | null;
   readonly reservation_id: string | null;
   readonly reservation_expires_at: number | null;
+}
+
+interface AlarmDeadlineRow {
+  readonly [key: string]: SqlValue;
+  readonly download_deadline: SqlValue;
+  readonly batch_deadline: SqlValue;
+  readonly reservation_deadline: SqlValue;
+  readonly consumption_deadline: SqlValue;
+}
+
+interface SessionDownloadPermitIdRow {
+  readonly [key: string]: SqlValue;
+  readonly permit_id: SqlValue;
 }
 
 export function decodeCreateSessionRequest(value: unknown): CreateSessionInput | null {
@@ -477,51 +491,116 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     }
   }
 
-  private pruneSessionDownloadStorage(now: number): void {
-    const next = pruneSessionDownloadPermits(this.readSessionDownloadState(), now);
-    this.writeSessionDownloadState(next);
+  private compareAndSwapSessionDownloadPermit(
+    expected: SessionDownloadPermit,
+    replacement: SessionDownloadPermit,
+  ): void {
+    if (
+      replacement.permitId !== expected.permitId ||
+      replacement.downloadId !== expected.downloadId ||
+      replacement.acquiredAt !== expected.acquiredAt
+    ) {
+      throw new Error('Session download permit binding changed unexpectedly.');
+    }
+    const updated = this.ctx.storage.sql.exec<SessionDownloadPermitIdRow>(
+      `UPDATE session_download_permits
+       SET sequence = ?, renewed_at = ?, expires_at = ?
+       WHERE permit_id = ? AND download_id = ? AND sequence = ? AND acquired_at = ?
+         AND renewed_at = ? AND expires_at = ?
+       RETURNING permit_id`,
+      replacement.sequence,
+      replacement.renewedAt,
+      replacement.expiresAt,
+      expected.permitId,
+      expected.downloadId,
+      expected.sequence,
+      expected.acquiredAt,
+      expected.renewedAt,
+      expected.expiresAt,
+    );
+    if (updated.one().permit_id !== replacement.permitId) {
+      throw new Error('Stored session download permit changed unexpectedly.');
+    }
   }
 
-  private readVaultDeadline(): number | null {
-    const batchDeadline = this.ctx.storage.sql
-      .exec<{ deadline: number | null }>(
-        `SELECT MIN(
-           CASE
-             WHEN state = 'staging' AND staging_expires_at < expires_at
-               THEN staging_expires_at
-             ELSE expires_at
-           END
-         ) AS deadline
-         FROM resolved_media_batches`,
+  private deleteExpiredSessionDownloadPermits(
+    current: SessionDownloadAdmissionState,
+    next: SessionDownloadAdmissionState,
+    now: number,
+  ): void {
+    const expiredPermitIds = current.permits
+      .filter((permit) => permit.expiresAt <= now)
+      .map((permit) => permit.permitId)
+      .sort();
+    if (expiredPermitIds.length === 0) {
+      return;
+    }
+    const deletedPermitIds = this.ctx.storage.sql
+      .exec<SessionDownloadPermitIdRow>(
+        `DELETE FROM session_download_permits
+         WHERE expires_at <= ?
+         RETURNING permit_id`,
+        now,
       )
-      .toArray()[0]?.['deadline'];
-    const reservationDeadline = this.ctx.storage.sql
-      .exec<{ deadline: number | null }>(
-        'SELECT MIN(reservation_expires_at) AS deadline FROM resolved_media_candidates',
+      .toArray()
+      .map((row) => row.permit_id)
+      .sort();
+    if (
+      current.permits.length - next.permits.length !== expiredPermitIds.length ||
+      deletedPermitIds.some((permitId) => typeof permitId !== 'string') ||
+      deletedPermitIds.length !== expiredPermitIds.length ||
+      deletedPermitIds.some((permitId, index) => permitId !== expiredPermitIds[index])
+    ) {
+      throw new Error('Stored expired session download permits changed unexpectedly.');
+    }
+  }
+
+  private pruneSessionDownloadStorage(now: number): SessionDownloadAdmissionState {
+    const current = this.readSessionDownloadState();
+    const next = pruneSessionDownloadPermits(current, now);
+    this.deleteExpiredSessionDownloadPermits(current, next, now);
+    return next;
+  }
+
+  private readAlarmDeadlines(expectedDownloadDeadline: number | null): readonly number[] {
+    const row = this.ctx.storage.sql
+      .exec<AlarmDeadlineRow>(
+        `SELECT
+           (SELECT MIN(expires_at) FROM session_download_permits) AS download_deadline,
+           (SELECT MIN(
+              CASE
+                WHEN state = 'staging' AND staging_expires_at < expires_at
+                  THEN staging_expires_at
+                ELSE expires_at
+              END
+            ) FROM resolved_media_batches) AS batch_deadline,
+           (SELECT MIN(reservation_expires_at)
+            FROM resolved_media_candidates) AS reservation_deadline,
+           (SELECT MIN(expires_at)
+            FROM resolved_media_consumptions) AS consumption_deadline`,
       )
-      .toArray()[0]?.['deadline'];
-    const consumptionDeadline = this.ctx.storage.sql
-      .exec<{ deadline: number | null }>(
-        'SELECT MIN(expires_at) AS deadline FROM resolved_media_consumptions',
-      )
-      .toArray()[0]?.['deadline'];
-    const deadlines = [batchDeadline, reservationDeadline, consumptionDeadline].filter(
+      .one();
+    if (row.download_deadline !== expectedDownloadDeadline) {
+      throw new Error('Stored session download permit deadline is invalid.');
+    }
+    return [row.batch_deadline, row.reservation_deadline, row.consumption_deadline].filter(
       (value): value is number => typeof value === 'number',
     );
-    return deadlines.length === 0 ? null : Math.min(...deadlines);
   }
 
-  private async scheduleAlarm(record: SessionRecord): Promise<void> {
+  private async scheduleAlarm(
+    record: SessionRecord,
+    validatedDownloadState?: SessionDownloadAdmissionState,
+  ): Promise<void> {
     const permitDeadline = nextResolvePermitDeadline(this.readResolveState());
     const downloadPermitDeadline = nextSessionDownloadPermitDeadline(
-      this.readSessionDownloadState(),
+      validatedDownloadState ?? this.readSessionDownloadState(),
     );
-    const vaultDeadline = this.readVaultDeadline();
     const deadlines = [
       record.expiresAt,
       permitDeadline,
       downloadPermitDeadline,
-      vaultDeadline,
+      ...this.readAlarmDeadlines(downloadPermitDeadline),
     ].filter((value): value is number => value !== null);
     await this.ctx.storage.setAlarm(Math.min(...deadlines));
   }
@@ -1454,6 +1533,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
           readonly record: SessionRecord;
           readonly permit: SessionDownloadPermit;
           readonly previous: SessionDownloadPermit;
+          readonly state: SessionDownloadAdmissionState;
           readonly advanced: boolean;
         }
       | { readonly status: SessionDownloadAdmissionHttpErrorStatus };
@@ -1479,13 +1559,18 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
             downloadId: input.downloadId,
             sequence: input.sequence,
           });
-          this.writeSessionDownloadState(transition.state);
+          const advanced = transition.permit.sequence > previous.sequence;
+          if (advanced) {
+            this.compareAndSwapSessionDownloadPermit(previous, transition.permit);
+          }
+          this.deleteExpiredSessionDownloadPermits(current, transition.state, renewedAt);
           return {
             status: 200,
             record,
             permit: transition.permit,
             previous,
-            advanced: transition.permit.sequence > previous.sequence,
+            state: transition.state,
+            advanced,
           } as const;
         } catch (error: unknown) {
           if (error instanceof SessionDownloadAdmissionStateError) {
@@ -1501,15 +1586,11 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       return safeJson(result.status, { ok: false });
     }
     try {
-      await this.scheduleAlarm(result.record);
+      await this.scheduleAlarm(result.record, result.state);
     } catch {
       if (result.advanced) {
         this.ctx.storage.transactionSync(() => {
-          const restored = restoreSessionDownloadPermitAfterAlarmFailure(
-            this.readSessionDownloadState(),
-            { previous: result.previous, attempted: result.permit },
-          );
-          this.writeSessionDownloadState(restored);
+          this.compareAndSwapSessionDownloadPermit(result.permit, result.previous);
         });
       }
       return safeJson(500, { ok: false });
@@ -1709,10 +1790,10 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       this.initializeTables();
       return;
     }
-    this.ctx.storage.transactionSync(() => {
+    const downloadState = this.ctx.storage.transactionSync(() => {
       this.pruneResolveStorage(now);
-      this.pruneSessionDownloadStorage(now);
+      return this.pruneSessionDownloadStorage(now);
     });
-    await this.scheduleAlarm(this.readRecord()!);
+    await this.scheduleAlarm(this.readRecord()!, downloadState);
   }
 }
