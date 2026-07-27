@@ -46,12 +46,12 @@ describe('I18nService', () => {
   it('switches metadata at runtime and falls back safely', () => {
     const service = TestBed.inject(I18nService);
 
-    expect(service.setLocale('zh-CN')).toBe('zh-CN');
+    expect(service.setLocale('en')).toBe('en');
     TestBed.flushEffects();
-    expect(document.documentElement.lang).toBe('zh-CN');
-    expect(document.title).toBe(MESSAGE_CATALOGS['zh-CN'].routes.home);
+    expect(document.documentElement.lang).toBe('en');
+    expect(document.title).toBe(MESSAGE_CATALOGS.en.routes.home);
     expect(document.querySelector('meta[name="description"]')?.getAttribute('content')).toBe(
-      MESSAGE_CATALOGS['zh-CN'].metadata.description,
+      MESSAGE_CATALOGS.en.metadata.description,
     );
 
     expect(service.setLocale('unsupported')).toBe(DEFAULT_LOCALE);
@@ -79,7 +79,10 @@ describe('I18nService', () => {
 
   it('updates the current route title from a stable title key', () => {
     TestBed.configureTestingModule({ providers: [LocalizedTitleStrategy] });
+    const service = TestBed.inject(I18nService);
     const strategy = TestBed.inject(LocalizedTitleStrategy);
+
+    service.setLocale('en');
 
     strategy.updateTitle({
       root: {
@@ -88,6 +91,6 @@ describe('I18nService', () => {
     } as unknown as RouterStateSnapshot);
     TestBed.flushEffects();
 
-    expect(document.title).toBe(MESSAGE_CATALOGS['zh-TW'].routes.privacy);
+    expect(document.title).toBe(MESSAGE_CATALOGS.en.routes.privacy);
   });
 });

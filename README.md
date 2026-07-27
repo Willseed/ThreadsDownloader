@@ -12,8 +12,10 @@ by Threads, Meta, or Instagram.
 
 1. Open the [live service](https://threads.pylot.dev/).
 2. Paste the URL of a public Threads post.
-3. Confirm that you own the content or have permission to download and use it.
-4. Select **Get video**; the security check normally completes automatically without another action.
+3. Confirm that you own the content, have permission, or may make the intended use under applicable
+   law.
+4. Select **Get video**. The security check usually runs automatically, but follow any on-screen
+   prompt if additional action is required.
 5. Choose the video version you need and download it.
 
 ## Supported content
@@ -32,7 +34,7 @@ questions, email [pony@pylot.dev](mailto:pony@pylot.dev).
 
 ## Troubleshooting
 
-- **Please complete the security check first.** Wait a few seconds and try again, and make sure the
+- **Complete the security check first.** Wait a few seconds and try again, and make sure the
   browser is not blocking scripts required by the site.
 - **The post cannot be resolved.** Confirm that the URL points to a public post that does not require
   sign-in. If it still fails later, the post may be outside the supported scope.

@@ -55,3 +55,27 @@
 - 「法律／按需查看」是依現有 eyebrow 角色的翻譯；尚未透過實際畫面使用性測試比較是否應簡化為「法律信息」。
 - 隱私頁以「定时任务」呈現 Durable Objects Alarm 的使用者層級意義；若未來需對技術讀者精確暴露 Alarm 機制，可再評估使用「定时器」或英文技術名稱。
 - 本輪未改變既有 locale URL、SSR/prerender、`hreflang` 與 `Intl.NumberFormat` 未確認事項。
+
+## en 細項查核（2026-07-27）
+
+### 證據與範圍
+
+- 本輪只查核英文 catalog 的 UI、ARIA、API 錯誤、metadata、法務文案、locale selector 名稱與 canonical `README.md`；未重複研究 runtime signal service、typed catalog、fallback 或 route metadata 架構。
+- 依使用者指定，以 `ask-bridge 0.2.9 --provider chatgpt --model medium --timeout 1500 --headless=true` 附上完整英文 catalog 草稿與 `README.md`。回覆是外部 AI 的語言審閱候選，不是官方規範、法律意見、伺服器契約或測試證據；採用項目再以現有 worker 映射、typed catalog 與本機測試驗證。
+- 本輪沒有使用 Web Search；附件中的英文一致性可由 ask-bridge 輔助審閱，行為與契約則可由現有程式碼和測試重現確認。
+
+### 結論
+
+1. 英文 selector 使用 BCP 47 language tag `en`、`ltr` 與原生名稱 `English`；主要 UI 固定使用 `video version`、`security check`、`secure session`、`public post` 與 `download job`。
+2. Turnstile 容器實際是具 `aria-label` 的驗證群組，因此對輔助科技使用 `Security verification`；可見文字仍保留較自然的 `security check`。動態 handoff 不承諾檔案已儲存，只說明控制權已交給瀏覽器。
+3. API error code 維持封閉本地映射。`MEDIA_NOT_FOUND` 以 `supported video version` 描述服務能力，避免把技術可取得與法律可下載混為一談；`DOWNLOAD_EXPIRED` 指示開始新的下載，不強迫重新解析。
+4. ask-bridge 建議移除 `THREADS_BOT_BLOCKED` 與 `INTERNAL_ERROR` 的 `temporarily`，但現有 worker 明確將前者由暫時阻擋頁面映射為 503，並以固定暫時錯誤訊息產生後者；本輪依可重現程式證據保留該用詞，不把 AI 建議視為伺服器事實。
+5. 法務英文保留公開可見不等於授權、研究或非商業目的不當然構成授權或合法、不得繞過限制、非官方隸屬，以及不宣稱全加密、完全無紀錄、立即物理刪除或任何特定法域程序。
+6. `README.md` 維持唯一 canonical 英文完整版與 `English | 繁體中文 | 简体中文` 對稱導覽；權利確認納入適用法律下的預定使用，安全驗證步驟避免承諾一定自動完成，疑難排解文字與英文 UI 對齊。
+
+### 尚未確認
+
+- locale 仍未進入 URL，且 SSR/prerender、`hreflang` 與 crawler 可讀的每語言 metadata 仍未確認；runtime metadata 不取代伺服器或預渲染 SEO 產物。
+- 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否以 `Intl.NumberFormat('en')` 處理數字分隔與小數。
+- 隱私頁的資料流、Cloudflare 接收者與保存期限沿用目前程式碼及既有已測法務契約；本輪只審閱英文表述，未重新驗證 production 設定。
+- SpaceX 沿用既有非隸屬名單；本輪未重新研究列名原因，也未改變既定法務範圍。

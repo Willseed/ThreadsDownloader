@@ -80,7 +80,7 @@ describe('AppComponent routing', () => {
     expect(root.querySelectorAll('#main-content')).toHaveLength(1);
   });
 
-  it('switches all reactive copy and metadata between supported Chinese locales', async () => {
+  it('switches all reactive copy and metadata between supported locales', async () => {
     await router.navigateByUrl('/');
     fixture.detectChanges();
     expect(failPendingSessionRequests()).toBe(1);
@@ -92,6 +92,7 @@ describe('AppComponent routing', () => {
     expect([...select!.options].map((option) => [option.value, option.text])).toEqual([
       ['zh-TW', '繁體中文'],
       ['zh-CN', '简体中文'],
+      ['en', 'English'],
     ]);
 
     select!.value = 'zh-CN';
@@ -104,6 +105,19 @@ describe('AppComponent routing', () => {
     expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('开始下载');
     expect(root.querySelector('#page-title')?.textContent?.trim()).toBe('下载公开 Threads 视频');
     expect(select?.getAttribute('aria-label')).toBe('选择语言');
+
+    select!.value = 'en';
+    select!.dispatchEvent(new Event('change'));
+    TestBed.flushEffects();
+    fixture.detectChanges();
+
+    expect(document.documentElement.lang).toBe('en');
+    expect(document.title).toBe('Threads Downloader — Public Media Research Utility');
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('Start download');
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe(
+      'Download public Threads videos',
+    );
+    expect(select?.getAttribute('aria-label')).toBe('Select language');
   });
 
   it.each([
