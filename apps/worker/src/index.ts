@@ -298,7 +298,7 @@ function applyResponsePolicy(request: Request, response: Response): Response {
 function markdownResponse(body: string): Response {
   return new Response(body, {
     headers: {
-      'cache-control': 'public, max-age=3600',
+      'cache-control': 'no-store',
       'content-type': 'text/markdown',
     },
   });
@@ -307,7 +307,7 @@ function markdownResponse(body: string): Response {
 function robotsResponse(): Response {
   return new Response(robotText, {
     headers: {
-      'cache-control': 'public, max-age=3600',
+      'cache-control': 'no-store',
       'content-type': 'text/plain',
     },
   });
@@ -316,7 +316,7 @@ function robotsResponse(): Response {
 function sitemapResponse(): Response {
   return new Response(sitemapXml, {
     headers: {
-      'cache-control': 'public, max-age=3600',
+      'cache-control': 'no-store',
       'content-type': 'application/xml',
     },
   });
