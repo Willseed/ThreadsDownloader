@@ -339,7 +339,10 @@ function errorResponse(
   runtime: ResolvePublicMediaRuntime,
 ): Response {
   const mapped = publicFailure(error);
-  if (mapped.status >= 500 && mapped.status <= 599) {
+  if (
+    (mapped.status >= 500 && mapped.status <= 599) ||
+    (stage === 'resolve' && mapped.code === 'MEDIA_NOT_FOUND')
+  ) {
     reportServerFailure(runtime, { requestId, stage, code: failureCode(error) });
   }
   return Response.json(createApiError(mapped.code, mapped.message, requestId), {
@@ -384,6 +387,7 @@ async function probeCandidates(
   const usable: ProbedMedia[] = [];
   const finalUrls = new Set<string>();
   const transientFailures = new Set<MediaProbeErrorCode>();
+  let nontransientFailure: MediaProbeErrorCode | undefined;
 
   for (const result of settled) {
     if (result.status === 'fulfilled') {
@@ -399,6 +403,8 @@ async function probeCandidates(
     }
     if (transientProbeFailure(result.reason)) {
       transientFailures.add(result.reason.code);
+    } else {
+      nontransientFailure ??= result.reason.code;
     }
   }
 
@@ -408,7 +414,7 @@ async function probeCandidates(
     );
     throw new ResolvePublicMediaError(
       transientFailure === undefined ? 'MEDIA_NOT_FOUND' : 'RESOLVE_UNAVAILABLE',
-      transientFailure,
+      transientFailure ?? nontransientFailure,
     );
   }
   return usable;

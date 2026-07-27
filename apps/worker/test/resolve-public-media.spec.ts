@@ -1246,11 +1246,64 @@ describe('resolve public media failure telemetry', () => {
     expectFailureEventsSafe(harness.controls.failureEvents, ['private invalid signing key']);
   });
 
-  it('does not report 4xx failures', async () => {
-    const harness = createHarness({ replayStatus: 409 });
+  it.each([
+    [
+      'renderer empty result',
+      {
+        markupResponse: () =>
+          new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+            headers: { 'content-type': 'text/html' },
+          }),
+        rendererResponse: (options: RenderedBrowserScrapeOptions) =>
+          jsonResponse({
+            success: true,
+            result: [
+              ...renderedIdentity(options),
+              { selector: options.elements[2]!.selector, results: [] },
+              { selector: options.elements[3]!.selector, results: [] },
+            ],
+          }),
+      },
+      'RENDERED_MEDIA_NOT_FOUND',
+    ],
+    [
+      'nontransient probe rejection',
+      { probeResponse: () => new Response('private-probe-error', { status: 404 }) },
+      'MEDIA_PROBE_STATUS_INVALID',
+    ],
+  ] as const)(
+    'reports one exact PII-free event for a MEDIA_NOT_FOUND $0',
+    async (_name, options, code) => {
+      const harness = createHarness(options);
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(422);
+      expectError(result.body, 'MEDIA_NOT_FOUND');
+      expect(harness.controls.failureEvents).toEqual([
+        { requestId: REQUEST_ID, stage: 'resolve', code },
+      ]);
+      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual([
+        'code',
+        'requestId',
+        'stage',
+      ]);
+      expectFailureEventsSafe(harness.controls.failureEvents, ['private-probe-error']);
+    },
+  );
+
+  it.each([
+    ['Turnstile rejection', { replayStatus: 409 }, 403],
+    ['Threads access denial', { markupResponse: () => new Response(null, { status: 403 }) }, 403],
+    [
+      'Threads login requirement',
+      { markupResponse: () => new Response(null, { status: 401 }) },
+      422,
+    ],
+  ] as const)('does not report an ordinary $0 4xx', async (_name, options, status) => {
+    const harness = createHarness(options);
     const result = await execute(harness);
 
-    expect(result.response.status).toBe(403);
+    expect(result.response.status).toBe(status);
     expect(harness.controls.failureEvents).toEqual([]);
   });
 
