@@ -87,12 +87,15 @@ function markupReadError(code: BoundedMarkupReadErrorCode): never {
   throw new BoundedMarkupReadError(code);
 }
 
+async function requestReaderCancellation(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  await reader.cancel();
+}
+
 function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  try {
-    void reader.cancel().catch(() => undefined);
-  } catch {
-    // Cancellation is best-effort and must not replace the bounded read result.
-  }
+  // The async boundary turns a synchronous throw into a rejection too.
+  void requestReaderCancellation(reader).catch(() => undefined);
 }
 
 interface MarkupDecodeState {

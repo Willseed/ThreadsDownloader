@@ -724,7 +724,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
     const expiredHolderIds = previous.leases
       .filter((lease) => lease.expiresAt <= now)
       .map((lease) => lease.holderId)
-      .sort();
+      .sort((left, right) => left.localeCompare(right));
     if (expiredHolderIds.length > 0) {
       const deletedHolderIds = this.ctx.storage.sql
         .exec<{ readonly [key: string]: SqlValue; readonly holder_id: SqlValue }>(
@@ -735,7 +735,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
         )
         .toArray()
         .map((row) => row.holder_id)
-        .sort();
+        .sort((left, right) => String(left).localeCompare(String(right)));
       if (
         deletedHolderIds.some((holderId) => typeof holderId !== 'string') ||
         deletedHolderIds.length !== expiredHolderIds.length ||

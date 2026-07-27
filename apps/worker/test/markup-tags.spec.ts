@@ -25,9 +25,10 @@ function expectMarkupError(markup: string, code: string): void {
 
 function bodyWithThrowingRelease(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  cancel: () => Promise<void> = async () => undefined,
 ): ReadableStream<Uint8Array> {
   const reader = {
-    cancel: async () => undefined,
+    cancel,
     read,
     releaseLock() {
       throw new Error('private release failure');
@@ -50,16 +51,24 @@ async function expectBoundedReadError(
 }
 
 describe('readBoundedMarkup', () => {
-  it('preserves overflow and read errors when releasing the reader also fails', async () => {
+  it('preserves overflow and read errors when cancellation and release also fail', async () => {
     await expectBoundedReadError(
-      bodyWithThrowingRelease(async () => ({
-        done: false,
-        value: new Uint8Array(MAX_MARKUP_BYTES + 1),
-      })),
+      bodyWithThrowingRelease(
+        async () => ({
+          done: false,
+          value: new Uint8Array(MAX_MARKUP_BYTES + 1),
+        }),
+        () => {
+          throw new Error('private synchronous cancellation failure');
+        },
+      ),
       'MARKUP_READ_TOO_LARGE',
     );
     await expectBoundedReadError(
-      bodyWithThrowingRelease(async () => Promise.reject(new Error('private read failure'))),
+      bodyWithThrowingRelease(
+        async () => Promise.reject(new Error('private read failure')),
+        () => Promise.reject(new Error('private asynchronous cancellation failure')),
+      ),
       'MARKUP_READ_UNAVAILABLE',
     );
   });

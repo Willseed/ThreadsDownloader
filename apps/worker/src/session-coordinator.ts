@@ -531,7 +531,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
     const expiredPermitIds = current.permits
       .filter((permit) => permit.expiresAt <= now)
       .map((permit) => permit.permitId)
-      .sort();
+      .sort((left, right) => left.localeCompare(right));
     if (expiredPermitIds.length === 0) {
       return;
     }
@@ -544,7 +544,7 @@ export class SessionCoordinator extends DurableObject<SessionCoordinatorEnv> {
       )
       .toArray()
       .map((row) => row.permit_id)
-      .sort();
+      .sort((left, right) => String(left).localeCompare(String(right)));
     if (
       current.permits.length - next.permits.length !== expiredPermitIds.length ||
       deletedPermitIds.some((permitId) => typeof permitId !== 'string') ||
