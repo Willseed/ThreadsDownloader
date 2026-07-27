@@ -1,7 +1,7 @@
 # Turnstile Angular SPA 與 CSP 研究紀錄
 
 - 查證日期：2026-07-25；窄版 reflow 追加查證：2026-07-25；Web Analytics CSP
-  與 production lifecycle 故障追加查證：2026-07-27
+  與 production lifecycle 故障追加查證：2026-07-27；flexible 橫幅版面決策：2026-07-27
 - 狀態：完成
 - 適用專案：Threads Downloader 的 Angular SPA、同源 Worker API 與回應 CSP
 
@@ -59,13 +59,13 @@ ask-bridge，以相同參數重跑成功並產生完整回覆檔。ask-bridge �
 `flexible` 與 `compact`。其中 `compact` 是固定 `150px × 140px`，適用於 mobile
 interfaces、sidebars 與水平空間受限的布局；`flexible` 雖為容器寬度 100%，仍有
 300px 最小寬度。由於本頁在 320 CSS px viewport 扣除頁面與 challenge padding 後
-可能低於 300px，本專案固定採用：
+可能低於 300px，本專案當時採用：
 
 ```text
 size = compact
 ```
 
-此決策適用於目前的 Managed widget、單欄窄版布局與 explicit rendering。容器保留
+此決策當時適用於 Managed widget、單欄窄版布局與 explicit rendering。容器保留
 至少 150px 的 inline space、允許 `max-inline-size: 100%`，且不使用 transform、
 scale 或 `overflow: hidden` 裁切 widget。沒有採用或推測不存在官方保證的自動尺寸
 切換。
@@ -73,6 +73,32 @@ scale 或 `overflow: hidden` 裁切 widget。沒有採用或推測不存在官�
 Cloudflare 官方文件沒有保證 widget 在所有互動狀態均符合 WCAG 400% zoom／
 320 CSS px reflow，也未保證小於尺寸下限時會自動切換。正式可及性驗收仍需使用
 320 CSS px viewport 對實際 Turnstile widget 狀態執行 E2E；此項目前尚未確認。
+
+## 2026-07-27 flexible 橫幅版面決策
+
+本次直接沿用上節已由 Cloudflare 官方
+[Widget configurations](https://developers.cloudflare.com/turnstile/get-started/client-side-rendering/widget-configurations/)
+交叉確認的尺寸證據，沒有重複呼叫 ask-bridge，也沒有執行 Web Search query。官方
+reference 記載 `normal` 固定為 `300px × 65px`、`flexible` 為容器寬度 100%、高度
+`65px` 且最小寬度 `300px`，`compact` 則固定為 `150px × 140px`。
+
+首頁已改為置中單欄表單；compact 在 390 CSS px 與桌面表單內會形成直式方塊，與
+輸入框及主要按鈕的橫向視覺節奏不一致。因此 explicit render 改為：
+
+```text
+size = flexible
+```
+
+容器採 `inline-size: 100%`、`min-inline-size: 300px` 與
+`min-block-size: 65px`，不使用 transform、scale 或裁切。為在 320 CSS px viewport
+仍滿足官方 300px 最小寬度，只有最窄的 `max-width: 22rem` breakpoint 收斂
+downloader page 與 form 的水平 padding；頁面本身仍維持 320px 最小寬度，不降低
+既有控制項觸控目標，也不改變 Turnstile lifecycle 或驗證流程。
+
+本地 Playwright fixture 依同一官方尺寸契約模擬寬 100%、最小 300px、高 65px，並
+在 1280、390 與 320 CSS px viewport 驗證橫幅寬度、無水平 overflow、網址輸入首屏、
+44px 控制項、焦點、reduced motion 與 axe。這些測試證明應用程式容器與 reflow
+契約，不宣稱替代真實 Cloudflare iframe 在所有 challenge 狀態的正式可及性驗收。
 
 ## 2026-07-27 Cloudflare Web Analytics CSP 追加查證
 
@@ -185,6 +211,15 @@ mount 仍應共用 pending promise，不能在 load 前提早 render。這是同
   移除或容器已中斷連線時不得 render。這些是把官方 script 載入與 widget lifecycle
   映射到 Angular 的本地 race 防護，不是 Cloudflare 的 Angular 專屬規範。
 
+### Widget 尺寸與窄版 reflow
+
+- Explicit render 固定使用 `size: "flexible"`，讓官方 widget 在單欄表單內呈現寬
+  100%、高 65px 的橫幅，且遵守 300px 最小寬度。
+- 容器與最窄 breakpoint 必須保留至少 300px 可用 inline space；不得用 transform、
+  scale、`overflow: hidden` 或其他裁切方式把官方 widget 塞入較窄空間。
+- 320 CSS px viewport 的應用程式回歸測試必須同時保護無水平 overflow、網址輸入首屏、
+  44px 控制項、焦點與 axe；不得以降低頁面 min-width 解決尺寸衝突。
+
 ### Token 與 callback
 
 - success callback 取得的 token 只能送到同源 Worker API；secret 只存在 Worker
@@ -261,6 +296,7 @@ connect-src 'self';
 - 適用於瀏覽器端 Angular standalone SPA 的單一 Turnstile widget lifecycle。
 - 適用於目前以 JSON 傳送 token、由 Worker 呼叫 Siteverify 的同源 API 流程。
 - 適用於目前未啟用 pre-clearance、未 proxy/self-host Turnstile script 的部署。
+- 適用於目前置中單欄首頁與 320 CSS px 以上 viewport 的 flexible Turnstile 橫幅布局。
 - 適用於 Cloudflare proxy 的 automatic Web Analytics 注入與同源 `/cdn-cgi/rum`
   傳輸，不涵蓋 manual setup。
 - 本紀錄不確認任何 Threads 上游未公開 API 語意，也不改變 Worker 已有的
@@ -281,3 +317,5 @@ connect-src 'self';
 5. Turnstile 標準模式與 automatic Web Analytics 都沒有額外第三方 `connect-src`
    需求；若新增 pre-clearance、manual Web Analytics、WebSocket 或其他外部連線，
    必須針對新增範圍另行查證。
+6. 本地 E2E fixture 已保護 flexible 容器尺寸與頁面 reflow，但真實 Cloudflare iframe
+   在所有互動、錯誤與 challenge 狀態下的 320 CSS px／400% zoom 可及性仍尚未確認。

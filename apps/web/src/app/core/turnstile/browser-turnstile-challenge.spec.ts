@@ -182,7 +182,7 @@ describe('BrowserTurnstileChallenge', () => {
       'response-field': false,
       retry: 'auto',
       'refresh-expired': 'auto',
-      size: 'compact',
+      size: 'flexible',
     });
     expect(TURNSTILE_ACTION).toBe('resolve');
     expect(handle.status()).toBe('ready');

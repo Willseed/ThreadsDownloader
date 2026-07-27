@@ -61,13 +61,17 @@ const TURNSTILE_STUB = `
       queueMicrotask(callback);
     },
     render(container, options) {
+      if (options.size !== 'flexible') {
+        throw new Error('Expected a flexible Turnstile widget.');
+      }
       activeContainer = container;
       activeOptions = options;
       const indicator = document.createElement('div');
       indicator.setAttribute('role', 'status');
       indicator.setAttribute('aria-label', '安全驗證測試替身');
       indicator.textContent = '安全驗證已完成';
-      indicator.style.inlineSize = '150px';
+      indicator.style.inlineSize = '100%';
+      indicator.style.minInlineSize = '300px';
       indicator.style.minBlockSize = '65px';
       container.replaceChildren(indicator);
       queueMicrotask(() => options.callback(token));

@@ -108,6 +108,13 @@ test('keeps the primary form operable in the 1280 by 800 initial viewport', asyn
     expect(box!.y + box!.height).toBeLessThanOrEqual(viewport.height);
   }
 
+  const postUrlBox = await postUrl.boundingBox();
+  const turnstileBox = await page.locator('.turnstile-container').boundingBox();
+  expect(postUrlBox).not.toBeNull();
+  expect(turnstileBox).not.toBeNull();
+  expect(Math.round(turnstileBox!.width)).toBe(Math.round(postUrlBox!.width));
+  expect(Math.round(turnstileBox!.height)).toBe(65);
+
   const exampleUrl = 'https://www.threads.com/@research/post/example';
   await postUrl.fill(exampleUrl);
   await expect(postUrl).toHaveValue(exampleUrl);
@@ -132,9 +139,14 @@ test('shows the URL input in the initial 390 by 844 mobile viewport', async ({ p
   expect(box!.y).toBeGreaterThanOrEqual(0);
   expect(box!.y + box!.height).toBeLessThanOrEqual(844);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
+
+  const turnstileBox = await page.locator('.turnstile-container').boundingBox();
+  expect(turnstileBox).not.toBeNull();
+  expect(Math.round(turnstileBox!.width)).toBe(Math.round(box!.width));
+  expect(Math.round(turnstileBox!.height)).toBe(65);
 });
 
-test('reflows at 320 CSS pixels with compact verification and readable reduced motion', async ({
+test('reflows at 320 CSS pixels with flexible verification and readable reduced motion', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 320, height: 800 });
@@ -153,7 +165,8 @@ test('reflows at 320 CSS pixels with compact verification and readable reduced m
   const turnstile = page.locator('.turnstile-container');
   const turnstileBox = await turnstile.boundingBox();
   expect(turnstileBox).not.toBeNull();
-  expect(Math.round(turnstileBox!.width)).toBe(150);
+  expect(turnstileBox!.width).toBeGreaterThanOrEqual(300);
+  expect(Math.round(turnstileBox!.height)).toBe(65);
   expect(turnstileBox!.x).toBeGreaterThanOrEqual(0);
   expect(turnstileBox!.x + turnstileBox!.width).toBeLessThanOrEqual(viewport.innerWidth);
 

@@ -255,7 +255,6 @@ h3 {
 }
 
 .workbench {
-  overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 0.625rem;
@@ -314,9 +313,8 @@ h3 {
 }
 
 .turnstile-container {
-  justify-self: start;
-  inline-size: 150px;
-  max-inline-size: 100%;
+  inline-size: 100%;
+  min-inline-size: 300px;
   min-block-size: 65px;
 }
 
@@ -712,6 +710,13 @@ h3 {
 
   .retention-list {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 22rem) {
+  .downloader-page,
+  .workbench form {
+    padding-inline: 0.25rem;
   }
 }
 
