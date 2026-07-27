@@ -1,8 +1,11 @@
 import { parseCdnUrl, type CdnUrl, UpstreamPolicyError } from '../security/upstream-policy.js';
 import {
+  extractBoundedMediaMarkupParts,
   extractMediaMarkupParts,
+  type BoundedUtf8Markup,
   type MarkupCandidateSource,
   type MarkupScriptPayload,
+  type MediaMarkupParts,
 } from './markup-tags.js';
 
 const MAX_CANDIDATES = 10;
@@ -114,8 +117,7 @@ function classifyPayload(payload: MarkupScriptPayload): StructuredMediaCandidate
   return 'json';
 }
 
-export function extractMediaCandidates(markup: string): readonly MediaCandidate[] {
-  const parts = extractMediaMarkupParts(markup);
+function extractMediaCandidatesFromParts(parts: MediaMarkupParts): readonly MediaCandidate[] {
   const candidates: MediaCandidate[] = [...parts.candidates];
   const seen = new Set(candidates.map((candidate) => candidate.value.url.href));
 
@@ -135,4 +137,14 @@ export function extractMediaCandidates(markup: string): readonly MediaCandidate[
   }
 
   return candidates;
+}
+
+export function extractMediaCandidates(markup: string): readonly MediaCandidate[] {
+  return extractMediaCandidatesFromParts(extractMediaMarkupParts(markup));
+}
+
+export function extractBoundedMediaCandidates(
+  markup: BoundedUtf8Markup,
+): readonly MediaCandidate[] {
+  return extractMediaCandidatesFromParts(extractBoundedMediaMarkupParts(markup));
 }

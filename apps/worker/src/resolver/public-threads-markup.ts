@@ -4,10 +4,15 @@ import {
   type NormalizedThreadsPost,
   UpstreamPolicyError,
 } from '../security/upstream-policy.js';
-import { extractMediaCandidates, type MediaCandidate } from './structured-media.js';
+import {
+  BoundedMarkupReadError,
+  MAX_MARKUP_BYTES,
+  readBoundedMarkup,
+  type BoundedUtf8Markup,
+} from './markup-tags.js';
+import { extractBoundedMediaCandidates, type MediaCandidate } from './structured-media.js';
 
 const FETCH_TIMEOUT_MS = 8_000;
-const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
 const HTML_MEDIA_TYPES = new Set(['application/xhtml+xml', 'text/html']);
 const CANONICAL_CONTENT_LENGTH = /^(?:0|[1-9]\d*)$/u;
 const AMBIGUOUS_POST_REDIRECT_URL = 'https://www.threads.com/?error=invalid_post';
@@ -91,6 +96,18 @@ function mapRedirectError(error: unknown): never {
   return fail('THREADS_REDIRECT_INVALID');
 }
 
+function mapBoundedMarkupReadError(error: unknown): never {
+  if (error instanceof BoundedMarkupReadError) {
+    if (error.code === 'MARKUP_READ_TOO_LARGE') {
+      return fail('THREADS_RESPONSE_TOO_LARGE');
+    }
+    if (error.code === 'MARKUP_READ_UNAVAILABLE') {
+      return fail('THREADS_UPSTREAM_UNAVAILABLE');
+    }
+  }
+  return fail('THREADS_RESPONSE_INVALID');
+}
+
 function rejectAmbiguousInitialPostRedirect(response: Response, isInitialResponse: boolean): void {
   if (!isInitialResponse || response.status !== 302) {
     return;
@@ -152,58 +169,6 @@ function assertDeclaredLength(response: Response): void {
   }
 }
 
-function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  void reader.cancel().catch(() => undefined);
-}
-
-async function readBoundedMarkup(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    return fail('THREADS_RESPONSE_INVALID');
-  }
-
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) {
-        break;
-      }
-      if (!(result.value instanceof Uint8Array)) {
-        cancelReader(reader);
-        return fail('THREADS_RESPONSE_INVALID');
-      }
-      if (result.value.byteLength > MAX_MARKUP_BYTES - total) {
-        cancelReader(reader);
-        return fail('THREADS_RESPONSE_TOO_LARGE');
-      }
-      chunks.push(result.value.slice());
-      total += result.value.byteLength;
-    }
-  } catch (error: unknown) {
-    cancelReader(reader);
-    if (error instanceof PublicThreadsMarkupResolverError) {
-      throw error;
-    }
-    return fail('THREADS_UPSTREAM_UNAVAILABLE');
-  } finally {
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return fail('THREADS_RESPONSE_INVALID');
-  }
-}
-
 function includesAny(value: string, markers: readonly string[]): boolean {
   return markers.some((marker) => value.includes(marker));
 }
@@ -234,14 +199,24 @@ function classifyEmptyMarkup(markup: string): never {
   return fail('THREADS_MEDIA_NOT_FOUND');
 }
 
-function extractCandidates(markup: string): ResolvedThreadsMarkup {
+function extractCandidates(markup: BoundedUtf8Markup): ResolvedThreadsMarkup {
   let candidates: readonly MediaCandidate[];
   try {
-    candidates = extractMediaCandidates(markup);
+    candidates = extractBoundedMediaCandidates(markup);
   } catch {
     return fail('THREADS_RESPONSE_INVALID');
   }
   return candidates.length === 0 ? classifyEmptyMarkup(markup) : { candidates: [...candidates] };
+}
+
+async function resolveResponseMarkup(response: Response): Promise<ResolvedThreadsMarkup> {
+  let markup: BoundedUtf8Markup;
+  try {
+    markup = await readBoundedMarkup(response.body);
+  } catch (error: unknown) {
+    return mapBoundedMarkupReadError(error);
+  }
+  return extractCandidates(markup);
 }
 
 function defaultTimeoutSignal(milliseconds: number): AbortSignal {
@@ -313,7 +288,7 @@ export function createPublicThreadsMarkupResolver(
           }
           return fail('THREADS_RESPONSE_INVALID');
         }
-        return extractCandidates(await readBoundedMarkup(response));
+        return resolveResponseMarkup(response);
       }
     },
   };

@@ -6,13 +6,13 @@ import {
   type PublicThreadsMarkupResolverErrorCode,
   type ThreadsMarkupFetch,
 } from '../src/resolver/public-threads-markup.js';
+import { MAX_MARKUP_BYTES } from '../src/resolver/markup-tags.js';
 import {
   parseThreadsPostUrl,
   type NormalizedThreadsPost,
   type ThreadsPostUrl,
 } from '../src/security/upstream-policy.js';
 
-const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
 const AMBIGUOUS_POST_REDIRECT_URL = 'https://www.threads.com/?error=invalid_post';
 const encoder = new TextEncoder();
 const post = parseThreadsPostUrl('https://threads.com/@alice/post/Abcde?discard=input');
@@ -322,11 +322,20 @@ describe('PublicThreadsMarkupResolver', () => {
     expect(timeoutFetches).toBe(0);
 
     let readFetches = 0;
-    const failingBody = new ReadableStream<Uint8Array>({
-      pull() {
-        throw new Error('private body read failure');
+    let bodyReads = 0;
+    const failingBody = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          bodyReads += 1;
+          if (bodyReads === 1) {
+            controller.enqueue(Uint8Array.of(0xff));
+            return;
+          }
+          throw new Error('private body read failure');
+        },
       },
-    });
+      { highWaterMark: 0 },
+    );
     const readSubject = resolver(async () => {
       readFetches += 1;
       return htmlResponse(failingBody);
@@ -335,6 +344,7 @@ describe('PublicThreadsMarkupResolver', () => {
       'private body read failure',
     ]);
     expect(readFetches).toBe(1);
+    expect(bodyReads).toBe(2);
   });
 
   it('accepts only HTML media types with case-insensitive type and optional parameters', async () => {
@@ -391,24 +401,72 @@ describe('PublicThreadsMarkupResolver', () => {
     await expect(exact.resolve(post)).resolves.toHaveProperty('candidates.length', 1);
   });
 
-  it('accepts an unknown-length 2 MiB stream and cancels one byte beyond it', async () => {
+  it('accepts an unknown-length 2 MiB stream and stops at one byte beyond it', async () => {
     const exactMarkup = sizedMarkup(MAX_MARKUP_BYTES, 'actual-exact');
     const exact = resolver(async () => htmlResponse(exactMarkup));
     await expect(exact.resolve(post)).resolves.toHaveProperty('candidates.length', 1);
 
+    let pulls = 0;
     let cancellations = 0;
-    const oversizedBytes = encoder.encode(sizedMarkup(MAX_MARKUP_BYTES + 1, 'actual-over'));
-    const oversizedBody = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(oversizedBytes);
+    const oversizedBody = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) {
+            controller.enqueue(Uint8Array.of(0xff));
+            return;
+          }
+          if (pulls === 2) {
+            controller.enqueue(new Uint8Array(MAX_MARKUP_BYTES));
+            return;
+          }
+          throw new Error('read after overflow');
+        },
+        cancel() {
+          cancellations += 1;
+        },
       },
-      cancel() {
-        cancellations += 1;
-      },
-    });
+      { highWaterMark: 0 },
+    );
     const oversized = resolver(async () => htmlResponse(oversizedBody));
     await expectResolverError(oversized.resolve(post), 'THREADS_RESPONSE_TOO_LARGE');
+    expect(pulls).toBe(2);
     expect(cancellations).toBe(1);
+  });
+
+  it('decodes split multibyte input before a reused stream buffer is mutated', async () => {
+    const target = `${fixtureUrl('streamed')}&label=雪`;
+    const multibyte = encoder.encode('雪');
+    const chunks = [
+      encoder.encode(`<meta property="og:video" content="${fixtureUrl('streamed')}&label=`),
+      multibyte.subarray(0, 1),
+      multibyte.subarray(1, 2),
+      multibyte.subarray(2),
+      encoder.encode('">'),
+    ];
+    const shared = new Uint8Array(Math.max(...chunks.map((chunk) => chunk.byteLength)));
+    let nextChunk = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const chunk = chunks[nextChunk];
+          if (chunk === undefined) {
+            controller.close();
+            return;
+          }
+          shared.fill(0);
+          shared.set(chunk);
+          controller.enqueue(shared.subarray(0, chunk.byteLength));
+          nextChunk += 1;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+
+    const result = await resolver(async () => htmlResponse(body)).resolve(post);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.value.url.href).toBe(new URL(target).href);
   });
 
   it('uses only the response reader and rejects missing bodies or invalid UTF-8', async () => {
@@ -423,8 +481,21 @@ describe('PublicThreadsMarkupResolver', () => {
     const missing = resolver(async () => htmlResponse(null));
     await expectResolverError(missing.resolve(post), 'THREADS_RESPONSE_INVALID');
 
-    const invalidUtf8 = resolver(async () => htmlResponse(Uint8Array.of(0xff)));
-    await expectResolverError(invalidUtf8.resolve(post), 'THREADS_RESPONSE_INVALID');
+    for (const bytes of [Uint8Array.of(0xc3, 0x28), Uint8Array.of(0xe2, 0x82)]) {
+      let cancellations = 0;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+        cancel() {
+          cancellations += 1;
+        },
+      });
+      const invalidUtf8 = resolver(async () => htmlResponse(body));
+      await expectResolverError(invalidUtf8.resolve(post), 'THREADS_RESPONSE_INVALID');
+      expect(cancellations).toBe(0);
+    }
   });
 
   it('classifies clear empty pages and otherwise reports no media', async () => {

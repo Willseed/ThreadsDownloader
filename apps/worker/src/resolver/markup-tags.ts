@@ -1,6 +1,6 @@
 import { parseCdnUrl, type CdnUrl, UpstreamPolicyError } from '../security/upstream-policy.js';
 
-const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
+export const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
 const MAX_TOKEN_LENGTH = 64 * 1024;
 const MAX_ATTRIBUTE_LENGTH = 16 * 1024;
 const MAX_ATTRIBUTES = 128;
@@ -28,12 +28,28 @@ export interface MediaMarkupParts {
   readonly scripts: readonly MarkupScriptPayload[];
 }
 
+declare const boundedUtf8MarkupBrand: unique symbol;
+
+export type BoundedUtf8Markup = string & {
+  readonly [boundedUtf8MarkupBrand]: true;
+};
+
 export type MarkupTagsErrorCode = 'MARKUP_STRUCTURE_LIMIT' | 'MARKUP_TOO_LARGE';
+
+export type BoundedMarkupReadErrorCode =
+  'MARKUP_READ_INVALID' | 'MARKUP_READ_TOO_LARGE' | 'MARKUP_READ_UNAVAILABLE';
 
 export class MarkupTagsError extends Error {
   constructor(readonly code: MarkupTagsErrorCode) {
     super(code);
     this.name = 'MarkupTagsError';
+  }
+}
+
+export class BoundedMarkupReadError extends Error {
+  constructor(readonly code: BoundedMarkupReadErrorCode) {
+    super(code);
+    this.name = 'BoundedMarkupReadError';
   }
 }
 
@@ -65,6 +81,122 @@ type CandidateBuckets = ReadonlyMap<MarkupCandidateSource, Map<string, MarkupMed
 
 function markupError(code: MarkupTagsErrorCode): never {
   throw new MarkupTagsError(code);
+}
+
+function markupReadError(code: BoundedMarkupReadErrorCode): never {
+  throw new BoundedMarkupReadError(code);
+}
+
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    void reader.cancel().catch(() => undefined);
+  } catch {
+    // Cancellation is best-effort and must not replace the bounded read result.
+  }
+}
+
+interface MarkupDecodeState {
+  readonly decoder: TextDecoder;
+  readonly fragments: string[];
+  invalidEncoding: boolean;
+}
+
+async function readNextMarkupChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  try {
+    return await reader.read();
+  } catch {
+    cancelReader(reader);
+    return markupReadError('MARKUP_READ_UNAVAILABLE');
+  }
+}
+
+function assertBoundedMarkupChunk(
+  value: unknown,
+  total: number,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): asserts value is Uint8Array {
+  if (!(value instanceof Uint8Array)) {
+    cancelReader(reader);
+    return markupReadError('MARKUP_READ_INVALID');
+  }
+  if (value.byteLength > MAX_MARKUP_BYTES - total) {
+    cancelReader(reader);
+    return markupReadError('MARKUP_READ_TOO_LARGE');
+  }
+}
+
+function decodeMarkupFragment(state: MarkupDecodeState, bytes?: Uint8Array): void {
+  if (state.invalidEncoding) {
+    return;
+  }
+  try {
+    const fragment =
+      bytes === undefined ? state.decoder.decode() : state.decoder.decode(bytes, { stream: true });
+    if (fragment.length > 0) {
+      state.fragments.push(fragment);
+    }
+  } catch {
+    state.invalidEncoding = true;
+    state.fragments.length = 0;
+  }
+}
+
+async function consumeBoundedMarkup(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<BoundedUtf8Markup> {
+  const decodeState: MarkupDecodeState = {
+    decoder: new TextDecoder('utf-8', { fatal: true }),
+    fragments: [],
+    invalidEncoding: false,
+  };
+  let total = 0;
+  while (true) {
+    const result = await readNextMarkupChunk(reader);
+    if (result.done) {
+      break;
+    }
+    assertBoundedMarkupChunk(result.value, total, reader);
+    total += result.value.byteLength;
+    decodeMarkupFragment(decodeState, result.value);
+  }
+  decodeMarkupFragment(decodeState);
+
+  return decodeState.invalidEncoding
+    ? markupReadError('MARKUP_READ_INVALID')
+    : (decodeState.fragments.join('') as BoundedUtf8Markup);
+}
+
+export async function readBoundedMarkup(
+  body: ReadableStream<Uint8Array> | null,
+): Promise<BoundedUtf8Markup> {
+  if (body === null) {
+    return markupReadError('MARKUP_READ_INVALID');
+  }
+
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+  try {
+    reader = body.getReader();
+  } catch {
+    return markupReadError('MARKUP_READ_INVALID');
+  }
+
+  let hasPrimaryError = false;
+  try {
+    return await consumeBoundedMarkup(reader);
+  } catch (error: unknown) {
+    hasPrimaryError = true;
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      if (!hasPrimaryError) {
+        markupReadError('MARKUP_READ_INVALID');
+      }
+    }
+  }
 }
 
 function isWhitespace(character: string | undefined): boolean {
@@ -459,8 +591,7 @@ function assertMarkupSize(markup: string): void {
   }
 }
 
-export function extractMediaMarkupParts(markup: string): MediaMarkupParts {
-  assertMarkupSize(markup);
+function extractMediaMarkupPartsCore(markup: string): MediaMarkupParts {
   const buckets = createBuckets();
   const scripts: MarkupScriptPayload[] = [];
   let cursor = 0;
@@ -488,6 +619,16 @@ export function extractMediaMarkupParts(markup: string): MediaMarkupParts {
   return { candidates: flattenBuckets(buckets), scripts };
 }
 
+export function extractMediaMarkupParts(markup: string): MediaMarkupParts {
+  assertMarkupSize(markup);
+  return extractMediaMarkupPartsCore(markup);
+}
+
+export function extractBoundedMediaMarkupParts(markup: BoundedUtf8Markup): MediaMarkupParts {
+  return extractMediaMarkupPartsCore(markup);
+}
+
 export function extractMediaTags(markup: string): readonly MarkupMediaCandidate[] {
-  return extractMediaMarkupParts(markup).candidates;
+  assertMarkupSize(markup);
+  return extractMediaMarkupPartsCore(markup).candidates;
 }

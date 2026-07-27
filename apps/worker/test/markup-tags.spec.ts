@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractMediaTags, MarkupTagsError } from '../src/resolver/markup-tags.js';
+import {
+  extractMediaTags,
+  MarkupTagsError,
+  MAX_MARKUP_BYTES,
+  readBoundedMarkup,
+  type BoundedMarkupReadErrorCode,
+} from '../src/resolver/markup-tags.js';
 
 function urls(markup: string): readonly string[] {
   return extractMediaTags(markup).map((candidate) => candidate.value.url.href);
@@ -16,6 +22,55 @@ function expectMarkupError(markup: string, code: string): void {
     expect((error as Error).message).not.toContain(markup);
   }
 }
+
+function bodyWithThrowingRelease(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+): ReadableStream<Uint8Array> {
+  const reader = {
+    cancel: async () => undefined,
+    read,
+    releaseLock() {
+      throw new Error('private release failure');
+    },
+  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+  return {
+    getReader: () => reader,
+  } as unknown as ReadableStream<Uint8Array>;
+}
+
+async function expectBoundedReadError(
+  body: ReadableStream<Uint8Array>,
+  code: BoundedMarkupReadErrorCode,
+): Promise<void> {
+  await expect(readBoundedMarkup(body)).rejects.toMatchObject({
+    code,
+    message: code,
+    name: 'BoundedMarkupReadError',
+  });
+}
+
+describe('readBoundedMarkup', () => {
+  it('preserves overflow and read errors when releasing the reader also fails', async () => {
+    await expectBoundedReadError(
+      bodyWithThrowingRelease(async () => ({
+        done: false,
+        value: new Uint8Array(MAX_MARKUP_BYTES + 1),
+      })),
+      'MARKUP_READ_TOO_LARGE',
+    );
+    await expectBoundedReadError(
+      bodyWithThrowingRelease(async () => Promise.reject(new Error('private read failure'))),
+      'MARKUP_READ_UNAVAILABLE',
+    );
+  });
+
+  it('classifies a release failure after clean EOF as invalid input', async () => {
+    await expectBoundedReadError(
+      bodyWithThrowingRelease(async () => ({ done: true, value: undefined })),
+      'MARKUP_READ_INVALID',
+    );
+  });
+});
 
 describe('extractMediaTags', () => {
   it('parses case-insensitive tags and attributes in any order or quote style', () => {

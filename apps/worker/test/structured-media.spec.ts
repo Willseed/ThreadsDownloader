@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MarkupTagsError } from '../src/resolver/markup-tags.js';
+import { MarkupTagsError, MAX_MARKUP_BYTES } from '../src/resolver/markup-tags.js';
 import { extractMediaCandidates } from '../src/resolver/structured-media.js';
 
 const good = (name: string): string => `https://cdninstagram.com/${name}.mp4`;
@@ -188,5 +188,14 @@ describe('extractMediaCandidates', () => {
       expect((error as MarkupTagsError).code).toBe('MARKUP_STRUCTURE_LIMIT');
       expect((error as Error).message).not.toContain('secret');
     }
+  });
+
+  it('enforces the raw UTF-8 byte limit through the public parser', () => {
+    const oversized = 'é'.repeat(MAX_MARKUP_BYTES / 2 + 1);
+    expect(oversized.length).toBeLessThan(MAX_MARKUP_BYTES);
+
+    expect(() => extractMediaCandidates(oversized)).toThrowError(
+      expect.objectContaining({ code: 'MARKUP_TOO_LARGE' }),
+    );
   });
 });
