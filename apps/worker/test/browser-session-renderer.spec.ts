@@ -776,6 +776,21 @@ describe('browser session rendered page adapter', () => {
     expect(currentSession.disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it('captures a synchronous browser-close throw and disconnects without erasing candidates', async () => {
+    const currentSession = sessionFor();
+    const close = vi.fn((): Promise<void> => {
+      throw new Error('browser-close-private-detail');
+    });
+    const session: BrowserSession = { ...currentSession.session, close };
+    const launch = vi.fn(async () => session);
+
+    await expect(
+      createBrowserSessionRenderedPagePort(browserRun(), { launch }).render(TARGET_URL),
+    ).resolves.toEqual(PRIMITIVE_ENVELOPE);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(currentSession.disconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('retries one ordinary launch or connect rejection before using one browser', async () => {
     const currentSession = sessionFor();
     const launch = vi

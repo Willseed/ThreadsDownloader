@@ -5,14 +5,13 @@ import {
   type NormalizedThreadsPost,
   UpstreamPolicyError,
 } from '../security/upstream-policy.js';
-import { RENDERED_BROWSER_SESSION_BUDGET_MS } from './browser-session-renderer.js';
 import type { MediaCandidate, RenderedMediaCandidateSource } from './structured-media.js';
 
 const MAX_IDENTITY_RESULTS = 1;
 const MAX_MEDIA_RESULTS = 16;
 const MAX_VALUE_LENGTH = 4_096;
 
-export const RENDERED_RESOLVER_BUDGET_MS = RENDERED_BROWSER_SESSION_BUDGET_MS;
+export { RENDERED_BROWSER_SESSION_BUDGET_MS as RENDERED_RESOLVER_BUDGET_MS } from './browser-session-renderer.js';
 
 export interface RenderedThreadsPagePort {
   render(url: string): Promise<unknown>;
@@ -118,8 +117,7 @@ function decodeRenderedPage(value: unknown): DecodedRenderedPage {
     openGraphUrl === null ||
     canonicalUrl !== openGraphUrl ||
     candidateSources === null ||
-    candidateUrls === null ||
-    candidateSources.length !== candidateUrls.length
+    candidateSources.length !== candidateUrls?.length
   ) {
     return fail('RENDERED_RESPONSE_INVALID');
   }

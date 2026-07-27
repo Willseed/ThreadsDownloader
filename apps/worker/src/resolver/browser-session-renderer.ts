@@ -404,15 +404,12 @@ function disconnectSession(session: BrowserSession): void {
 }
 
 async function closeSession(session: BrowserSession): Promise<void> {
-  let close: Promise<void>;
   try {
-    close = session.close();
-  } catch (error: unknown) {
-    disconnectSession(session);
-    throw error;
-  }
-  try {
-    await settleWithin(close, SESSION_CLOSE_TIMEOUT_MS, new BrowserSessionCloseTimeoutError());
+    await settleWithin(
+      Promise.resolve().then(() => session.close()),
+      SESSION_CLOSE_TIMEOUT_MS,
+      new BrowserSessionCloseTimeoutError(),
+    );
   } catch (error: unknown) {
     disconnectSession(session);
     throw error;
@@ -550,8 +547,7 @@ function decodeBrowserSnapshot(value: unknown, renderUrl: string): DecodedBrowse
     openGraphUrls[0] !== identity ||
     !renderedIdentityValues(renderUrl).includes(identity) ||
     candidateSources === null ||
-    candidateUrls === null ||
-    candidateSources.length !== candidateUrls.length ||
+    candidateSources.length !== candidateUrls?.length ||
     candidateSources.some((source) => source !== 'rendered-source' && source !== 'rendered-video')
   ) {
     return null;
@@ -630,7 +626,7 @@ async function renderContextWork(
     waitUntil: 'domcontentloaded',
   });
   assertContextActive(control);
-  if (response === null || response.status() !== 200) {
+  if (response?.status() !== 200) {
     throw new Error('BROWSER_SESSION_NAVIGATION_INVALID');
   }
   let readiness: BrowserSessionHandle;
