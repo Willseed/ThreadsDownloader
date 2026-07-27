@@ -185,18 +185,24 @@ production binding 改成 remote development 設定。
 1. 驗證 exact host／Origin、session、CSRF 與輸入 URL，取得 session 及 IP resolve
    permit，完成一次性 Turnstile 驗證。
 2. 先用較便宜的靜態 markup resolver。只有 JavaScript-required、找不到 media、
-   response-invalid、response-too-large 或 `THREADS_UPSTREAM_UNAVAILABLE` 才能進入
-   Browser Run；最後一項只代表同一個公開 Threads origin 的無 credential markup
-   transport 失敗。login、access、bot、rate、redirect 或 policy failure 不得以渲染
-   繞過。
+   response-invalid、response-too-large、`THREADS_UPSTREAM_UNAVAILABLE`，或專用的
+   `THREADS_POST_REDIRECT_AMBIGUOUS` 才能進入 Browser Run。最後一項只由初始 canonical
+   request 的第一個 response 產生：status 必須是 exact `302`，Location 的原始值與解析結果
+   都必須是 `https://www.threads.com/?error=invalid_post`。任何額外 query、fragment、
+   userinfo、port、相似 host、其他 redirect status 或後續 redirect 都維持一般 redirect
+   failure。login、access、bot、rate、其他 redirect 或 policy failure 不得以渲染繞過。
 3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行匿名、有界
    Quick Action；不傳 Cookie、client headers 或 referrer。供應端最多等待五秒，直到
    可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在每次既有六秒 action
    limit 內。第一次只有在 exact `RENDERED_MEDIA_NOT_FOUND` 且仍有 38 秒租約時，才能對
    相同 canonical post 再做一次；第二次之後不再重試。
-4. 只接受 canonical 與 Open Graph identity 都吻合、且至少一個允許 CDN 候選的結果；
-   多個候選依 scrape／DOM 順序穩定選第一個。候選仍先嘗試既有 media probe，再進入
-   vault 與同源優先下載流程。只有 rendered candidate 的 probe 最終為 exact
+4. 只接受 canonical link 與 Open Graph identity 各恰好一筆、彼此一致，且等於完整
+   normalized canonical；唯一替代形狀是兩者都精確等於
+   `https://www.threads.com/@/post/<same-shortcode>`。替代形狀仍須 byte-for-byte 綁定原
+   shortcode，scheme、host、port、query、fragment、path、大小寫或 percent-encoding
+   任一不同皆拒絕。結果還必須至少有一個允許 CDN 候選；多個候選依 scrape／DOM 順序
+   穩定選第一個。候選仍先嘗試既有 media probe，再進入 vault 與同源優先下載流程。只有
+   rendered candidate 的 probe 最終為 exact
    `MEDIA_PROBE_UNAVAILABLE` 時，才以 `unverified` metadata 進入 vault；其他 probe
    failure 仍阻擋。
 
@@ -218,10 +224,12 @@ carousel、圖片、私人／已刪除貼文、登入／challenge 頁、跨貼�
 remote proof 已成功，這個 typed transport failure 納入 bounded fallback。這不是
 access-control bypass：兩條路徑都只匿名存取同一個公開 Threads origin，不傳 Cookie、
 client headers 或 credentials；renderer 仍只使用 server 建立的 canonical `/media`
-網址，要求 canonical 與 Open Graph identity 一致且至少一個允許候選，依 scrape／DOM
+網址，要求 canonical 與 Open Graph identity 各恰好一筆、彼此一致，且符合完整 canonical
+或同 shortcode 的 exact username-redacted identity，並至少有一個允許候選，依 scrape／DOM
 順序選第一個，並繼續通過 media probe 或 exact transport-unavailable degradation、
 encrypted vault 與 same-origin-first download。login、access-denied、rate-limited、
-bot-blocked、redirect 與 policy failure 仍不得進入 Browser Run。
+bot-blocked、一般 redirect 與 policy failure 仍不得進入 Browser Run；唯一 redirect 例外是
+本節定義的 `THREADS_POST_REDIRECT_AMBIGUOUS` exact signature。
 
 後續 fresh production session 在固定等待三秒的版本中，於 `resolve` stage 記錄 exact
 code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `video[src]` 的五秒
@@ -661,7 +669,7 @@ Rollback 前先確認目標 version 與目前 version 位於同一個 DO lifecyc
 ## 真實解析與測試邊界
 
 Production resolver 先使用 Web Platform `fetch`、manual redirect、allowlist、timeout
-與大小限制；只有上一節列出的四種靜態解析結果才可使用有界 Browser Run Quick
+與大小限制；只有本節明列的靜態解析結果才可使用有界 Browser Run Quick
 Action。Browser Run 不是登入或存取控制繞過路徑，也不使用 Puppeteer、Playwright
 或第三方下載 API；Playwright 僅用於 mock E2E。若公開頁需要登入、CAPTCHA、遭 bot
 block、地區／年齡限制或 markup 改變，解析可能失敗。不能登入、上傳 Cookie 或暴力重試；

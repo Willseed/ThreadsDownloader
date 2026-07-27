@@ -297,10 +297,14 @@ not establish any undocumented upstream Threads API semantics.
   Browser rendering is an optional injected port. It can run only after session
   and IP admission, CSRF validation, and one-time Turnstile success, and only
   after the cheaper markup resolver returns JavaScript-required, media-missing,
-  response-invalid, response-too-large, or upstream-unavailable. The last case
-  covers a credential-free public Threads markup transport failure; login,
-  access, bot, rate, and redirect or policy failures never use rendering as a
-  bypass.
+  response-invalid, response-too-large, upstream-unavailable, or the dedicated
+  `THREADS_POST_REDIRECT_AMBIGUOUS` result. That dedicated result can arise only
+  from the initial canonical request's first response with exact status 302 and
+  a Location whose raw value and parsed URL are exactly
+  `https://www.threads.com/?error=invalid_post`; any variant, later hop, or other
+  redirect remains non-fallback. Upstream-unavailable covers a credential-free
+  public Threads markup transport failure; login, access, bot, rate, all other
+  redirects, and policy failures never use rendering as a bypass.
 - Browser containment: the Quick Action has empty cookies, does not forward
   client headers or cookies or set an explicit referrer, uses zero cache TTL,
   and supplies provider-side navigation and action limits totalling ten seconds,
@@ -312,7 +316,11 @@ not establish any undocumented upstream Threads API semantics.
   Its streamed JSON response, selectors, element records, attributes, values,
   and candidate count are all bounded and decoded exactly. Exactly one
   `link[rel="canonical"]` `href` and exactly one `meta[property="og:url"]`
-  `content` must both equal the normalized canonical post. Candidates come only
+  `content` must agree. Both normally equal the normalized canonical post; the
+  only alternate identity is the literal
+  `https://www.threads.com/@/post/<same-shortcode>` username-redacted form for
+  both fields. Scheme, host, port, query, fragment, path, shortcode case, and
+  percent-encoding remain exact, fail-closed comparisons. Candidates come only
   from full-page `video[src]` and
   `video source[src]`; zero canonically deduplicated CDN candidates is not found
   and one or more candidates deterministically select the first allowed URL in
@@ -407,8 +415,9 @@ not establish any undocumented upstream Threads API semantics.
   matching canonical and Open Graph identity with at least one allowed candidate, and
   applies the existing media probe or its exact transport-unavailable
   degradation, encrypted vault, and same-origin-first download
-  boundary. Login, access-denied, rate-limited, bot-blocked, redirect, and policy
-  failures remain non-fallback.
+  boundary. Login, access-denied, rate-limited, bot-blocked, ordinary redirect,
+  and policy failures remain non-fallback; the sole redirect exception is the
+  exact dedicated ambiguous-post signature above.
 - Renderer timing evidence: a later fresh production session reached the
   `resolve` stage with exact code `RENDERED_MEDIA_NOT_FOUND` while the renderer
   used only a fixed three-second delay. An earlier anonymous Quick Action using
@@ -433,8 +442,9 @@ not establish any undocumented upstream Threads API semantics.
 - Evidence boundary and remaining limitations: those remote results
   cover only that exact public single-video post, one anonymous run, and the
   observed execution region. Multi-video or carousel posts, images, private or
-  deleted posts, login or challenge pages, redirect behavior, cross-post DOM
-  stability, and long-term CDN hostname stability remain unconfirmed. The
+  deleted posts, login or challenge pages, redirect behavior beyond the exact
+  ambiguous-post signature, cross-post DOM stability, and long-term CDN hostname
+  stability remain unconfirmed. The
   canonical and Open Graph values are fail-closed upstream-authored identity
   evidence, not a direct final-location proof. `quickAction()` exposes no final
   URL or redirect chain and accepts no AbortSignal; request patterns contain

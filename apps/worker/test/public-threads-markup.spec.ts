@@ -13,6 +13,7 @@ import {
 } from '../src/security/upstream-policy.js';
 
 const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
+const AMBIGUOUS_POST_REDIRECT_URL = 'https://www.threads.com/?error=invalid_post';
 const encoder = new TextEncoder();
 const post = parseThreadsPostUrl('https://threads.com/@alice/post/Abcde?discard=input');
 
@@ -170,6 +171,40 @@ describe('PublicThreadsMarkupResolver', () => {
     expect(first.cancelled()).toBe(1);
     expect(second.cancelled()).toBe(1);
     expect(timeoutCalls).toEqual([8_000]);
+  });
+
+  it('classifies only the exact initial ambiguous post redirect for rendered recovery', async () => {
+    const redirect = cancellableResponse(302, AMBIGUOUS_POST_REDIRECT_URL);
+    const subject = resolver(async () => redirect.response);
+
+    await expectResolverError(subject.resolve(post), 'THREADS_POST_REDIRECT_AMBIGUOUS');
+    expect(redirect.cancelled()).toBe(1);
+
+    for (const [status, location] of [
+      [301, AMBIGUOUS_POST_REDIRECT_URL],
+      [302, `${AMBIGUOUS_POST_REDIRECT_URL}&next=post`],
+      [302, `${AMBIGUOUS_POST_REDIRECT_URL}#fragment`],
+      [302, 'https://user@www.threads.com/?error=invalid_post'],
+      [302, 'https://www.threads.com:443/?error=invalid_post'],
+      [302, 'https://www.threads.com.attacker.example/?error=invalid_post'],
+    ] as const) {
+      const variant = cancellableResponse(status, location);
+      await expectResolverError(
+        resolver(async () => variant.response).resolve(post),
+        'THREADS_REDIRECT_INVALID',
+        [location],
+      );
+      expect(variant.cancelled()).toBe(1);
+    }
+
+    const first = cancellableResponse(302, '/@alice/post/Fghij');
+    const second = cancellableResponse(302, AMBIGUOUS_POST_REDIRECT_URL);
+    const responses = [first.response, second.response];
+    await expectResolverError(
+      resolver(async () => responses.shift()!).resolve(post),
+      'THREADS_REDIRECT_INVALID',
+    );
+    expect([first.cancelled(), second.cancelled()]).toEqual([1, 1]);
   });
 
   it('follows three redirects and rejects the fourth without another fetch', async () => {

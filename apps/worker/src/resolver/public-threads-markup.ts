@@ -10,6 +10,7 @@ const FETCH_TIMEOUT_MS = 8_000;
 const MAX_MARKUP_BYTES = 2 * 1024 * 1024;
 const HTML_MEDIA_TYPES = new Set(['application/xhtml+xml', 'text/html']);
 const CANONICAL_CONTENT_LENGTH = /^(?:0|[1-9]\d*)$/u;
+const AMBIGUOUS_POST_REDIRECT_URL = 'https://www.threads.com/?error=invalid_post';
 
 export type PublicThreadsMarkupResolverErrorCode =
   | 'THREADS_ACCESS_DENIED'
@@ -17,6 +18,7 @@ export type PublicThreadsMarkupResolverErrorCode =
   | 'THREADS_JAVASCRIPT_REQUIRED'
   | 'THREADS_LOGIN_REQUIRED'
   | 'THREADS_MEDIA_NOT_FOUND'
+  | 'THREADS_POST_REDIRECT_AMBIGUOUS'
   | 'THREADS_RATE_LIMITED'
   | 'THREADS_REDIRECT_INVALID'
   | 'THREADS_REDIRECT_LIMIT'
@@ -87,6 +89,25 @@ function mapRedirectError(error: unknown): never {
     return fail('THREADS_REDIRECT_LIMIT');
   }
   return fail('THREADS_REDIRECT_INVALID');
+}
+
+function rejectAmbiguousInitialPostRedirect(response: Response, isInitialResponse: boolean): void {
+  if (!isInitialResponse || response.status !== 302) {
+    return;
+  }
+  const location = response.headers.get('location');
+  if (location !== AMBIGUOUS_POST_REDIRECT_URL) {
+    return;
+  }
+  try {
+    if (new URL(location).href !== AMBIGUOUS_POST_REDIRECT_URL) {
+      return;
+    }
+  } catch {
+    return;
+  }
+  cancelBody(response);
+  return fail('THREADS_POST_REDIRECT_AMBIGUOUS');
 }
 
 function statusError(status: number): never {
@@ -242,6 +263,7 @@ export function createPublicThreadsMarkupResolver(
 
       let currentPost = initialPost;
       let redirectCount = 0;
+      let isInitialResponse = true;
       while (true) {
         let response: Response;
         try {
@@ -249,6 +271,9 @@ export function createPublicThreadsMarkupResolver(
         } catch {
           return fail('THREADS_UPSTREAM_UNAVAILABLE');
         }
+
+        rejectAmbiguousInitialPostRedirect(response, isInitialResponse);
+        isInitialResponse = false;
 
         let redirectedPost: NormalizedThreadsPost | undefined;
         let decision;

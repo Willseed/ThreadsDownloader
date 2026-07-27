@@ -27,6 +27,7 @@ const RAW_SESSION_ID = encodeBase64Url(new Uint8Array(32).fill(1));
 const CSRF_TOKEN = encodeBase64Url(new Uint8Array(32).fill(2));
 const TURNSTILE_TOKEN = 'private-turnstile-token';
 const POST_URL = 'https://threads.com/@alice/post/Abcde?private=query-token';
+const AMBIGUOUS_POST_REDIRECT_URL = 'https://www.threads.com/?error=invalid_post';
 const PRIVATE_CDN_QUERY = 'private-cdn-query';
 const REQUEST_ID = 'A'.repeat(32);
 const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));
@@ -801,6 +802,47 @@ describe('resolve public media workflow', () => {
     },
   );
 
+  it('recovers one exact ambiguous redirect through one username-redacted render', async () => {
+    const usernameRedactedUrl = 'https://www.threads.com/@/post/Abcde';
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: AMBIGUOUS_POST_REDIRECT_URL },
+        }),
+      rendererResponse: (options) =>
+        jsonResponse({
+          success: true,
+          result: [
+            {
+              selector: options.elements[0]!.selector,
+              results: [renderedElement([{ name: 'href', value: usernameRedactedUrl }])],
+            },
+            {
+              selector: options.elements[1]!.selector,
+              results: [renderedElement([{ name: 'content', value: usernameRedactedUrl }])],
+            },
+            {
+              selector: options.elements[2]!.selector,
+              results: [renderedElement([{ name: 'src', value: RENDERED_PRIVATE_URL }])],
+            },
+            { selector: options.elements[3]!.selector, results: [] },
+          ],
+        }),
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(200);
+    expect(harness.controls.rendererCalls).toHaveLength(1);
+    expect(harness.controls.rendererCalls[0]!.options.url).toBe(
+      'https://www.threads.com/@alice/post/Abcde/media',
+    );
+    expect(harness.controls.sequence.filter((entry) => entry === 'threads:markup')).toHaveLength(1);
+    expect(harness.controls.probeRequests).toHaveLength(1);
+    expect(harness.controls.vaultBodies).toHaveLength(1);
+  });
+
   it('probes only the first rendered result when rendering returns multiple valid videos', async () => {
     const secondUrl = 'https://video.cdninstagram.com/related.mp4?token=private-related-token';
     const harness = createHarness({
@@ -962,6 +1004,22 @@ describe('resolve public media workflow', () => {
         new Response(null, {
           status: 302,
           headers: { location: 'https://attacker.example/private-redirect' },
+        }),
+    ],
+    [
+      'ambiguous redirect with extra query',
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: `${AMBIGUOUS_POST_REDIRECT_URL}&next=post` },
+        }),
+    ],
+    [
+      'ambiguous redirect with an explicit port',
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://www.threads.com:443/?error=invalid_post' },
         }),
     ],
   ] as const)(

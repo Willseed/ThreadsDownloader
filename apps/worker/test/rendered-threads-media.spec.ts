@@ -12,17 +12,16 @@ import {
 import { parseThreadsPostUrl } from '../src/security/upstream-policy.js';
 
 const insecureHttp = 'http:';
-const CANONICAL_URL = 'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB';
-const TARGET_URL = 'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB/media';
+const CANONICAL_URL = 'https://www.threads.com/@alice/post/Abcde';
+const USERNAME_REDACTED_URL = 'https://www.threads.com/@/post/Abcde';
+const TARGET_URL = 'https://www.threads.com/@alice/post/Abcde/media';
 const CANONICAL_SELECTOR = 'link[rel="canonical"]';
 const OPEN_GRAPH_SELECTOR = 'meta[property="og:url"]';
 const VIDEO_SELECTOR = 'video[src]';
 const SOURCE_SELECTOR = 'video source[src]';
 const PRIVATE_URL =
   'https://instagram.ftpe7-2.fna.fbcdn.net/media/video.mp4?token=private-render-token';
-const post = parseThreadsPostUrl(
-  'https://www.threads.com/@hitostartup.tw/post/DbPp-bqiQEB?xmt=private-input-token',
-);
+const post = parseThreadsPostUrl('https://www.threads.com/@alice/post/Abcde?fixture=input');
 
 function element(attributes: readonly { readonly name: string; readonly value: string }[]) {
   return {
@@ -51,6 +50,15 @@ function successBody(
       { selector: SOURCE_SELECTOR, results: sourceResults },
     ],
   };
+}
+
+function identityBody(value: string): Record<string, unknown> {
+  return successBody(
+    [],
+    [],
+    [element([{ name: 'href', value }])],
+    [element([{ name: 'content', value }])],
+  );
 }
 
 function jsonResponse(value: unknown, init: ResponseInit = {}): Response {
@@ -117,7 +125,7 @@ describe('rendered Threads media resolver request policy', () => {
     expect(calls[0]!.action).toBe('scrape');
     const options = calls[0]!.options;
     expect(options.url).toBe(TARGET_URL);
-    expect(options.url).not.toContain('xmt');
+    expect(options.url).not.toContain('fixture');
     expect(options.cookies).toEqual([]);
     expect(options.cacheTTL).toBe(0);
     expect(options.setJavaScriptEnabled).toBe(true);
@@ -191,6 +199,19 @@ describe('rendered Threads media resolver response contract', () => {
     ]);
   });
 
+  it('accepts one mutually consistent username-redacted identity for the exact shortcode', async () => {
+    const body = successBody(
+      [element([{ name: 'src', value: PRIVATE_URL }])],
+      [],
+      [element([{ name: 'href', value: USERNAME_REDACTED_URL }])],
+      [element([{ name: 'content', value: USERNAME_REDACTED_URL }])],
+    );
+
+    await expect(
+      resolver(browserReturning(() => jsonResponse(body))).resolve(post),
+    ).resolves.toHaveProperty('candidates.length', 1);
+  });
+
   it.each([
     ['missing canonical link', successBody([], [], [])],
     [
@@ -217,7 +238,7 @@ describe('rendered Threads media resolver response contract', () => {
           element([
             {
               name: 'href',
-              value: 'https://www.threads.com/@hitostartup.tw/post/Related',
+              value: 'https://www.threads.com/@alice/post/Related',
             },
           ]),
         ],
@@ -229,6 +250,40 @@ describe('rendered Threads media resolver response contract', () => {
       successBody([], [], undefined, [
         element([{ name: 'content', value: `${CANONICAL_URL}?private=redirected` }]),
       ]),
+    ],
+    [
+      'redacted identity with a mismatched shortcode',
+      identityBody('https://www.threads.com/@/post/Other'),
+    ],
+    [
+      'redacted identity with case-changed shortcode',
+      identityBody('https://www.threads.com/@/post/abcde'),
+    ],
+    [
+      'redacted identity with percent-encoded shortcode',
+      identityBody('https://www.threads.com/@/post/Abcd%65'),
+    ],
+    ['redacted identity with HTTP', identityBody(`${insecureHttp}//www.threads.com/@/post/Abcde`)],
+    [
+      'redacted identity with a similar host',
+      identityBody('https://www.threads.com.attacker.example/@/post/Abcde'),
+    ],
+    [
+      'redacted identity with an explicit port',
+      identityBody('https://www.threads.com:443/@/post/Abcde'),
+    ],
+    ['redacted identity with a query', identityBody(`${USERNAME_REDACTED_URL}?view=media`)],
+    ['redacted identity with a fragment', identityBody(`${USERNAME_REDACTED_URL}#media`)],
+    ['redacted identity with a trailing slash', identityBody(`${USERNAME_REDACTED_URL}/`)],
+    ['redacted identity with extra path', identityBody(`${USERNAME_REDACTED_URL}/extra`)],
+    [
+      'canonical and Open Graph identity disagreement',
+      successBody(
+        [],
+        [],
+        [element([{ name: 'href', value: USERNAME_REDACTED_URL }])],
+        [element([{ name: 'content', value: CANONICAL_URL }])],
+      ),
     ],
   ] as const)('rejects identity evidence with %s', async (_name, body) => {
     await expectResolverError(

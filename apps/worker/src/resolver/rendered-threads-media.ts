@@ -105,7 +105,7 @@ interface DecodedElement {
 
 interface IdentityScrapeTarget {
   readonly attribute: string;
-  readonly expectedValue: string;
+  readonly allowedValues: readonly [canonical: string, usernameRedacted: string];
   readonly kind: 'identity';
   readonly selector: string;
 }
@@ -127,18 +127,25 @@ function renderedMediaUrl(post: NormalizedThreadsPost): string {
   return `${post.canonicalUrl}/media`;
 }
 
+function renderedIdentityValues(
+  post: NormalizedThreadsPost,
+): readonly [canonical: string, usernameRedacted: string] {
+  return [post.canonicalUrl, `https://www.threads.com/@/post/${post.shortcode}`];
+}
+
 function scrapeTargets(post: NormalizedThreadsPost): readonly ScrapeTarget[] {
+  const allowedValues = renderedIdentityValues(post);
   return [
     {
       selector: CANONICAL_LINK_SELECTOR,
       attribute: 'href',
-      expectedValue: post.canonicalUrl,
+      allowedValues,
       kind: 'identity',
     },
     {
       selector: OPEN_GRAPH_URL_SELECTOR,
       attribute: 'content',
-      expectedValue: post.canonicalUrl,
+      allowedValues,
       kind: 'identity',
     },
     {
@@ -418,14 +425,15 @@ function collectCandidates(
   }
 }
 
-function assertIdentity(elements: readonly DecodedElement[], target: IdentityScrapeTarget): void {
+function identityFrom(elements: readonly DecodedElement[], target: IdentityScrapeTarget): string {
   if (elements.length !== 1) {
     return fail('RENDERED_RESPONSE_INVALID');
   }
   const values = elements[0]!.attributes.filter(({ name }) => name === target.attribute);
-  if (values.length !== 1 || values[0]!.value !== target.expectedValue) {
+  if (values.length !== 1 || !target.allowedValues.includes(values[0]!.value)) {
     return fail('RENDERED_RESPONSE_INVALID');
   }
+  return values[0]!.value;
 }
 
 function decodeCandidates(
@@ -441,6 +449,7 @@ function decodeCandidates(
   }
 
   const candidates = new Map<string, MediaCandidate>();
+  const identityValues: string[] = [];
   let totalResults = 0;
   for (let index = 0; index < targets.length; index += 1) {
     const target = targets[index]!;
@@ -450,10 +459,13 @@ function decodeCandidates(
       return fail('RENDERED_RESPONSE_INVALID');
     }
     if (target.kind === 'identity') {
-      assertIdentity(elements, target);
+      identityValues.push(identityFrom(elements, target));
     } else {
       collectCandidates(elements, target, candidates);
     }
+  }
+  if (identityValues.length !== 2 || identityValues[0] !== identityValues[1]) {
+    return fail('RENDERED_RESPONSE_INVALID');
   }
   return [...candidates.values()].slice(0, 1);
 }
