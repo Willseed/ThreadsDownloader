@@ -45,7 +45,6 @@ import {
   decodeResolveVaultSettleRequest,
   decodeResolveVaultStoreRequest,
   deriveResolvedMediaFilename,
-  encodeProbedMediaWire,
   RESOLVE_VAULT_MAX_BATCHES,
   RESOLVE_VAULT_MAX_CANDIDATES,
   RESOLVE_VAULT_RESERVATION_MS,
@@ -56,6 +55,7 @@ import {
   type ResolveVaultStoreRequest,
   type SafeResolvedMediaCandidate,
 } from './security/resolve-vault.js';
+import { encodeProbedMediaWire } from './security/resolved-media-wire.js';
 import {
   createResolvedMediaGrantCodec,
   type ResolvedMediaGrantBinding,

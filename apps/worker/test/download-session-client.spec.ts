@@ -34,8 +34,8 @@ import {
   type DownloadSessionClientErrorCode,
   type DownloadSessionNamespace,
 } from '../src/security/download-session-client.js';
+import { encodeProbedMediaWire } from '../src/security/resolved-media-wire.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
-import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
 import { DOWNLOAD_START_DEADLINE_MS } from '../src/security/download-session-state.js';
 import { decodeBase64Url, encodeBase64Url } from '../src/utils/base64url.js';
 

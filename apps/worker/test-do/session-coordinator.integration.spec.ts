@@ -9,8 +9,9 @@ import {
   hashIdentifier,
   importSigningKey,
 } from '../src/security/cryptography.js';
-import { encodeProbedMediaWire, RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
+import { RESOLVE_VAULT_TTL_MS } from '../src/security/resolve-vault.js';
 import type { ResolvedMediaGrantCodec } from '../src/security/resolved-media-grant.js';
+import { encodeProbedMediaWire } from '../src/security/resolved-media-wire.js';
 import { RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { decodeBase64Url } from '../src/utils/base64url.js';

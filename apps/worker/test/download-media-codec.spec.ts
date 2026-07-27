@@ -460,6 +460,30 @@ describe('DownloadMediaCodec strict envelope and cryptography', () => {
 });
 
 describe('DownloadMediaCodec strict media policy', () => {
+  it('opens historical unversioned canonical plaintext but rejects reordered JSON', async () => {
+    const subject = await createDownloadMediaCodec(firstKey);
+    const canonicalPlaintext = JSON.stringify(mediaPayload());
+    const canonical = await sealPlaintext(canonicalPlaintext);
+    const reorderedPlaintext = JSON.stringify({
+      probeMethod: 'head',
+      completionReliable: true,
+      lastModified: LAST_MODIFIED,
+      strongEtag: '"download-v1"',
+      rangeCapability: 'bytes',
+      contentLength: 42,
+      contentType: 'video/mp4',
+      finalUrl: PRIVATE_URL,
+    });
+    const reordered = await sealPlaintext(reorderedPlaintext);
+
+    expect(canonicalPlaintext).not.toBe(reorderedPlaintext);
+    await expect(subject.open(canonical, binding(), NOW)).resolves.toEqual(media());
+    await expectCodecError(subject.open(reordered, binding(), NOW), 'DOWNLOAD_MEDIA_INVALID', [
+      PRIVATE_URL,
+      reordered,
+    ]);
+  });
+
   it.each([
     ['extra field', { ...mediaPayload(), extra: 'private-media-field' }],
     ['missing field', withoutField(mediaPayload(), 'probeMethod')],

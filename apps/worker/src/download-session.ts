@@ -40,7 +40,7 @@ import {
   type ByteInterval,
   type ReliableValidator,
 } from './security/range-transfer.js';
-import { encodeProbedMediaWire } from './security/resolve-vault.js';
+import { encodeProbedMediaWire } from './security/resolved-media-wire.js';
 
 const sessionTableSql = `CREATE TABLE IF NOT EXISTS download_session (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

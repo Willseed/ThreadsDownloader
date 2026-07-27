@@ -196,6 +196,57 @@ describe('ResolvedMediaGrantCodec round trips', () => {
     expect(first).not.toContain(PRIVATE_URL);
     expect(second).not.toContain(PRIVATE_URL);
   });
+
+  it('seals a version-first shared wire payload without changing authenticated data', async () => {
+    let recordedPlaintext = '';
+    let recordedAad = '';
+    const sealer: AesGcmSealer = {
+      seal: vi.fn(async (plaintext, additionalAuthenticatedData) => {
+        recordedPlaintext = plaintext;
+        recordedAad = additionalAuthenticatedData;
+        return 'v1.AA.AA';
+      }),
+      open: vi.fn(async () => {
+        throw new Error('unused');
+      }),
+    };
+    const subject = createResolvedMediaGrantCodec(sealer);
+    const targetBinding = binding();
+
+    await expect(subject.seal(media(), targetBinding, NOW)).resolves.toBe('v1.AA.AA');
+    expect(Object.keys(JSON.parse(recordedPlaintext) as Record<string, unknown>)).toEqual([
+      'v',
+      'finalUrl',
+      'contentType',
+      'contentLength',
+      'rangeCapability',
+      'strongEtag',
+      'lastModified',
+      'completionReliable',
+      'probeMethod',
+    ]);
+    expect(recordedPlaintext).toBe(JSON.stringify(payload(media())));
+    expect(recordedAad).toBe(aad(targetBinding));
+  });
+
+  it('opens a historical exact payload whose properties use a different order', async () => {
+    const subject = await codec();
+    const target = media();
+    const historicalPayload = {
+      probeMethod: target.probeMethod,
+      completionReliable: target.completionReliable,
+      v: 1,
+      lastModified: target.lastModified,
+      finalUrl: target.finalUrl.url.href,
+      strongEtag: target.strongEtag,
+      rangeCapability: target.rangeCapability,
+      contentLength: target.contentLength,
+      contentType: target.contentType,
+    };
+    const sealed = await sealPayload(historicalPayload);
+
+    await expect(subject.open(sealed, binding(), NOW)).resolves.toEqual(target);
+  });
 });
 
 describe('ResolvedMediaGrantCodec authenticated binding', () => {
@@ -320,6 +371,7 @@ describe('ResolvedMediaGrantCodec media invariants', () => {
 
   it.each([
     ['wrong version', { ...payload(media()), v: 2 }],
+    ['missing own version', withoutField(payload(media()), 'v')],
     ['extra validator', { ...payload(media()), validator: media().validator }],
     ['missing field', withoutField(payload(media()), 'probeMethod')],
     [

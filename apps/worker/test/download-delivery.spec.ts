@@ -9,8 +9,8 @@ import type {
   SessionDownloadAdmission,
   SessionDownloadAdmissionPort,
 } from '../src/security/session-download-admission-client.js';
+import { encodeProbedMediaWire } from '../src/security/resolved-media-wire.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
-import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
 import {
   createDownloadDelivery,
   DOWNLOAD_LIFECYCLE_MUTATION_TIMEOUT_MS,

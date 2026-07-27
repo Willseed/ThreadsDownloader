@@ -1,8 +1,13 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
-import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.js';
+import type { ProbedMedia } from '../resolver/media-probe.js';
 import { isCanonicalBase64UrlWithExactBytes } from '../utils/base64url.js';
 import type { AesGcmSealer } from './cryptography.js';
+import {
+  decodeProbedMediaWire,
+  encodeProbedMediaWire,
+  type ProbedMediaWire,
+} from './resolved-media-wire.js';
 
 export const RESOLVED_MEDIA_GRANT_MAX_TTL_MS = 600_000;
 
@@ -14,17 +19,6 @@ const MAX_FILENAME_CHARACTERS = 128;
 const AAD_DOMAIN = 'threads-downloader:resolved-media-grant:v1';
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
 const SAFE_SHORTCODE = /^[A-Za-z0-9_-]{5,64}$/u;
-const PAYLOAD_FIELDS = [
-  'completionReliable',
-  'contentLength',
-  'contentType',
-  'finalUrl',
-  'lastModified',
-  'probeMethod',
-  'rangeCapability',
-  'strongEtag',
-  'v',
-] as const;
 
 export type ResolvedMediaGrantCodecErrorCode =
   'RESOLVED_MEDIA_GRANT_INVALID' | 'RESOLVED_MEDIA_GRANT_UNAVAILABLE';
@@ -141,29 +135,19 @@ function additionalAuthenticatedData(binding: NormalizedBinding): string {
   ].join(':');
 }
 
-function normalizeMedia(value: unknown): ProbedMedia {
+function serializeMedia(media: ProbedMedia, binding: NormalizedBinding): string {
+  let wire: ProbedMediaWire;
   try {
-    return normalizeProbedMedia(value);
+    wire = encodeProbedMediaWire(media);
   } catch {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
-}
-
-function serializeMedia(media: ProbedMedia, binding: NormalizedBinding): string {
-  const normalized = normalizeMedia(media);
-  if (normalized.contentLength !== binding.contentLength) {
+  if (wire.contentLength !== binding.contentLength) {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
   const payload = JSON.stringify({
     v: RESOLVED_MEDIA_GRANT_VERSION,
-    finalUrl: normalized.finalUrl.url.href,
-    contentType: normalized.contentType,
-    contentLength: normalized.contentLength,
-    rangeCapability: normalized.rangeCapability,
-    strongEtag: normalized.strongEtag,
-    lastModified: normalized.lastModified,
-    completionReliable: normalized.completionReliable,
-    probeMethod: normalized.probeMethod,
+    ...wire,
   });
   return payload.length <= MAX_SEALED_GRANT_CHARACTERS
     ? payload
@@ -180,20 +164,19 @@ function deserializeMedia(plaintext: string): ProbedMedia {
   } catch {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
-  const record = decodeExactRecord(payload, PAYLOAD_FIELDS);
-  if (record === null || record['v'] !== RESOLVED_MEDIA_GRANT_VERSION) {
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    Array.isArray(payload) ||
+    !Object.hasOwn(payload, 'v')
+  ) {
     return fail('RESOLVED_MEDIA_GRANT_INVALID');
   }
-  return normalizeMedia({
-    finalUrl: record['finalUrl'],
-    contentType: record['contentType'],
-    contentLength: record['contentLength'],
-    rangeCapability: record['rangeCapability'],
-    strongEtag: record['strongEtag'],
-    lastModified: record['lastModified'],
-    completionReliable: record['completionReliable'],
-    probeMethod: record['probeMethod'],
-  });
+  const { v, ...mediaWire } = payload as Record<string, unknown>;
+  if (v !== RESOLVED_MEDIA_GRANT_VERSION) {
+    return fail('RESOLVED_MEDIA_GRANT_INVALID');
+  }
+  return decodeProbedMediaWire(mediaWire) ?? fail('RESOLVED_MEDIA_GRANT_INVALID');
 }
 
 export function createResolvedMediaGrantCodec(sealer: AesGcmSealer): ResolvedMediaGrantCodec {

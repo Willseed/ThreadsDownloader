@@ -1,8 +1,13 @@
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
-import { normalizeProbedMedia, type ProbedMedia } from '../resolver/media-probe.js';
+import type { ProbedMedia } from '../resolver/media-probe.js';
 import { decodeBase64Url } from '../utils/base64url.js';
 import { createOpaqueId } from './cryptography.js';
+import {
+  decodeProbedMediaWire,
+  encodeProbedMediaWire,
+  type ProbedMediaWire,
+} from './resolved-media-wire.js';
 import type { BrowserSessionIdentity, SessionNamespace } from './session-client.js';
 
 export const RESOLVE_VAULT_MAX_BATCHES = 5;
@@ -20,28 +25,6 @@ const OPAQUE_ID_BYTES = 24;
 const MINIMUM_PERMIT_BYTES = 16;
 const SHORTCODE = /^[A-Za-z0-9_-]{5,64}$/u;
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
-const PROBED_MEDIA_WIRE_FIELDS = [
-  'completionReliable',
-  'contentLength',
-  'contentType',
-  'finalUrl',
-  'lastModified',
-  'probeMethod',
-  'rangeCapability',
-  'strongEtag',
-] as const;
-
-export interface ProbedMediaWire {
-  readonly finalUrl: string;
-  readonly contentType: string;
-  readonly contentLength: number | null;
-  readonly rangeCapability: ProbedMedia['rangeCapability'];
-  readonly strongEtag: string | null;
-  readonly lastModified: string | null;
-  readonly completionReliable: boolean;
-  readonly probeMethod: ProbedMedia['probeMethod'];
-}
-
 export interface ResolveVaultStoreRequest {
   readonly sessionHash: string;
   readonly csrfHash: string;
@@ -194,37 +177,6 @@ function responseTime(clock: () => number): number {
 
 function isContentLength(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
-}
-
-export function encodeProbedMediaWire(media: ProbedMedia): ProbedMediaWire {
-  let normalized: ProbedMedia;
-  try {
-    normalized = normalizeProbedMedia(media);
-  } catch {
-    return fail('RESOLVE_VAULT_INVALID');
-  }
-  return {
-    finalUrl: normalized.finalUrl.url.href,
-    contentType: normalized.contentType,
-    contentLength: normalized.contentLength,
-    rangeCapability: normalized.rangeCapability,
-    strongEtag: normalized.strongEtag,
-    lastModified: normalized.lastModified,
-    completionReliable: normalized.completionReliable,
-    probeMethod: normalized.probeMethod,
-  };
-}
-
-export function decodeProbedMediaWire(value: unknown): ProbedMedia | null {
-  const record = decodeExactRecord(value, PROBED_MEDIA_WIRE_FIELDS);
-  if (record === null) {
-    return null;
-  }
-  try {
-    return normalizeProbedMedia(record);
-  } catch {
-    return null;
-  }
 }
 
 export function deriveResolvedMediaFilename(

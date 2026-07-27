@@ -7,7 +7,7 @@ import {
   isCanonicalBase64UrlWithExactBytes,
   isCanonicalBase64UrlWithMinimumBytes,
 } from '../utils/base64url.js';
-import { decodeProbedMediaWire, encodeProbedMediaWire } from './resolve-vault.js';
+import { decodeProbedMediaWire, encodeProbedMediaWire } from './resolved-media-wire.js';
 
 export const DOWNLOAD_MEDIA_MAX_TTL_MS = 3_600_000;
 

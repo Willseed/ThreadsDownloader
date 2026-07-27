@@ -3,12 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProbedMedia } from '../src/resolver/media-probe.js';
 import {
   claimResolvedMediaCandidate,
-  decodeProbedMediaWire,
   decodeResolveVaultClaimRequest,
   decodeResolveVaultSettleRequest,
   decodeResolveVaultStoreRequest,
   deriveResolvedMediaFilename,
-  encodeProbedMediaWire,
   RESOLVE_VAULT_RESERVATION_MS,
   RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
   RESOLVE_VAULT_TTL_MS,
@@ -17,6 +15,7 @@ import {
   storeResolvedMediaBatch,
   type ResolveVaultErrorCode,
 } from '../src/security/resolve-vault.js';
+import { encodeProbedMediaWire } from '../src/security/resolved-media-wire.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { decodeBase64Url, encodeBase64Url } from '../src/utils/base64url.js';
@@ -115,26 +114,7 @@ function namespace(
   };
 }
 
-describe('resolved media vault wire', () => {
-  it('round-trips only the strict serializable ProbedMedia shape', () => {
-    const wire = encodeProbedMediaWire(media());
-    expect(wire).toEqual({
-      finalUrl: PRIVATE_URL,
-      contentType: 'video/mp4',
-      contentLength: 42,
-      rangeCapability: 'bytes',
-      strongEtag: '"strong-v1"',
-      lastModified: LAST_MODIFIED,
-      completionReliable: true,
-      probeMethod: 'head',
-    });
-    expect(decodeProbedMediaWire(wire)).toEqual(media());
-    expect(decodeProbedMediaWire({ ...wire, rawCookie: 'private' })).toBeNull();
-    expect(
-      decodeProbedMediaWire({ ...wire, finalUrl: 'https://attacker.example/private' }),
-    ).toBeNull();
-  });
-
+describe('resolved media vault filenames', () => {
   it.each([
     ['video/mp4', 'mp4'],
     ['video/webm', 'webm'],

@@ -22,7 +22,7 @@ import {
   decodeProbedMediaWire,
   encodeProbedMediaWire,
   type ProbedMediaWire,
-} from './resolve-vault.js';
+} from './resolved-media-wire.js';
 
 const DOWNLOAD_ID_BYTES = 24;
 const HOLDER_ID_BYTES = 24;
