@@ -165,20 +165,8 @@ app.post('/api/resolve', (context) => {
   return resolvePublicMedia(context.req.raw, resolveBindings(context.env, cleanupScheduler));
 });
 
-app.post('/api/download-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
-
-app.post('/api/preview-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
-
-app.get('/api/preview/:capability', (context) => publicDownloadApi(context.req.raw, context.env));
-
-app.get('/api/download/:downloadId', (context) => publicDownloadApi(context.req.raw, context.env));
-
-app.get('/api/download-status/:downloadId', (context) =>
-  publicDownloadApi(context.req.raw, context.env),
-);
-
 app.all('/api', () => notFoundApi(requestId()));
-app.all('/api/*', () => notFoundApi(requestId()));
+app.all('/api/*', (context) => publicDownloadApi(context.req.raw, context.env));
 app.all('*', (context) => context.env.ASSETS.fetch(context.req.raw));
 
 const worker = {

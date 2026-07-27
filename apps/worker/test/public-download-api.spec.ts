@@ -76,8 +76,10 @@ interface Harness {
   readonly issue: ReturnType<typeof vi.fn>;
   readonly issuePreview: ReturnType<typeof vi.fn>;
   readonly openPreview: ReturnType<typeof vi.fn>;
+  readonly operationFactory: ReturnType<typeof vi.fn>;
   readonly operations: PublicDownloadApiOperations;
   readonly readStatus: ReturnType<typeof vi.fn>;
+  readonly requestId: ReturnType<typeof vi.fn>;
 }
 
 function createHarness(): Harness {
@@ -113,6 +115,8 @@ function createHarness(): Harness {
     inspect,
     status: readStatus,
   };
+  const operationFactory = vi.fn(() => operations);
+  const requestId = vi.fn(() => REQUEST_ID);
   const bindings: PublicDownloadApiBindings = {
     DOWNLOAD_ENCRYPTION_KEY: 'A'.repeat(43),
     DOWNLOAD_SESSIONS: {} as PublicDownloadApiBindings['DOWNLOAD_SESSIONS'],
@@ -124,15 +128,17 @@ function createHarness(): Harness {
     bindings,
     deliver,
     handler: createPublicDownloadApiHandler(
-      { fetcher: fetch, now: () => NOW, requestId: () => REQUEST_ID },
-      () => operations,
+      { fetcher: fetch, now: () => NOW, requestId },
+      operationFactory,
     ),
     inspect,
     issue,
     issuePreview,
     openPreview,
+    operationFactory,
     operations,
     readStatus,
+    requestId,
   };
 }
 
@@ -761,20 +767,49 @@ describe('public browser-bound download API', () => {
   });
 
   it.each([
-    `/api/download/${DOWNLOAD_ID}?debug=1`,
-    `/api/download/${DOWNLOAD_ID}/`,
-    `/api/download/${DOWNLOAD_ID}/extra`,
-    `/api/download/${DOWNLOAD_ID.slice(0, 4)}/${DOWNLOAD_ID.slice(4)}`,
-    `/api/download/%${DOWNLOAD_ID.charCodeAt(0).toString(16)}${DOWNLOAD_ID.slice(1)}`,
-    `/api/download-status/${DOWNLOAD_ID}?debug=1`,
-    `/api/download-status/${DOWNLOAD_ID}/`,
-  ])('rejects a non-canonical public path without touching operations: %s', async (path) => {
+    [`/api/download/${DOWNLOAD_ID}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
+    [`/api/download/${DOWNLOAD_ID}/`, 'GET', 'application/json'],
+    [`/api/download/${DOWNLOAD_ID}/extra`, 'GET', 'application/json'],
+    [
+      `/api/download/%${DOWNLOAD_ID.charCodeAt(0).toString(16)}${DOWNLOAD_ID.slice(1)}`,
+      'GET',
+      'application/json; charset=UTF-8',
+    ],
+    [`/api/download/A%2F${DOWNLOAD_ID.slice(3)}`, 'GET', 'application/json; charset=UTF-8'],
+    [`/api/download-status/${DOWNLOAD_ID}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
+    [`/api/download-status/${DOWNLOAD_ID}/`, 'GET', 'application/json'],
+    [`/api/preview/${PREVIEW_CAPABILITY}?debug=1`, 'GET', 'application/json; charset=UTF-8'],
+    ['/api/preview/not-a-capability', 'GET', 'application/json; charset=UTF-8'],
+    ['/api/download-sessions?debug=1', 'POST', 'application/json; charset=UTF-8'],
+    ['/api/missing', 'GET', 'application/json'],
+  ] as const)(
+    'rejects a non-canonical public path without constructing operations: %s %s',
+    async (path, method, expectedContentType) => {
+      const harness = createHarness();
+      const response = await harness.handler(await apiRequest(path, { method }), harness.bindings);
+      expect(response.status).toBe(404);
+      expect(response.headers.get('content-type')).toBe(expectedContentType);
+      await expect(errorBody(response)).resolves.toMatchObject({
+        error: { code: 'NOT_FOUND', requestId: REQUEST_ID },
+      });
+      expect(harness.requestId).toHaveBeenCalledOnce();
+      expect(harness.operationFactory).not.toHaveBeenCalled();
+      expectNoOperationCalls(harness);
+    },
+  );
+
+  it('keeps an unknown HEAD bodyless without constructing operations', async () => {
     const harness = createHarness();
-    const response = await harness.handler(await apiRequest(path), harness.bindings);
+    const response = await harness.handler(
+      await apiRequest('/api/missing', { method: 'HEAD' }),
+      harness.bindings,
+    );
+
     expect(response.status).toBe(404);
-    await expect(errorBody(response)).resolves.toMatchObject({
-      error: { code: 'NOT_FOUND', requestId: REQUEST_ID },
-    });
+    expect(response.body).toBeNull();
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(harness.requestId).toHaveBeenCalledOnce();
+    expect(harness.operationFactory).not.toHaveBeenCalled();
     expectNoOperationCalls(harness);
   });
 
@@ -785,6 +820,9 @@ describe('public browser-bound download API', () => {
       harness.bindings,
     );
     expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(harness.requestId).toHaveBeenCalledOnce();
+    expect(harness.operationFactory).not.toHaveBeenCalled();
     expectNoOperationCalls(harness);
   });
 });

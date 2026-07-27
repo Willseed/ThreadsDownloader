@@ -103,7 +103,8 @@ type PublicRoute =
   | { readonly kind: 'preview'; readonly capability: string }
   | { readonly kind: 'download'; readonly downloadId: string }
   | { readonly kind: 'inspect'; readonly downloadId: string }
-  | { readonly kind: 'status'; readonly downloadId: string };
+  | { readonly kind: 'status'; readonly downloadId: string }
+  | { readonly kind: 'not-found'; readonly owner: 'download-route' | 'api-fallback' };
 
 interface PublicFailure {
   readonly code: ApiErrorCode;
@@ -127,50 +128,58 @@ function isCanonicalDownloadId(value: string): boolean {
   }
 }
 
-function exactDownloadId(pathname: string, prefix: string): string | null {
+function singlePathSegment(pathname: string, prefix: string): string | null {
   if (!pathname.startsWith(prefix)) {
     return null;
   }
-  const downloadId = pathname.slice(prefix.length);
-  return isCanonicalDownloadId(downloadId) ? downloadId : null;
+  const segment = pathname.slice(prefix.length);
+  return segment !== '' && !segment.includes('/') ? segment : null;
 }
 
-function previewRoute(request: Request, pathname: string): PublicRoute | null {
-  if (request.method !== 'GET' || !pathname.startsWith(PREVIEW_PATH_PREFIX)) {
-    return null;
+function postRoute(pathname: string, hasQuery: boolean): PublicRoute {
+  if (pathname === '/api/download-sessions') {
+    return hasQuery ? { kind: 'not-found', owner: 'download-route' } : { kind: 'issue' };
   }
-  const capability = pathname.slice(PREVIEW_PATH_PREFIX.length);
-  return isCanonicalPreviewCapability(capability) ? { kind: 'preview', capability } : null;
+  if (pathname === '/api/preview-sessions') {
+    return hasQuery ? { kind: 'not-found', owner: 'download-route' } : { kind: 'issue-preview' };
+  }
+  return { kind: 'not-found', owner: 'api-fallback' };
 }
 
-function publicRoute(request: Request): PublicRoute | null {
+function readRoute(method: 'GET' | 'HEAD', pathname: string, hasQuery: boolean): PublicRoute {
+  const capability = singlePathSegment(pathname, PREVIEW_PATH_PREFIX);
+  if (capability !== null) {
+    if (method === 'GET' && !hasQuery && isCanonicalPreviewCapability(capability)) {
+      return { kind: 'preview', capability };
+    }
+    return { kind: 'not-found', owner: 'download-route' };
+  }
+  const downloadId = singlePathSegment(pathname, DOWNLOAD_PATH_PREFIX);
+  if (downloadId !== null) {
+    if (!hasQuery && isCanonicalDownloadId(downloadId)) {
+      return { kind: method === 'HEAD' ? 'inspect' : 'download', downloadId };
+    }
+    return { kind: 'not-found', owner: 'download-route' };
+  }
+  const statusDownloadId = singlePathSegment(pathname, DOWNLOAD_STATUS_PATH_PREFIX);
+  if (statusDownloadId !== null) {
+    if (method === 'GET' && !hasQuery && isCanonicalDownloadId(statusDownloadId)) {
+      return { kind: 'status', downloadId: statusDownloadId };
+    }
+    return { kind: 'not-found', owner: 'download-route' };
+  }
+  return { kind: 'not-found', owner: 'api-fallback' };
+}
+
+function publicRoute(request: Request): PublicRoute {
   const url = new URL(request.url);
-  if (url.search !== '') {
-    return null;
-  }
-  if (request.method === 'POST' && url.pathname === '/api/download-sessions') {
-    return { kind: 'issue' };
-  }
-  if (request.method === 'POST' && url.pathname === '/api/preview-sessions') {
-    return { kind: 'issue-preview' };
-  }
-  const preview = previewRoute(request, url.pathname);
-  if (preview !== null) {
-    return preview;
+  if (request.method === 'POST') {
+    return postRoute(url.pathname, url.search !== '');
   }
   if (request.method === 'GET' || request.method === 'HEAD') {
-    const downloadId = exactDownloadId(url.pathname, DOWNLOAD_PATH_PREFIX);
-    if (downloadId !== null) {
-      return { kind: request.method === 'HEAD' ? 'inspect' : 'download', downloadId };
-    }
+    return readRoute(request.method, url.pathname, url.search !== '');
   }
-  if (request.method === 'GET') {
-    const downloadId = exactDownloadId(url.pathname, DOWNLOAD_STATUS_PATH_PREFIX);
-    if (downloadId !== null) {
-      return { kind: 'status', downloadId };
-    }
-  }
-  return null;
+  return { kind: 'not-found', owner: 'api-fallback' };
 }
 
 function browserFailure(error: BrowserSessionError): PublicFailure {
@@ -292,10 +301,15 @@ function errorResponse(error: unknown, requestId: string, head: boolean): Respon
     : new Response(JSON.stringify(createApiError(mapped.code, mapped.message, requestId)), init);
 }
 
-function notFound(requestId: string, head: boolean): Response {
+function notFound(
+  requestId: string,
+  head: boolean,
+  owner: 'download-route' | 'api-fallback',
+): Response {
   const headers = new Headers({
     'cache-control': 'no-store',
-    'content-type': 'application/json; charset=UTF-8',
+    'content-type':
+      owner === 'download-route' ? 'application/json; charset=UTF-8' : 'application/json',
   });
   return head
     ? new Response(null, { status: 404, headers })
@@ -530,8 +544,8 @@ export function createPublicDownloadApiHandler(
   return async (request, bindings): Promise<Response> => {
     const id = runtime.requestId();
     const route = publicRoute(request);
-    if (route === null) {
-      return notFound(id, request.method === 'HEAD');
+    if (route.kind === 'not-found') {
+      return notFound(id, request.method === 'HEAD', route.owner);
     }
     try {
       const operations = operationFactory(bindings, runtime);

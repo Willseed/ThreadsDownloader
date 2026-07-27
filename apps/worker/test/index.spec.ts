@@ -93,14 +93,40 @@ describe('worker entry policy', () => {
     await expect(response.text()).resolves.toBe('Not Found');
   });
 
-  it('returns a Traditional Chinese JSON error for unknown API paths', async () => {
-    const response = await fetchWorker('/api/missing');
+  it.each(['/api', '/api/missing'])(
+    'keeps the root and unknown API 404 outside the download route shape: %s',
+    async (path) => {
+      const env = createEnv();
+      const response = await fetchWorker(path, env);
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('content-type')).toBe('application/json');
+      await expect(response.json()).resolves.toMatchObject({
+        error: { code: 'NOT_FOUND', message: '找不到請求的 API 路徑。' },
+      });
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('delegates a download route shape while preserving its legacy JSON and HEAD 404s', async () => {
+    const env = createEnv();
+    const path = `/api/download/${'A'.repeat(32)}?debug=1`;
+    const response = await fetchWorker(path, env);
+    const headResponse = await worker.fetch(
+      new Request(`https://${expectedHost}${path}`, { method: 'HEAD' }),
+      env,
+      {} as ExecutionContext,
+    );
 
     expect(response.status).toBe(404);
     expect(response.headers.get('cache-control')).toBe('no-store');
-    await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'NOT_FOUND', message: '找不到請求的 API 路徑。' },
-    });
+    expect(response.headers.get('content-type')).toBe('application/json; charset=UTF-8');
+    await expect(response.json()).resolves.toMatchObject({ error: { code: 'NOT_FOUND' } });
+    expect(headResponse.status).toBe(404);
+    expect(headResponse.body).toBeNull();
+    expect(headResponse.headers.get('content-type')).toBe('application/json; charset=UTF-8');
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
   it('routes Hono HEAD through inspect only and preserves metadata with a null body', async () => {
@@ -175,24 +201,6 @@ describe('worker entry policy', () => {
     expect(response.body).toBeNull();
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(downloadFetch).not.toHaveBeenCalled();
-    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    `/api/download/${'A'.repeat(32)}?debug=1`,
-    `/api/download/${'A'.repeat(32)}/`,
-    `/api/download/${'A'.repeat(32)}/extra`,
-    `/api/download/%41${'A'.repeat(31)}`,
-    `/api/download/A%2F${'A'.repeat(30)}`,
-    `/api/download-status/${'A'.repeat(32)}?debug=1`,
-    `/api/preview/v1.${'A'.repeat(16)}.${'A'.repeat(22)}?debug=1`,
-    '/api/preview/not-a-capability',
-  ])('keeps a non-canonical download path inside the API 404: %s', async (path) => {
-    const env = createEnv();
-    const response = await fetchWorker(path, env);
-
-    expect(response.status).toBe(404);
-    expect(response.headers.get('cache-control')).toBe('no-store');
     expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
