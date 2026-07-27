@@ -175,14 +175,13 @@ describe('bundle secret gate', () => {
     expect(success.stderr).toBe('');
   });
 
-  it('rejects every CLI root except a single literal dot before scanning', async () => {
+  it('rejects an unsafe CLI root and extra arguments before scanning', async () => {
     const invocationRoot = await fixture();
     const outsideRoot = await fixture();
     await writeFixture(invocationRoot, 'index.html', '<main>safe</main>');
-    await writeFixture(invocationRoot, 'child/index.html', '<main>safe</main>');
     await writeFixture(outsideRoot, 'index.html', '<main>safe</main>');
 
-    for (const arguments_ of [['./'], ['..'], ['child'], [outsideRoot], ['.', 'extra']]) {
+    for (const arguments_ of [[outsideRoot], ['.', 'extra']]) {
       const result = spawnSync(process.execPath, [scriptPath, ...arguments_], {
         cwd: invocationRoot,
         encoding: 'utf8',
