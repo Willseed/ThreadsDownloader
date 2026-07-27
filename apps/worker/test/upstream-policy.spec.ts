@@ -62,6 +62,14 @@ describe('parseCdnUrl', () => {
   });
 
   it.each([
+    'https://instagram.ftpe7-2.fna.fbcdn.net/media/file.mp4?token=private',
+    'https://instagram.a.fna.fbcdn.net/media/file.mp4',
+    `https://instagram.${'a'.repeat(63)}.fna.fbcdn.net/media/file.mp4`,
+  ])('accepts the exact observational Instagram FNA host shape: %s', (input) => {
+    expect(parseCdnUrl(input).url.href).toBe(input);
+  });
+
+  it.each([
     'https://cdninstagram.com.attacker.example/file',
     'https://fake-cdninstagram.com/file',
     'https://127.0.0.1/file',
@@ -74,6 +82,22 @@ describe('parseCdnUrl', () => {
     'https://user@cdninstagram.com/file',
     'https://cdninstagram.com:444/file',
     'https://cdninstagram.com/file#fragment',
+    'https://fbcdn.net/file',
+    'https://fna.fbcdn.net/file',
+    'https://instagram.fna.fbcdn.net/file',
+    'https://instagram.ftpe7-2.fbcdn.net/file',
+    'https://instagram.ftpe7-2.fna.fbcdn.net.attacker.example/file',
+    'https://extra.instagram.ftpe7-2.fna.fbcdn.net/file',
+    'https://scontent.ftpe7-2.fna.fbcdn.net/file',
+    'https://instagram.-ftpe.fna.fbcdn.net/file',
+    'https://instagram.ftpe-.fna.fbcdn.net/file',
+    'https://instagram.ftpe_7.fna.fbcdn.net/file',
+    `https://instagram.${'a'.repeat(64)}.fna.fbcdn.net/file`,
+    'https://instagram.xn--ftpe-9za.fna.fbcdn.net/file',
+    `${insecureHttp}//instagram.ftpe7-2.fna.fbcdn.net/file`,
+    'https://user@instagram.ftpe7-2.fna.fbcdn.net/file',
+    'https://instagram.ftpe7-2.fna.fbcdn.net:444/file',
+    'https://instagram.ftpe7-2.fna.fbcdn.net/file#fragment',
   ])('rejects an unsafe CDN URL without exposing it', (input) => {
     expectPolicyError(() => parseCdnUrl(input), 'CDN_URL_INVALID', input);
   });

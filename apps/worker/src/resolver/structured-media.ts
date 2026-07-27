@@ -14,7 +14,10 @@ const CANDIDATE_KEYS = new Set(['contentUrl', 'video_url', 'videoUrl', 'src', 'u
 const STRUCTURED_PRIORITIES = ['json-ld', 'application-json', 'json'] as const;
 
 export type StructuredMediaCandidateSource = (typeof STRUCTURED_PRIORITIES)[number];
-export type MediaCandidateSource = MarkupCandidateSource | StructuredMediaCandidateSource;
+export type RenderedMediaCandidateSource =
+  'rendered-current-src' | 'rendered-source' | 'rendered-video';
+export type MediaCandidateSource =
+  MarkupCandidateSource | StructuredMediaCandidateSource | RenderedMediaCandidateSource;
 
 export interface MediaCandidate {
   readonly source: MediaCandidateSource;

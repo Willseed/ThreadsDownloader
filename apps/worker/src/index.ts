@@ -28,9 +28,13 @@ import {
   SessionIssuanceError,
   type SessionIssuanceReservation,
 } from './security/session-issuance.js';
+import { createBrowserRunScrapePort } from './resolver/rendered-threads-media.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
 import { TurnstileReplay } from './turnstile-replay.js';
-import { createResolvePublicMediaHandler } from './workflows/resolve-public-media.js';
+import {
+  createResolvePublicMediaHandler,
+  type ResolvePublicMediaBindings,
+} from './workflows/resolve-public-media.js';
 import { createPublicDownloadApiHandler } from './workflows/public-download-api.js';
 
 export {
@@ -52,6 +56,7 @@ export interface Env {
   readonly ASSETS: {
     fetch(request: Request): Promise<Response>;
   };
+  readonly BROWSER?: BrowserRun;
   readonly DOWNLOAD_ENCRYPTION_KEY: string;
   readonly DOWNLOAD_SESSIONS: DownloadSessionNamespace;
   readonly EXPECTED_HOST: string;
@@ -92,6 +97,19 @@ const resolvePublicMedia = createResolvePublicMediaHandler({
   now: Date.now,
   requestId,
 });
+
+function resolveBindings(env: Env): ResolvePublicMediaBindings {
+  return {
+    EXPECTED_HOST: env.EXPECTED_HOST,
+    EXPECTED_ORIGIN: env.EXPECTED_ORIGIN,
+    IP_RATE_LIMITS: env.IP_RATE_LIMITS,
+    SESSION_SIGNING_KEY: env.SESSION_SIGNING_KEY,
+    SESSIONS: env.SESSIONS,
+    TURNSTILE_REPLAYS: env.TURNSTILE_REPLAYS,
+    TURNSTILE_SECRET: env.TURNSTILE_SECRET,
+    ...(env.BROWSER === undefined ? {} : { BROWSER: createBrowserRunScrapePort(env.BROWSER) }),
+  };
+}
 
 const publicDownloadApi = createPublicDownloadApiHandler({
   fetcher: (request) => fetch(request),
@@ -260,7 +278,9 @@ app.get('/api/health', (context) => {
 
 app.get('/api/session', (context) => sessionResponse(context.req.raw, context.env));
 
-app.post('/api/resolve', (context) => resolvePublicMedia(context.req.raw, context.env));
+app.post('/api/resolve', (context) =>
+  resolvePublicMedia(context.req.raw, resolveBindings(context.env)),
+);
 
 app.post('/api/download-sessions', (context) => publicDownloadApi(context.req.raw, context.env));
 

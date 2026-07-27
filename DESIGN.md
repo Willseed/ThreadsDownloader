@@ -31,6 +31,7 @@ protocol into a local interface, containing vendor-specific behavior.
 | `WorkerApplication` | dispatch `fetch`, asset serving, request policy | Worker `fetch` event |
 | `SessionWorkflow` | `bootstrap` then `authorize` a browser session | session and CSRF adapter |
 | `ResolveWorkflow` | resolve approved input into an internal target | resolver adapter |
+| `RenderedThreadsMediaResolver` | opt-in, bounded `/media` rendering into one untrusted candidate | Browser Run `scrape` port |
 | `DownloadWorkflow` | `issue`, `head`, `stream`, and `status` | HTTP/range and origin adapter |
 | Angular `DownloaderModel` | typed UI state, commands, errors | Angular service/model boundary |
 
@@ -54,6 +55,15 @@ All user and upstream URLs pass explicit allowlists. Redirects are handled
 manually, each hop is validated, and fetches use bounded timeouts and response
 size limits. CDN targets are independently validated before streaming. No
 redirect policy delegates validation to a browser or default fetch behavior.
+
+The dormant rendered fallback is a narrower exception at an external browser
+adapter whose Quick Action response does not expose its navigation redirect
+chain. It is not bound in production. The adapter restricts every browser
+subrequest with anchored patterns, accepts only one canonically deduplicated
+candidate, and sends that candidate back through the central CDN policy and
+ordinary media probe. Production activation requires separate approval and a
+remote credential-free proof; until then the Wrangler exposure gate rejects a
+browser binding.
 
 Encrypted resolver credentials or tokens live only in a server vault using
 AES-GCM. Keys and plaintext do not enter source, frontend bundles, logs, or
@@ -228,6 +238,72 @@ not establish any undocumented upstream Threads API semantics.
   runtime secret presence and values are outside repository evidence; the
   current Wrangler configuration records only their required names, while tests
   inject controlled ephemeral values through Miniflare.
+
+### Opt-in rendered Threads media fallback (2026-07-27)
+
+- Question: can the resolver support a public Threads post whose initial HTML
+  is only a JavaScript application shell, without accepting a client-supplied
+  CDN URL or silently enabling a metered browser service?
+- Research order and evidence: the existing ask-bridge research found no
+  official contract for a Threads `/post/{shortcode}/media` route. Bounded
+  credential-free HTTP reproduction showed that both the canonical post and
+  its `/media` route return HTML rather than media bytes or a CDN redirect. A
+  browser observation found a playable `currentSrc` under the exact shape
+  `instagram.<single-label>.fna.fbcdn.net`; this is observational evidence, not
+  an official hostname contract. The installed Cloudflare types establish the
+  `quickAction('scrape', ...)` input and response shape. No new Web Search was
+  used for this implementation.
+- Scope and decision: the server discards the input query while normalizing the
+  post, appends `/media` itself, and never accepts a CDN URL from the client.
+  Browser rendering is an optional injected port. It can run only after session
+  and IP admission, CSRF validation, and one-time Turnstile success, and only
+  after the cheaper markup resolver returns JavaScript-required, media-missing,
+  response-invalid, or response-too-large. Login, access, bot, rate, redirect,
+  and upstream failures never use rendering as a bypass.
+- Browser containment: the Quick Action has empty cookies, does not forward
+  client headers or cookies or set an explicit referrer, uses zero cache TTL,
+  and supplies provider-side navigation and action limits totalling ten seconds,
+  a bounded wait, and anchored request patterns for exact
+  `www.threads.com`, the existing `cdninstagram.com` family, and the observed
+  exact Instagram FNA hostname shape. Its streamed JSON response, selectors,
+  element records, attributes, values, and candidate count are all bounded and
+  decoded exactly. A fresh 128-bit marker ties every scraped candidate and its
+  bridge-stamped `location.href` to one invocation; the stamped location must
+  equal the exact canonical `/media` target. Zero unique candidates is not found
+  and more than one fails closed rather than guessing among post and
+  recommendation videos.
+- Downstream enforcement: the observed FNA hostname shape was added to the one
+  central CDN parser without allowing the `fbcdn.net` apex, broad subdomains,
+  extra labels, non-default ports, credentials, fragments, or lookalikes.
+  Rendered candidates still pass the existing HEAD/range media probe, encrypted
+  vault, same-origin download delivery, and per-hop download redirect checks.
+- Lease decision: session and IP resolve permits are both 60 seconds. Deadline
+  gates require at least 38 seconds before rendering, 26 seconds before probing,
+  and 18 seconds before vault storage. These budgets cover the ten-second
+  provider browser options, a two-second absolute response-body read limit, an
+  eight-second media probe, two sequential eight-second vault operations, and a
+  two-second margin. Compared with the former 30-second
+  lease, a crashed resolve can occupy its session/IP concurrency slot for at
+  most 30 additional seconds; successful and handled failures still release
+  immediately.
+- Production state: `Env.BROWSER` remains optional, no `wrangler*.jsonc` file
+  declares it, and the production exposure checker rejects an accidental
+  browser binding. Therefore this commit changes no production Browser Run
+  usage or cost. Enabling it requires a separate reviewed configuration change
+  that deliberately updates that gate.
+- Unconfirmed and activation blockers: anonymous Browser Run hydration of this
+  route, script injection timing, provider completion within its declared
+  limits, completeness of the conservative request patterns, stability of the
+  observed CDN hostname shape, and resistance to active same-page JavaScript
+  copying the invocation marker remain unconfirmed. `quickAction()` exposes no
+  final URL or redirect chain and accepts no AbortSignal; request patterns
+  contain each browser request's origin but do not prove every redirect hop.
+  The stamped exact location rejects an observed final same-host redirect, but
+  it cannot by itself prove that one valid video is the post rather than a
+  recommendation when active page code interferes. A late provider response is
+  rejected by the subsequent lease deadline gate, not locally hard-cancelled.
+  A remote credential-free proof must succeed before activation; failure must
+  not cause automatic host, cookie, header, or origin widening.
 
 ## Deployment inventory and decisions
 

@@ -7,11 +7,23 @@ import {
 } from '@threads-downloader/contracts';
 import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
-import { createMediaProbe, MediaProbeError, type ProbedMedia } from '../resolver/media-probe.js';
+import {
+  createMediaProbe,
+  MEDIA_PROBE_TIMEOUT_MS,
+  MediaProbeError,
+  type ProbedMedia,
+} from '../resolver/media-probe.js';
 import {
   createPublicThreadsMarkupResolver,
   PublicThreadsMarkupResolverError,
+  type PublicThreadsMarkupResolverErrorCode,
 } from '../resolver/public-threads-markup.js';
+import {
+  createRenderedThreadsMediaResolver,
+  RENDERED_RESOLVER_BUDGET_MS,
+  RenderedThreadsMediaResolverError,
+  type BrowserRunScrapePort,
+} from '../resolver/rendered-threads-media.js';
 import type { MediaCandidate } from '../resolver/structured-media.js';
 import {
   BrowserSessionError,
@@ -32,7 +44,11 @@ import {
   type IpRateLimitNamespace,
   type ResolveLimitsLease,
 } from '../security/resolve-limits.js';
-import { ResolveVaultError, storeResolvedMediaBatch } from '../security/resolve-vault.js';
+import {
+  RESOLVE_VAULT_REQUEST_TIMEOUT_MS,
+  ResolveVaultError,
+  storeResolvedMediaBatch,
+} from '../security/resolve-vault.js';
 import type { BrowserSessionIdentity, SessionNamespace } from '../security/session-client.js';
 import {
   TurnstileError,
@@ -47,8 +63,25 @@ import {
 import { decodeBase64Url } from '../utils/base64url.js';
 
 const MAX_PROBE_CANDIDATES = 8;
+const RENDERED_FALLBACK_ERRORS: ReadonlySet<PublicThreadsMarkupResolverErrorCode> = new Set([
+  'THREADS_JAVASCRIPT_REQUIRED',
+  'THREADS_MEDIA_NOT_FOUND',
+  'THREADS_RESPONSE_INVALID',
+  'THREADS_RESPONSE_TOO_LARGE',
+]);
+const LEASE_DEADLINE_MARGIN_MS = 2_000;
+const RESOLVE_VAULT_TOTAL_BUDGET_MS = RESOLVE_VAULT_REQUEST_TIMEOUT_MS * 2;
+const FALLBACK_LEASE_BUDGET_MS =
+  RENDERED_RESOLVER_BUDGET_MS +
+  MEDIA_PROBE_TIMEOUT_MS +
+  RESOLVE_VAULT_TOTAL_BUDGET_MS +
+  LEASE_DEADLINE_MARGIN_MS;
+const POST_RENDER_LEASE_BUDGET_MS =
+  MEDIA_PROBE_TIMEOUT_MS + RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
+const POST_PROBE_LEASE_BUDGET_MS = RESOLVE_VAULT_TOTAL_BUDGET_MS + LEASE_DEADLINE_MARGIN_MS;
 
 export interface ResolvePublicMediaBindings {
+  readonly BROWSER?: BrowserRunScrapePort;
   readonly EXPECTED_HOST: string;
   readonly EXPECTED_ORIGIN: string;
   readonly IP_RATE_LIMITS: IpRateLimitNamespace;
@@ -81,6 +114,11 @@ interface PublicFailure {
   readonly code: ApiErrorCode;
   readonly message: string;
   readonly status: number;
+}
+
+interface ResolvedCandidates {
+  readonly candidates: readonly MediaCandidate[];
+  readonly rendered: boolean;
 }
 
 type WorkflowErrorCode = 'MEDIA_NOT_FOUND' | 'RESOLVE_UNAVAILABLE';
@@ -190,6 +228,12 @@ function vaultFailure(error: ResolveVaultError): PublicFailure {
   return failure('RESOLVE_UNAVAILABLE', 503, '暫時無法解析此貼文，請稍後再試。');
 }
 
+function renderedFailure(error: RenderedThreadsMediaResolverError): PublicFailure {
+  return error.code === 'RENDERED_MEDIA_NOT_FOUND'
+    ? failure('MEDIA_NOT_FOUND', 422, '找不到可下載的影片。')
+    : failure('RESOLVE_UNAVAILABLE', 503, '暫時無法解析此貼文，請稍後再試。');
+}
+
 function publicFailure(error: unknown): PublicFailure {
   if (error instanceof BrowserSessionError) {
     return browserFailure(error);
@@ -208,6 +252,9 @@ function publicFailure(error: unknown): PublicFailure {
   }
   if (error instanceof PublicThreadsMarkupResolverError) {
     return markupFailure(error);
+  }
+  if (error instanceof RenderedThreadsMediaResolverError) {
+    return renderedFailure(error);
   }
   if (error instanceof ResolveVaultError) {
     return vaultFailure(error);
@@ -286,6 +333,65 @@ async function probeCandidates(
   return usable;
 }
 
+async function resolveCandidates(
+  post: NormalizedThreadsPost,
+  lease: ResolveLimitsLease,
+  bindings: ResolvePublicMediaBindings,
+  runtime: ResolvePublicMediaRuntime,
+): Promise<ResolvedCandidates> {
+  try {
+    const markup = await createPublicThreadsMarkupResolver({
+      fetch: (request) => runtime.fetcher(request),
+    }).resolve(post);
+    return { candidates: markup.candidates, rendered: false };
+  } catch (error: unknown) {
+    if (
+      !(error instanceof PublicThreadsMarkupResolverError) ||
+      !RENDERED_FALLBACK_ERRORS.has(error.code) ||
+      bindings.BROWSER === undefined
+    ) {
+      throw error;
+    }
+    if (!hasLeaseBudget(lease, runtime, FALLBACK_LEASE_BUDGET_MS)) {
+      throw error;
+    }
+  }
+
+  const rendered = await createRenderedThreadsMediaResolver({ browser: bindings.BROWSER }).resolve(
+    post,
+  );
+  assertLeaseBudget(lease, runtime, POST_RENDER_LEASE_BUDGET_MS);
+  return { candidates: rendered.candidates, rendered: true };
+}
+
+function hasLeaseBudget(
+  lease: ResolveLimitsLease,
+  runtime: ResolvePublicMediaRuntime,
+  minimumRemainingMs: number,
+): boolean {
+  let now: number;
+  try {
+    now = runtime.now();
+  } catch {
+    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE');
+  }
+  return (
+    Number.isSafeInteger(now) &&
+    Number.isSafeInteger(lease.expiresAt) &&
+    lease.expiresAt - now >= minimumRemainingMs
+  );
+}
+
+function assertLeaseBudget(
+  lease: ResolveLimitsLease,
+  runtime: ResolvePublicMediaRuntime,
+  minimumRemainingMs: number,
+): void {
+  if (!hasLeaseBudget(lease, runtime, minimumRemainingMs)) {
+    throw new ResolvePublicMediaError('RESOLVE_UNAVAILABLE');
+  }
+}
+
 function safeCandidate(candidate: {
   readonly candidateId: string;
   readonly contentLength?: number;
@@ -321,10 +427,11 @@ async function resolveWithLease(
     },
   );
 
-  const markup = await createPublicThreadsMarkupResolver({
-    fetch: (request) => runtime.fetcher(request),
-  }).resolve(prepared.post);
-  const candidates = await probeCandidates(markup.candidates, runtime);
+  const resolved = await resolveCandidates(prepared.post, lease, bindings, runtime);
+  const candidates = await probeCandidates(resolved.candidates, runtime);
+  if (resolved.rendered) {
+    assertLeaseBudget(lease, runtime, POST_PROBE_LEASE_BUDGET_MS);
+  }
   const stored = await storeResolvedMediaBatch({
     sessions: bindings.SESSIONS,
     identity: prepared.identity,

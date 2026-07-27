@@ -43,6 +43,7 @@ export const WRANGLER_RULES = Object.freeze({
   expectedOrigin: 'WRANGLER_EXPECTED_ORIGIN',
   turnstileSiteKey: 'WRANGLER_TURNSTILE_SITE_KEY',
   assets: 'WRANGLER_ASSETS',
+  browserBinding: 'WRANGLER_BROWSER_BINDING',
   requiredSecrets: 'WRANGLER_REQUIRED_SECRETS',
   secretValue: 'WRANGLER_SECRET_VALUE',
   checkFailed: 'WRANGLER_CHECK_FAILED',
@@ -182,6 +183,17 @@ function hasExactVars(value) {
   );
 }
 
+function bindingViolations(config) {
+  const violations = [];
+  if (!hasExactProperties(config.assets, EXPECTED_ASSETS)) {
+    violations.push(WRANGLER_RULES.assets);
+  }
+  if (Object.hasOwn(config, 'browser')) {
+    violations.push(WRANGLER_RULES.browserBinding);
+  }
+  return violations;
+}
+
 function configurationViolations(config) {
   const violations = [];
   if (!Object.hasOwn(config, 'workers_dev') || config.workers_dev !== false) {
@@ -224,9 +236,7 @@ function configurationViolations(config) {
   ) {
     violations.push(WRANGLER_RULES.turnstileSiteKey);
   }
-  if (!hasExactProperties(config.assets, EXPECTED_ASSETS)) {
-    violations.push(WRANGLER_RULES.assets);
-  }
+  violations.push(...bindingViolations(config));
   if (!hasExactRequiredSecrets(config.secrets)) {
     violations.push(WRANGLER_RULES.requiredSecrets);
   }

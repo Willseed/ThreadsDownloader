@@ -143,6 +143,11 @@ describe('Wrangler exposure gate', () => {
       (config) => (config.assets.html_handling = 'none'),
       WRANGLER_RULES.assets,
     ],
+    [
+      'unapproved browser binding',
+      (config) => (config.browser = { binding: 'BROWSER' }),
+      WRANGLER_RULES.browserBinding,
+    ],
   ])('rejects %s', async (_name, mutate, rule) => {
     const config = validConfig();
     mutate(config);

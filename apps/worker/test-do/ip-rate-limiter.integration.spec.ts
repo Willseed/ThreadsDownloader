@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { IpRateLimiter } from '../src/ip-rate-limiter.js';
 import { createOpaqueId, hashIdentifier } from '../src/security/cryptography.js';
+import { IP_RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
 import {
   MAX_SESSION_ISSUANCE_BURST,
   MAX_SESSION_ISSUANCE_CAPACITY,
@@ -129,7 +130,9 @@ describe('IpRateLimiter in workerd', () => {
     }));
     expect(stored.meta).toEqual([{ schema_version: 1, ip_hash: ipHash }]);
     expect(stored.events).toHaveLength(1);
-    expect(stored.permits).toHaveLength(1);
+    expect(stored.permits).toEqual([
+      { permit_id: permitId, expires_at: now + IP_RESOLVE_PERMIT_LEASE_MS },
+    ]);
     expect(stored.issuance).toHaveLength(1);
     expect(JSON.stringify(stored)).not.toContain(rawIp);
   });

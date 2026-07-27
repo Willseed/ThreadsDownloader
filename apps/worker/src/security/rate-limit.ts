@@ -3,11 +3,11 @@ import { decodeBase64Url } from '../utils/base64url.js';
 export const RESOLVE_WINDOW_MS = 60_000;
 export const MAX_RESOLVE_ATTEMPTS = 5;
 export const MAX_CONCURRENT_RESOLVES = 1;
-export const RESOLVE_PERMIT_LEASE_MS = 30_000;
+export const RESOLVE_PERMIT_LEASE_MS = 60_000;
 export const IP_RESOLVE_WINDOW_MS = 60_000;
 export const MAX_IP_RESOLVE_ATTEMPTS = 20;
 export const MAX_CONCURRENT_IP_RESOLVES = 3;
-export const IP_RESOLVE_PERMIT_LEASE_MS = 30_000;
+export const IP_RESOLVE_PERMIT_LEASE_MS = 60_000;
 
 export interface RateLimitPolicy {
   readonly windowMs: number;

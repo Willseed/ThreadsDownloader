@@ -90,9 +90,9 @@ describe('resolve rate-limit state', () => {
 
   it('cleans an expired lease and reports the earliest active deadline', () => {
     const first = acquireResolvePermit(empty, 10, permitIds[0]!);
-    expect(nextResolvePermitDeadline(first)).toBe(30_010);
-    expect(pruneResolveRateLimit(first, 30_009).permits).toHaveLength(1);
-    expect(pruneResolveRateLimit(first, 30_010).permits).toEqual([]);
+    expect(nextResolvePermitDeadline(first)).toBe(60_010);
+    expect(pruneResolveRateLimit(first, 60_009).permits).toHaveLength(1);
+    expect(pruneResolveRateLimit(first, 60_010).permits).toEqual([]);
   });
 
   it('releasing a missing valid permit is idempotent and immutable', () => {
@@ -118,7 +118,7 @@ describe('IP resolve rate-limit policy', () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       state = acquireRateLimitPermit(state, 100 + attempt, permitIds[attempt]!, IP_RESOLVE_POLICY);
     }
-    expect(nextRateLimitDeadline(state, IP_RESOLVE_POLICY)).toBe(30_100);
+    expect(nextRateLimitDeadline(state, IP_RESOLVE_POLICY)).toBe(60_100);
     expectRateError(
       () => acquireRateLimitPermit(state, 104, permitIds[3]!, IP_RESOLVE_POLICY),
       'RESOLVE_CONCURRENT_LIMIT',

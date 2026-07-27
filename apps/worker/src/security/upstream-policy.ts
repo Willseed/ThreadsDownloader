@@ -5,6 +5,8 @@ const MAX_REDIRECTS = 3;
 const THREADS_HOSTS = new Set(['threads.com', 'www.threads.com', 'threads.net', 'www.threads.net']);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const THREADS_PATH = /^\/@([A-Za-z0-9._]{1,30})\/post\/([A-Za-z0-9_-]{5,64})\/?$/;
+const OBSERVED_INSTAGRAM_FBCDN_HOST =
+  /^instagram\.([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.fna\.fbcdn\.net$/u;
 declare const normalizedThreadsPost: unique symbol;
 
 export type UpstreamPolicyErrorCode =
@@ -110,7 +112,13 @@ export function parseThreadsPostUrl(value: string): NormalizedThreadsPost {
 export function parseCdnUrl(value: string): CdnUrl {
   const url = parseUrl(value, MAX_CDN_URL_LENGTH, 'CDN_URL_INVALID');
   const hostname = url.hostname.toLowerCase();
-  const isCdnHost = hostname === 'cdninstagram.com' || hostname.endsWith('.cdninstagram.com');
+  const observedHostMatch = OBSERVED_INSTAGRAM_FBCDN_HOST.exec(hostname);
+  const isObservedInstagramFbCdnHost =
+    observedHostMatch !== null && !observedHostMatch[1]!.startsWith('xn--');
+  const isCdnHost =
+    hostname === 'cdninstagram.com' ||
+    hostname.endsWith('.cdninstagram.com') ||
+    isObservedInstagramFbCdnHost;
   if (
     url.protocol !== 'https:' ||
     !isCdnHost ||

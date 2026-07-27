@@ -10,6 +10,7 @@ import {
   importSigningKey,
 } from '../src/security/cryptography.js';
 import { encodeProbedMediaWire } from '../src/security/resolve-vault.js';
+import { RESOLVE_PERMIT_LEASE_MS } from '../src/security/rate-limit.js';
 import { parseCdnUrl } from '../src/security/upstream-policy.js';
 import { decodeBase64Url } from '../src/utils/base64url.js';
 import type { IpRateLimiter } from '../src/ip-rate-limiter.js';
@@ -885,7 +886,12 @@ describe('SessionCoordinator in workerd', () => {
     const stub = sessionStub(rawId);
     await bootstrap(stub, { sessionHash, csrfHash, issuedAt: now, expiresAt: now + 120_000 });
     const permitId = createOpaqueId();
-    expect((await acquirePermit(stub, sessionHash, csrfHash, permitId, now)).status).toBe(201);
+    const acquisition = await acquirePermit(stub, sessionHash, csrfHash, permitId, now);
+    expect(acquisition.status).toBe(201);
+    await expect(acquisition.json()).resolves.toEqual({
+      ok: true,
+      expiresAt: now + RESOLVE_PERMIT_LEASE_MS,
+    });
 
     const stored = await runInDurableObject(stub, (_instance, state) => ({
       events: state.storage.sql.exec('SELECT event_at FROM resolve_events').toArray(),

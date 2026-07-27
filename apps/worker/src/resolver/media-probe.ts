@@ -13,7 +13,7 @@ import {
   UpstreamPolicyError,
 } from '../security/upstream-policy.js';
 
-const MEDIA_PROBE_TIMEOUT_MS = 8_000;
+export const MEDIA_PROBE_TIMEOUT_MS = 8_000;
 const VIDEO_MEDIA_TYPE = /^video\/[!#$%&'*+.^_`|~A-Za-z0-9-]+$/u;
 const PROBED_MEDIA_FIELDS = [
   'completionReliable',

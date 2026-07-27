@@ -10,6 +10,10 @@ import { createOpaqueValueSigner, importSigningKey } from '../src/security/crypt
 import type { IpRateLimitNamespace } from '../src/security/resolve-limits.js';
 import type { SessionNamespace } from '../src/security/session-client.js';
 import type { TurnstileReplayNamespace } from '../src/security/turnstile.js';
+import type {
+  BrowserRunScrapePort,
+  RenderedBrowserScrapeOptions,
+} from '../src/resolver/rendered-threads-media.js';
 import { encodeBase64Url } from '../src/utils/base64url.js';
 
 const NOW = Date.parse('2026-07-25T00:00:00.000Z');
@@ -23,6 +27,8 @@ const POST_URL = 'https://threads.com/@alice/post/Abcde?private=query-token';
 const PRIVATE_CDN_QUERY = 'private-cdn-query';
 const REQUEST_ID = 'A'.repeat(32);
 const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));
+const RENDERED_PRIVATE_URL =
+  'https://instagram.ftpe7-2.fna.fbcdn.net/media/rendered.mp4?token=private-rendered-token';
 
 interface HarnessOptions {
   readonly clockError?: string;
@@ -31,15 +37,24 @@ interface HarnessOptions {
   readonly markupResponse?: () => Response | Promise<Response>;
   readonly markupUrls?: readonly string[];
   readonly probeResponse?: (request: Request, index: number) => Response | Promise<Response>;
+  readonly rendererEnabled?: boolean;
+  readonly rendererResponse?: (
+    options: RenderedBrowserScrapeOptions,
+  ) => Response | Promise<Response>;
   readonly replayStatus?: number;
   readonly sessionAcquireStatus?: number;
   readonly siteverifyResponse?: () => Response | Promise<Response>;
   readonly vaultResponse?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  readonly clock?: (call: number) => number;
 }
 
 interface HarnessControls {
   readonly clockValues: number[];
   readonly ipBodies: Record<string, unknown>[];
+  readonly rendererCalls: Array<{
+    readonly action: string;
+    readonly options: RenderedBrowserScrapeOptions;
+  }>;
   readonly probeRequests: Request[];
   readonly sequence: string[];
   readonly sessionBodies: Record<string, unknown>[];
@@ -85,6 +100,59 @@ function jsonResponse(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
 
+function rendererMarker(options: RenderedBrowserScrapeOptions): string {
+  const marker = /data-threads-downloader-render-marker="([A-Za-z0-9_-]{22})"/u.exec(
+    options.elements[0]!.selector,
+  )?.[1];
+  if (marker === undefined) {
+    throw new Error('expected a bounded renderer marker');
+  }
+  return marker;
+}
+
+function renderedElement(
+  url: string,
+  options: RenderedBrowserScrapeOptions,
+): Record<string, unknown> {
+  return {
+    html: '<video></video>',
+    text: '',
+    width: 640,
+    height: 360,
+    top: 0,
+    left: 0,
+    attributes: [
+      { name: 'src', value: url },
+      { name: 'data-threads-downloader-render-marker', value: rendererMarker(options) },
+      { name: 'data-threads-downloader-render-location', value: options.url },
+    ],
+  };
+}
+
+function renderedResponse(
+  options: RenderedBrowserScrapeOptions,
+  url = RENDERED_PRIVATE_URL,
+): Response {
+  return jsonResponse({
+    success: true,
+    result: [
+      { selector: options.elements[0]!.selector, results: [renderedElement(url, options)] },
+      { selector: options.elements[1]!.selector, results: [] },
+      { selector: options.elements[2]!.selector, results: [] },
+    ],
+  });
+}
+
+function browserBinding(options: HarnessOptions, controls: HarnessControls): BrowserRunScrapePort {
+  return {
+    async quickAction(action, scrapeOptions) {
+      controls.sequence.push('browser:scrape');
+      controls.rendererCalls.push({ action, options: scrapeOptions });
+      return options.rendererResponse?.(scrapeOptions) ?? renderedResponse(scrapeOptions);
+    },
+  };
+}
+
 function sessionNamespace(options: HarnessOptions, controls: HarnessControls): SessionNamespace {
   return {
     idFromName(name) {
@@ -102,7 +170,7 @@ function sessionNamespace(options: HarnessOptions, controls: HarnessControls): S
             const status = options.sessionAcquireStatus ?? 201;
             return jsonResponse(
               status === 201
-                ? { ok: true, expiresAt: (body['now'] as number) + 30_000 }
+                ? { ok: true, expiresAt: (body['now'] as number) + 60_000 }
                 : { ok: false },
               status,
             );
@@ -158,7 +226,7 @@ function ipNamespace(options: HarnessOptions, controls: HarnessControls): IpRate
             const status = options.ipAcquireStatus ?? 201;
             return jsonResponse(
               status === 201
-                ? { ok: true, expiresAt: (body['now'] as number) + 30_000 }
+                ? { ok: true, expiresAt: (body['now'] as number) + 60_000 }
                 : { ok: false },
               status,
             );
@@ -223,7 +291,7 @@ function runtimeFetcher(options: HarnessOptions, controls: HarnessControls): typ
         headers: { 'content-type': options.markupContentType ?? 'text/html; charset=utf-8' },
       });
     }
-    if (url.hostname.endsWith('.cdninstagram.com')) {
+    if (url.hostname.endsWith('.cdninstagram.com') || url.hostname.endsWith('.fna.fbcdn.net')) {
       const index = probeIndex;
       probeIndex += 1;
       controls.sequence.push(`probe:${String(index)}`);
@@ -238,6 +306,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const controls: HarnessControls = {
     clockValues: [],
     ipBodies: [],
+    rendererCalls: [],
     probeRequests: [],
     sequence: [],
     sessionBodies: [],
@@ -251,7 +320,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       if (options.clockError !== undefined) {
         throw new Error(options.clockError);
       }
-      const value = NOW + clockOffset;
+      const value = options.clock?.(clockOffset / 100) ?? NOW + clockOffset;
       clockOffset += 100;
       controls.clockValues.push(value);
       return value;
@@ -259,6 +328,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
     requestId: () => REQUEST_ID,
   };
   const bindings: ResolvePublicMediaBindings = {
+    ...(options.rendererEnabled === true || options.rendererResponse !== undefined
+      ? { BROWSER: browserBinding(options, controls) }
+      : {}),
     EXPECTED_HOST,
     EXPECTED_ORIGIN,
     IP_RATE_LIMITS: ipNamespace(options, controls),
@@ -413,7 +485,7 @@ describe('resolve public media request policy', () => {
   ] as const)(
     'rejects malformed input before any durable or upstream side effect',
     async (input, status, code) => {
-      const harness = createHarness();
+      const harness = createHarness({ rendererEnabled: true });
       const result = await execute(harness, input);
 
       expect(result.response.status).toBe(status);
@@ -421,6 +493,7 @@ describe('resolve public media request policy', () => {
       expectError(result.body, code);
       expectPublicBodySafe(result.body);
       expect(harness.controls.sequence).toEqual([]);
+      expect(harness.controls.rendererCalls).toEqual([]);
     },
   );
 
@@ -457,15 +530,16 @@ describe('resolve public media request policy', () => {
   });
 
   it('rejects bad cookies and URLs before acquiring capacity', async () => {
-    const badCookie = createHarness();
+    const badCookie = createHarness({ rendererEnabled: true });
     const cookieResult = await execute(badCookie, {
       cookie: `${SESSION_COOKIE_NAME}=tampered.private-cookie`,
     });
     expect(cookieResult.response.status).toBe(401);
     expectError(cookieResult.body, 'SESSION_INVALID');
     expect(badCookie.controls.sequence).toEqual([]);
+    expect(badCookie.controls.rendererCalls).toEqual([]);
 
-    const badUrl = createHarness();
+    const badUrl = createHarness({ rendererEnabled: true });
     const urlResult = await execute(badUrl, {
       body: {
         postUrl: 'https://attacker.example/private-query',
@@ -478,6 +552,7 @@ describe('resolve public media request policy', () => {
     expectError(urlResult.body, 'URL_INVALID');
     expectPublicBodySafe(urlResult.body, ['attacker.example', 'private-cookie']);
     expect(badUrl.controls.sequence).toEqual([]);
+    expect(badUrl.controls.rendererCalls).toEqual([]);
   });
 });
 
@@ -616,6 +691,264 @@ describe('resolve public media workflow', () => {
   });
 
   it.each([
+    [
+      'JavaScript shell',
+      () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    ],
+    [
+      'missing media',
+      () =>
+        new Response('<main>Public post without downloadable media.</main>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    ],
+    [
+      'invalid response',
+      () => new Response('{}', { headers: { 'content-type': 'application/json' } }),
+    ],
+    [
+      'oversized response',
+      () =>
+        new Response('', {
+          headers: { 'content-length': String(2 * 1024 * 1024 + 1), 'content-type': 'text/html' },
+        }),
+    ],
+  ] as const)(
+    'falls back to rendered /media only for an allowed %s error',
+    async (_name, markupResponse) => {
+      const harness = createHarness({ rendererEnabled: true, markupResponse });
+
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(200);
+      expect(harness.controls.sequence).toEqual([
+        'session:acquire',
+        'ip:acquire',
+        'turnstile:reserve',
+        'turnstile:siteverify',
+        'threads:markup',
+        'browser:scrape',
+        'probe:0',
+        'vault:store',
+        'session:release',
+        'ip:release',
+      ]);
+      expect(harness.controls.rendererCalls).toHaveLength(1);
+      expect(harness.controls.rendererCalls[0]!.options.url).toBe(
+        'https://www.threads.com/@alice/post/Abcde/media',
+      );
+      expect(harness.controls.probeRequests[0]!.url).toBe(RENDERED_PRIVATE_URL);
+      expect(harness.controls.vaultBodies[0]!['candidates']).toEqual([
+        expect.objectContaining({ finalUrl: RENDERED_PRIVATE_URL }),
+      ]);
+      expectPublicBodySafe(result.body, ['private-rendered-token', RENDERED_PRIVATE_URL]);
+    },
+  );
+
+  it('fails closed before probing when rendering returns two distinct valid videos', async () => {
+    const secondUrl = 'https://video.cdninstagram.com/related.mp4?token=private-related-token';
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      rendererResponse: (options) =>
+        jsonResponse({
+          success: true,
+          result: [
+            {
+              selector: options.elements[0]!.selector,
+              results: [
+                renderedElement(RENDERED_PRIVATE_URL, options),
+                renderedElement(secondUrl, options),
+              ],
+            },
+            { selector: options.elements[1]!.selector, results: [] },
+            { selector: options.elements[2]!.selector, results: [] },
+          ],
+        }),
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(503);
+    expectError(result.body, 'RESOLVE_UNAVAILABLE');
+    expect(harness.controls.rendererCalls).toHaveLength(1);
+    expect(harness.controls.probeRequests).toEqual([]);
+    expect(harness.controls.vaultBodies).toEqual([]);
+    expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, secondUrl, 'private-related-token']);
+  });
+
+  it.each([
+    [
+      'valid empty result',
+      (options: RenderedBrowserScrapeOptions) =>
+        jsonResponse({
+          success: true,
+          result: [
+            { selector: options.elements[0]!.selector, results: [] },
+            { selector: options.elements[1]!.selector, results: [] },
+            { selector: options.elements[2]!.selector, results: [] },
+          ],
+        }),
+      422,
+      'MEDIA_NOT_FOUND',
+    ],
+    [
+      'provider failure status',
+      () =>
+        new Response('private-provider-error', {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        }),
+      503,
+      'RESOLVE_UNAVAILABLE',
+    ],
+  ] as const)(
+    'maps renderer $0 to a safe public error',
+    async (_name, rendererResponse, status, code) => {
+      const harness = createHarness({
+        markupResponse: () =>
+          new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+            headers: { 'content-type': 'text/html' },
+          }),
+        rendererResponse,
+      });
+
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(status);
+      expectError(result.body, code);
+      expect(harness.controls.rendererCalls).toHaveLength(1);
+      expect(harness.controls.probeRequests).toEqual([]);
+      expect(harness.controls.vaultBodies).toEqual([]);
+      expectPublicBodySafe(result.body, ['private-provider-error']);
+    },
+  );
+
+  it.each([
+    ['login', () => new Response(null, { status: 401 })],
+    ['access denial', () => new Response(null, { status: 403 })],
+    ['rate limit', () => new Response(null, { status: 429 })],
+    ['upstream outage', () => new Response(null, { status: 503 })],
+    [
+      'bot block',
+      () =>
+        new Response('<main>Automated behavior was temporarily blocked.</main>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    ],
+    [
+      'invalid redirect',
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://attacker.example/private-redirect' },
+        }),
+    ],
+  ] as const)(
+    'does not use rendering to bypass a Threads %s error',
+    async (_name, markupResponse) => {
+      const harness = createHarness({ rendererEnabled: true, markupResponse });
+
+      const result = await execute(harness);
+
+      expect(result.response.status).not.toBe(200);
+      expect(harness.controls.rendererCalls).toEqual([]);
+      expect(harness.controls.probeRequests).toEqual([]);
+      expect(harness.controls.vaultBodies).toEqual([]);
+      expectPublicBodySafe(result.body, ['private-redirect']);
+    },
+  );
+
+  it('keeps the original markup failure when the optional Browser binding is absent', async () => {
+    const harness = createHarness({
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(422);
+    expectError(result.body, 'THREADS_JAVASCRIPT_REQUIRED');
+    expect(harness.controls.rendererCalls).toEqual([]);
+  });
+
+  it('accepts each exact 60-second lease budget boundary through rendered probe and vault store', async () => {
+    const harness = createHarness({
+      rendererEnabled: true,
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      clock(call) {
+        return [
+          NOW,
+          NOW,
+          NOW,
+          NOW + 22_000,
+          NOW + 34_000,
+          NOW + 42_000,
+          NOW + 42_000,
+          NOW + 42_100,
+        ][call]!;
+      },
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(200);
+    expect(harness.controls.rendererCalls).toHaveLength(1);
+    expect(harness.controls.probeRequests).toHaveLength(1);
+    expect(harness.controls.vaultBodies).toHaveLength(1);
+  });
+
+  it.each([
+    ['before rendering', [NOW, NOW, NOW, NOW + 22_001], 422, 'THREADS_JAVASCRIPT_REQUIRED', 0, 0],
+    [
+      'after rendering',
+      [NOW, NOW, NOW, NOW + 22_000, NOW + 34_001],
+      503,
+      'RESOLVE_UNAVAILABLE',
+      1,
+      0,
+    ],
+    [
+      'after probing',
+      [NOW, NOW, NOW, NOW + 22_000, NOW + 34_000, NOW + 42_001],
+      503,
+      'RESOLVE_UNAVAILABLE',
+      1,
+      1,
+    ],
+  ] as const)(
+    'fails closed $0 when the fixed permit has one millisecond too little',
+    async (_name, values, status, code, rendererCalls, probeCalls) => {
+      const harness = createHarness({
+        rendererEnabled: true,
+        markupResponse: () =>
+          new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+            headers: { 'content-type': 'text/html' },
+          }),
+        clock: (call) => values[call]!,
+      });
+
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(status);
+      expectError(result.body, code);
+      expect(harness.controls.rendererCalls).toHaveLength(rendererCalls);
+      expect(harness.controls.probeRequests).toHaveLength(probeCalls);
+      expect(harness.controls.vaultBodies).toEqual([]);
+    },
+  );
+
+  it.each([
     [() => new Response(null, { status: 404 }), 422, 'MEDIA_NOT_FOUND'],
     [() => Promise.reject(new Error('private probe transport')), 503, 'RESOLVE_UNAVAILABLE'],
   ] as const)(
@@ -634,6 +967,30 @@ describe('resolve public media workflow', () => {
 });
 
 describe('resolve public media typed failures', () => {
+  it.each([
+    ['replayed Turnstile', { replayStatus: 409 }, 403, 'TURNSTILE_INVALID'],
+    [
+      'invalid Turnstile',
+      { siteverifyResponse: () => jsonResponse({ success: false }) },
+      403,
+      'TURNSTILE_INVALID',
+    ],
+    [
+      'unavailable Turnstile',
+      { siteverifyResponse: () => new Response(null, { status: 503 }) },
+      503,
+      'TURNSTILE_UNAVAILABLE',
+    ],
+  ] as const)('never calls Browser Run after $0', async (_name, options, status, code) => {
+    const harness = createHarness({ ...options, rendererEnabled: true });
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(status);
+    expectError(result.body, code);
+    expect(harness.controls.rendererCalls).toEqual([]);
+    expect(harness.controls.sequence).not.toContain('threads:markup');
+  });
+
   it.each([
     ['Turnstile replay', { replayStatus: 409 }, 403, 'TURNSTILE_INVALID'],
     [
@@ -752,7 +1109,7 @@ describe('resolve public media typed failures', () => {
   ] as const)(
     'maps acquisition failure without releasing a nonexistent public lease',
     async (options, status, code, rollback) => {
-      const harness = createHarness(options);
+      const harness = createHarness({ ...options, rendererEnabled: true });
       const result = await execute(harness);
 
       expect(result.response.status).toBe(status);
@@ -761,6 +1118,7 @@ describe('resolve public media typed failures', () => {
         rollback,
       );
       expect(harness.controls.sequence).not.toContain('turnstile:reserve');
+      expect(harness.controls.rendererCalls).toEqual([]);
       expectPublicBodySafe(result.body);
     },
   );
