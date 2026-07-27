@@ -71,12 +71,17 @@ error messages. CDN URLs likewise never enter the frontend or logs.
 
 Resolve failure telemetry is emitted when the public response is a 5xx, plus a
 narrow diagnostic exception for `MEDIA_NOT_FOUND` at the `resolve` stage. Its
-complete schema is the existing opaque `requestId`, one bounded workflow stage
-(`prepare`, `admission`, or `resolve`), and one code from the internal closed
-error-code union. It never includes request or upstream URLs, shortcode, session
-or IP material, headers, tokens, candidate data, exception messages, stacks, or
-cause objects. Reporting is best-effort and cannot change the public response;
-other 4xx outcomes and successful resolves emit no event.
+schema is the existing opaque `requestId`, one bounded workflow stage (`prepare`,
+`admission`, or `resolve`), and one code from the internal closed error-code
+union. When every candidate in an all-failed typed media-probe batch belongs to
+one policy-validated CDN family, the event may also contain the closed
+`candidateFamily` value `cdninstagram` or `instagram-fna`; mixed families and
+every non-probe failure omit it. The serialized event is rebuilt from these
+exact fields and bounded to 256 characters. It never includes request or
+upstream URLs, hostnames, subdomains, shortcode, session or IP material,
+headers, tokens, candidate data, exception messages, stacks, or cause objects.
+Reporting is best-effort and cannot change the public response; other 4xx
+outcomes and successful resolves emit no event.
 
 ## Durable Object lifecycle model
 

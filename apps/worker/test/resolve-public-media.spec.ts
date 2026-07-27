@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createResolvePublicMediaHandler,
+  serializeResolveFailureEvent,
   type ResolveFailureEvent,
   type ResolvePublicMediaBindings,
   type ResolvePublicMediaRuntime,
@@ -30,6 +31,10 @@ const REQUEST_ID = 'A'.repeat(32);
 const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));
 const RENDERED_PRIVATE_URL =
   'https://instagram.ftpe7-2.fna.fbcdn.net/media/rendered.mp4?token=private-rendered-token';
+const PRIVATE_FNA_URLS = [
+  'https://instagram.ftpe7-2.fna.fbcdn.net/media/first.mp4?token=private-fna-first',
+  'https://instagram.ftpe7-2.fna.fbcdn.net/media/second.mp4?token=private-fna-second',
+] as const;
 
 interface HarnessOptions {
   readonly clockError?: string;
@@ -1181,7 +1186,7 @@ describe('resolve public media typed failures', () => {
 
 describe('resolve public media failure telemetry', () => {
   it.each([
-    ['limits', { sessionAcquireStatus: 503 }, 'admission', 'RESOLVE_LIMITS_UNAVAILABLE'],
+    ['limits', { sessionAcquireStatus: 503 }, 'admission', 'RESOLVE_LIMITS_UNAVAILABLE', undefined],
     [
       'renderer',
       {
@@ -1197,32 +1202,42 @@ describe('resolve public media failure telemetry', () => {
       },
       'resolve',
       'RENDERED_UNAVAILABLE',
+      undefined,
     ],
     [
       'probe',
       { probeResponse: () => Promise.reject(new Error('private probe transport')) },
       'resolve',
       'MEDIA_PROBE_UNAVAILABLE',
+      'cdninstagram',
     ],
     [
       'vault',
       { vaultResponse: () => jsonResponse({ ok: false, private: POST_URL }, 500) },
       'resolve',
       'RESOLVE_VAULT_UNAVAILABLE',
+      undefined,
     ],
   ] as const)(
     'reports one exact PII-free event for a 5xx $0 failure',
-    async (_name, options, stage, code) => {
+    async (_name, options, stage, code, family) => {
       const harness = createHarness(options);
       const result = await execute(harness);
 
       expect(result.response.status).toBe(503);
-      expect(harness.controls.failureEvents).toEqual([{ requestId: REQUEST_ID, stage, code }]);
-      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual([
-        'code',
-        'requestId',
-        'stage',
+      expect(harness.controls.failureEvents).toEqual([
+        {
+          requestId: REQUEST_ID,
+          stage,
+          code,
+          ...(family === undefined ? {} : { candidateFamily: family }),
+        },
       ]);
+      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual(
+        family === undefined
+          ? ['code', 'requestId', 'stage']
+          : ['candidateFamily', 'code', 'requestId', 'stage'],
+      );
       expectFailureEventsSafe(harness.controls.failureEvents, [
         'private-provider-error',
         'private probe transport',
@@ -1248,6 +1263,76 @@ describe('resolve public media failure telemetry', () => {
   });
 
   it.each([
+    ['cdninstagram', defaultUrls(2), 'cdninstagram'],
+    ['Instagram FNA', PRIVATE_FNA_URLS, 'instagram-fna'],
+  ] as const)(
+    'classifies a homogeneous failed %s probe batch without retaining its host',
+    async (_name, markupUrls, candidateFamily) => {
+      const harness = createHarness({
+        markupUrls,
+        probeResponse: () => Promise.reject(new Error('private homogeneous probe failure')),
+      });
+      const result = await execute(harness);
+
+      expect(result.response.status).toBe(503);
+      expect(harness.controls.failureEvents).toEqual([
+        {
+          requestId: REQUEST_ID,
+          stage: 'resolve',
+          code: 'MEDIA_PROBE_UNAVAILABLE',
+          candidateFamily,
+        },
+      ]);
+      expectFailureEventsSafe(harness.controls.failureEvents, [
+        'private homogeneous probe failure',
+        ...markupUrls,
+        'video.cdninstagram.com',
+        'instagram.ftpe7-2.fna.fbcdn.net',
+      ]);
+    },
+  );
+
+  it('omits candidate family when failed probes span both allowed families', async () => {
+    const markupUrls = [defaultUrls(1)[0]!, PRIVATE_FNA_URLS[0]];
+    const harness = createHarness({
+      markupUrls,
+      probeResponse: () => Promise.reject(new Error('private mixed probe failure')),
+    });
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(503);
+    expect(harness.controls.failureEvents).toEqual([
+      { requestId: REQUEST_ID, stage: 'resolve', code: 'MEDIA_PROBE_UNAVAILABLE' },
+    ]);
+    expectFailureEventsSafe(harness.controls.failureEvents, [
+      'private mixed probe failure',
+      ...markupUrls,
+    ]);
+  });
+
+  it('serializes only the exact bounded schema and strips unrelated properties', () => {
+    const event = {
+      requestId: REQUEST_ID,
+      stage: 'resolve',
+      code: 'MEDIA_PROBE_UNAVAILABLE',
+      candidateFamily: 'instagram-fna',
+      source: POST_URL,
+      candidateUrl: PRIVATE_FNA_URLS[0],
+    } as ResolveFailureEvent & { readonly candidateUrl: string; readonly source: string };
+    const serialized = serializeResolveFailureEvent(event);
+
+    expect(JSON.parse(serialized)).toEqual({
+      requestId: REQUEST_ID,
+      stage: 'resolve',
+      code: 'MEDIA_PROBE_UNAVAILABLE',
+      candidateFamily: 'instagram-fna',
+    });
+    expect(serialized.length).toBeLessThanOrEqual(256);
+    expect(serialized).not.toContain(POST_URL);
+    expect(serialized).not.toContain(PRIVATE_FNA_URLS[0]);
+  });
+
+  it.each([
     [
       'renderer empty result',
       {
@@ -1266,28 +1351,35 @@ describe('resolve public media failure telemetry', () => {
           }),
       },
       'RENDERED_MEDIA_NOT_FOUND',
+      undefined,
     ],
     [
       'nontransient probe rejection',
       { probeResponse: () => new Response('private-probe-error', { status: 404 }) },
       'MEDIA_PROBE_STATUS_INVALID',
+      'cdninstagram',
     ],
   ] as const)(
     'reports one exact PII-free event for a MEDIA_NOT_FOUND $0',
-    async (_name, options, code) => {
+    async (_name, options, code, family) => {
       const harness = createHarness(options);
       const result = await execute(harness);
 
       expect(result.response.status).toBe(422);
       expectError(result.body, 'MEDIA_NOT_FOUND');
       expect(harness.controls.failureEvents).toEqual([
-        { requestId: REQUEST_ID, stage: 'resolve', code },
+        {
+          requestId: REQUEST_ID,
+          stage: 'resolve',
+          code,
+          ...(family === undefined ? {} : { candidateFamily: family }),
+        },
       ]);
-      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual([
-        'code',
-        'requestId',
-        'stage',
-      ]);
+      expect(Object.keys(harness.controls.failureEvents[0]!).sort()).toEqual(
+        family === undefined
+          ? ['code', 'requestId', 'stage']
+          : ['candidateFamily', 'code', 'requestId', 'stage'],
+      );
       expectFailureEventsSafe(harness.controls.failureEvents, ['private-probe-error']);
     },
   );
@@ -1318,7 +1410,12 @@ describe('resolve public media failure telemetry', () => {
     expect(result.response.status).toBe(503);
     expectError(result.body, 'RESOLVE_UNAVAILABLE');
     expect(harness.controls.failureEvents).toEqual([
-      { requestId: REQUEST_ID, stage: 'resolve', code: 'MEDIA_PROBE_UNAVAILABLE' },
+      {
+        requestId: REQUEST_ID,
+        stage: 'resolve',
+        code: 'MEDIA_PROBE_UNAVAILABLE',
+        candidateFamily: 'cdninstagram',
+      },
     ]);
     expectPublicBodySafe(result.body, ['private reporter failure', 'private probe transport']);
   });

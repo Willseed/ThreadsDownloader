@@ -33,6 +33,7 @@ import { IpRateLimiter } from './ip-rate-limiter.js';
 import { TurnstileReplay } from './turnstile-replay.js';
 import {
   createResolvePublicMediaHandler,
+  serializeResolveFailureEvent,
   type ResolvePublicMediaBindings,
 } from './workflows/resolve-public-media.js';
 import { createPublicDownloadApiHandler } from './workflows/public-download-api.js';
@@ -96,7 +97,7 @@ const resolvePublicMedia = createResolvePublicMediaHandler({
   fetcher: fetch,
   now: Date.now,
   reportFailure(event) {
-    console.error(JSON.stringify(event));
+    console.error(serializeResolveFailureEvent(event));
   },
   requestId,
 });

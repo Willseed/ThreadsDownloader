@@ -63,6 +63,7 @@ import {
 } from '../security/turnstile.js';
 import {
   parseThreadsPostUrl,
+  type CdnUrl,
   type NormalizedThreadsPost,
   UpstreamPolicyError,
   type UpstreamPolicyErrorCode,
@@ -91,8 +92,21 @@ const TRANSIENT_PROBE_FAILURE_PRIORITY: readonly MediaProbeErrorCode[] = [
   'MEDIA_PROBE_ABORTED',
   'MEDIA_PROBE_UNAVAILABLE',
 ];
+const MEDIA_PROBE_FAILURE_CODES: ReadonlySet<ResolveFailureCode> = new Set([
+  'MEDIA_PROBE_ABORTED',
+  'MEDIA_PROBE_CANDIDATE_INVALID',
+  'MEDIA_PROBE_CONTENT_TYPE_INVALID',
+  'MEDIA_PROBE_METADATA_INVALID',
+  'MEDIA_PROBE_REDIRECT_INVALID',
+  'MEDIA_PROBE_REDIRECT_LIMIT',
+  'MEDIA_PROBE_STATUS_INVALID',
+  'MEDIA_PROBE_UNAVAILABLE',
+]);
+const INSTAGRAM_FNA_HOST = /^instagram\.([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.fna\.fbcdn\.net$/u;
+const MAX_SERIALIZED_FAILURE_EVENT_LENGTH = 256;
 
 export type ResolveFailureStage = 'admission' | 'prepare' | 'resolve';
+export type ResolveCandidateFamily = 'cdninstagram' | 'instagram-fna';
 export type ResolveFailureCode =
   | BrowserSessionErrorCode
   | ClientIpErrorCode
@@ -111,6 +125,7 @@ export interface ResolveFailureEvent {
   readonly requestId: string;
   readonly stage: ResolveFailureStage;
   readonly code: ResolveFailureCode;
+  readonly candidateFamily?: ResolveCandidateFamily;
 }
 
 export interface ResolvePublicMediaBindings {
@@ -161,10 +176,30 @@ class ResolvePublicMediaError extends Error {
   constructor(
     readonly code: WorkflowErrorCode,
     readonly failureCode: ResolveFailureCode = code,
+    readonly candidateFamily?: ResolveCandidateFamily,
   ) {
     super(code);
     this.name = 'ResolvePublicMediaError';
   }
+}
+
+function candidateFamily(candidate: CdnUrl): ResolveCandidateFamily | undefined {
+  const hostname = candidate.url.hostname;
+  if (hostname === 'cdninstagram.com' || hostname.endsWith('.cdninstagram.com')) {
+    return 'cdninstagram';
+  }
+  const match = INSTAGRAM_FNA_HOST.exec(hostname);
+  return match !== null && !match[1]!.startsWith('xn--') ? 'instagram-fna' : undefined;
+}
+
+function sharedFailedCandidateFamily(
+  candidates: readonly MediaCandidate[],
+): ResolveCandidateFamily | undefined {
+  const first = candidates[0] === undefined ? undefined : candidateFamily(candidates[0].value);
+  return first !== undefined &&
+    candidates.every((candidate) => candidateFamily(candidate.value) === first)
+    ? first
+    : undefined;
 }
 
 function isCanonicalCsrfToken(value: unknown): value is string {
@@ -332,6 +367,39 @@ function reportServerFailure(runtime: ResolvePublicMediaRuntime, event: ResolveF
   }
 }
 
+export function serializeResolveFailureEvent(event: ResolveFailureEvent): string {
+  const serialized = JSON.stringify(
+    event.candidateFamily === undefined
+      ? { requestId: event.requestId, stage: event.stage, code: event.code }
+      : {
+          requestId: event.requestId,
+          stage: event.stage,
+          code: event.code,
+          candidateFamily: event.candidateFamily,
+        },
+  );
+  if (serialized.length > MAX_SERIALIZED_FAILURE_EVENT_LENGTH) {
+    throw new Error('Resolve failure event exceeds its fixed serialization bound.');
+  }
+  return serialized;
+}
+
+function failureEvent(
+  error: unknown,
+  requestId: string,
+  stage: ResolveFailureStage,
+): ResolveFailureEvent {
+  const code = failureCode(error);
+  if (
+    error instanceof ResolvePublicMediaError &&
+    error.candidateFamily !== undefined &&
+    MEDIA_PROBE_FAILURE_CODES.has(code)
+  ) {
+    return { requestId, stage, code, candidateFamily: error.candidateFamily };
+  }
+  return { requestId, stage, code };
+}
+
 function errorResponse(
   error: unknown,
   requestId: string,
@@ -343,7 +411,7 @@ function errorResponse(
     (mapped.status >= 500 && mapped.status <= 599) ||
     (stage === 'resolve' && mapped.code === 'MEDIA_NOT_FOUND')
   ) {
-    reportServerFailure(runtime, { requestId, stage, code: failureCode(error) });
+    reportServerFailure(runtime, failureEvent(error, requestId, stage));
   }
   return Response.json(createApiError(mapped.code, mapped.message, requestId), {
     status: mapped.status,
@@ -412,9 +480,11 @@ async function probeCandidates(
     const transientFailure = TRANSIENT_PROBE_FAILURE_PRIORITY.find((code) =>
       transientFailures.has(code),
     );
+    const probeFailureCode = transientFailure ?? nontransientFailure;
     throw new ResolvePublicMediaError(
       transientFailure === undefined ? 'MEDIA_NOT_FOUND' : 'RESOLVE_UNAVAILABLE',
-      transientFailure ?? nontransientFailure,
+      probeFailureCode,
+      sharedFailedCandidateFamily(candidates),
     );
   }
   return usable;
