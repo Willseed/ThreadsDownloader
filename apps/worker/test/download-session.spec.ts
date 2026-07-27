@@ -63,8 +63,11 @@ class FakeDownloadStorage {
         return cursor([]);
       }
       if (normalized.startsWith('SELECT name FROM sqlite_schema')) {
-        const name = bindings[0];
-        return cursor(typeof name === 'string' && this.tables.has(name) ? [{ name }] : []);
+        return cursor(
+          bindings.flatMap((name) =>
+            typeof name === 'string' && this.tables.has(name) ? [{ name }] : [],
+          ),
+        );
       }
       if (normalized === 'SELECT singleton FROM download_session WHERE singleton = 1') {
         return cursor(this.row === null ? [] : [{ singleton: 1 }]);
@@ -115,6 +118,20 @@ class FakeDownloadStorage {
         };
         this.totalChanges += 1;
         return cursor([]);
+      }
+      if (normalized.startsWith('UPDATE download_session SET last_activity_at = ?')) {
+        if (
+          this.row === null ||
+          this.row['status'] !== 'ACTIVE' ||
+          this.row['last_activity_at'] !== bindings[2] ||
+          this.row['idle_expires_at'] !== bindings[3]
+        ) {
+          return cursor([]);
+        }
+        this.row['last_activity_at'] = bindings[0]!;
+        this.row['idle_expires_at'] = bindings[1]!;
+        this.totalChanges += 1;
+        return cursor([{ singleton: 1 }]);
       }
       if (normalized.startsWith('UPDATE download_session SET')) {
         if (this.row === null) {
@@ -187,13 +204,89 @@ class FakeDownloadStorage {
         this.totalChanges += 1;
         return cursor([]);
       }
+      if (normalized.startsWith('UPDATE download_active_leases SET sequence = ?')) {
+        const [
+          sequence,
+          renewedAt,
+          expiresAt,
+          holderId,
+          previousSequence,
+          acquiredAt,
+          previousRenewedAt,
+          previousExpiresAt,
+          requestedStart,
+          requestedEnd,
+          requestedTotal,
+        ] = bindings;
+        const lease = this.leases.find(
+          (candidate) =>
+            candidate['holder_id'] === holderId &&
+            candidate['sequence'] === previousSequence &&
+            candidate['acquired_at'] === acquiredAt &&
+            candidate['renewed_at'] === previousRenewedAt &&
+            candidate['expires_at'] === previousExpiresAt &&
+            candidate['requested_start'] === requestedStart &&
+            candidate['requested_end'] === requestedEnd &&
+            candidate['requested_total'] === requestedTotal,
+        );
+        if (lease === undefined) {
+          return cursor([]);
+        }
+        lease['sequence'] = sequence!;
+        lease['renewed_at'] = renewedAt!;
+        lease['expires_at'] = expiresAt!;
+        this.totalChanges += 1;
+        return cursor([{ holder_id: holderId! }]);
+      }
+      if (
+        normalized ===
+        'DELETE FROM download_active_leases WHERE expires_at <= ? RETURNING holder_id'
+      ) {
+        const expiresAt = bindings[0];
+        const deleted =
+          typeof expiresAt === 'number'
+            ? this.leases.filter(
+                (lease) =>
+                  typeof lease['expires_at'] === 'number' && lease['expires_at'] <= expiresAt,
+              )
+            : [];
+        this.leases.splice(
+          0,
+          this.leases.length,
+          ...this.leases.filter((lease) => !deleted.includes(lease)),
+        );
+        this.totalChanges += deleted.length;
+        return cursor(deleted.map((lease) => ({ holder_id: lease['holder_id']! })));
+      }
+      if (normalized.startsWith('SELECT MIN(absolute_expires_at, idle_expires_at,')) {
+        const deadlines = this.leases.map((lease) => lease['expires_at']);
+        if (this.row === null || this.row['status'] !== 'ACTIVE') {
+          return cursor([]);
+        }
+        const absoluteExpiresAt = this.row['absolute_expires_at'];
+        const idleExpiresAt = this.row['idle_expires_at'];
+        const allDeadlines = [absoluteExpiresAt, idleExpiresAt, ...deadlines];
+        return cursor([
+          {
+            alarm_at: allDeadlines.every((deadline) => typeof deadline === 'number')
+              ? Math.min(...(allDeadlines as number[]))
+              : null,
+          },
+        ]);
+      }
       if (normalized.includes('FROM download_session WHERE singleton = 1')) {
         return cursor(this.row === null ? [] : [this.row]);
       }
       if (normalized.includes('FROM download_completed_intervals')) {
+        if (!this.tables.has('download_completed_intervals')) {
+          throw new Error('no such table: download_completed_intervals');
+        }
         return cursor(this.intervals);
       }
       if (normalized.includes('FROM download_active_leases')) {
+        if (!this.tables.has('download_active_leases')) {
+          throw new Error('no such table: download_active_leases');
+        }
         return cursor(this.leases);
       }
       throw new Error(`Unexpected SQL in test: ${normalized}`);
@@ -569,6 +662,8 @@ describe('DownloadSession lifecycle seams', () => {
     expect(storage.alarmAt).toBe(NOW + 600_000);
 
     clock.mockReturnValue(NOW + 2);
+    const changesBeforeProgress = storage.totalChanges;
+    storage.sql.exec.mockClear();
     const progressed = await session.fetch(
       jsonRequest('/renew', {
         downloadId,
@@ -583,6 +678,8 @@ describe('DownloadSession lifecycle seams', () => {
       last_activity_at: NOW + 2,
       idle_expires_at: NOW + 2 + 600_000,
     });
+    expect(storage.sql.exec).toHaveBeenCalledTimes(7);
+    expect(storage.totalChanges - changesBeforeProgress).toBe(2);
     expect(storage.alarmAt).toBe(NOW + 2 + 600_000);
 
     const replay = await session.fetch(
@@ -645,6 +742,156 @@ describe('DownloadSession lifecycle seams', () => {
     expect(storage.row).toBeNull();
     expect(storage.leases).toEqual([]);
     expect(storage.alarmAt).toBeNull();
+  });
+
+  it('renews bounded maximum state without rewriting unrelated rows', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const { session, storage } = object();
+    expect((await initialize(session)).status).toBe(201);
+
+    const holders: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const response = await acquire(session);
+      expect(response.status).toBe(201);
+      holders.push(((await response.json()) as { readonly holderId: string }).holderId);
+    }
+    storage.row!['content_length'] = 128;
+    for (let index = 0; index < 64; index += 1) {
+      storage.intervals.push({
+        start_byte: index * 2,
+        end_byte: index * 2,
+        total_bytes: 128,
+      });
+    }
+    const intervalsBefore = structuredClone(storage.intervals);
+    const peerLeasesBefore = structuredClone(
+      storage.leases.filter((lease) => lease['holder_id'] !== holders[0]),
+    );
+    const changesBefore = storage.totalChanges;
+    storage.sql.exec.mockClear();
+
+    clock.mockReturnValue(NOW + 1);
+    const renewed = await session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: holders[0],
+        sequence: 1,
+        progress: false,
+      }),
+    );
+
+    expect(renewed.status).toBe(200);
+    expect(storage.sql.exec).toHaveBeenCalledTimes(6);
+    expect(storage.totalChanges - changesBefore).toBe(1);
+    expect(storage.intervals).toEqual(intervalsBefore);
+    expect(storage.leases.filter((lease) => lease['holder_id'] !== holders[0])).toEqual(
+      peerLeasesBefore,
+    );
+    expect(storage.leases.find((lease) => lease['holder_id'] === holders[0])).toMatchObject({
+      sequence: 1,
+      renewed_at: NOW + 1,
+      expires_at: NOW + 1 + 900_000,
+    });
+    const statements = storage.sql.exec.mock.calls.map(([query]) =>
+      query.replaceAll(/\s+/gu, ' ').trim(),
+    );
+    expect(statements).not.toContain('DELETE FROM download_completed_intervals');
+    expect(statements).not.toContain('DELETE FROM download_active_leases');
+    expect(statements.every((statement) => !statement.startsWith('INSERT INTO'))).toBe(true);
+  });
+
+  it('distinguishes a missing session table from corrupt renewal child storage', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const { session, storage } = object();
+    expect((await initialize(session)).status).toBe(201);
+    const acquired = (await (await acquire(session)).json()) as { readonly holderId: string };
+    const rowBefore = structuredClone(storage.row);
+    storage.tables.delete('download_active_leases');
+    storage.setAlarm.mockClear();
+
+    const response = await session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: acquired.holderId,
+        sequence: 1,
+        progress: false,
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+    expect(storage.row).toEqual(rowBefore);
+    expect(storage.setAlarm).not.toHaveBeenCalled();
+
+    const missingSession = object();
+    expect((await initialize(missingSession.session)).status).toBe(201);
+    const missingSessionLease = (await (await acquire(missingSession.session)).json()) as {
+      readonly holderId: string;
+    };
+    missingSession.storage.tables.delete('download_session');
+    missingSession.storage.setAlarm.mockClear();
+    const missingSessionResponse = await missingSession.session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: missingSessionLease.holderId,
+        sequence: 1,
+        progress: false,
+      }),
+    );
+    expect(missingSessionResponse.status).toBe(410);
+    await expect(missingSessionResponse.json()).resolves.toEqual({ ok: false });
+    expect(missingSession.storage.setAlarm).not.toHaveBeenCalled();
+  });
+
+  it('deletes only stale peer leases while advancing activity', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+    const { session, storage } = object();
+    expect((await initialize(session)).status).toBe(201);
+    const target = (await (await acquire(session)).json()) as { readonly holderId: string };
+    const stale = (await (await acquire(session)).json()) as { readonly holderId: string };
+
+    clock.mockReturnValue(NOW + 500_000);
+    expect(
+      (
+        await session.fetch(
+          jsonRequest('/renew', {
+            downloadId,
+            sessionHash,
+            holderId: target.holderId,
+            sequence: 1,
+            progress: true,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const changesBefore = storage.totalChanges;
+    storage.sql.exec.mockClear();
+
+    clock.mockReturnValue(NOW + 900_000);
+    const renewed = await session.fetch(
+      jsonRequest('/renew', {
+        downloadId,
+        sessionHash,
+        holderId: target.holderId,
+        sequence: 2,
+        progress: true,
+      }),
+    );
+
+    expect(renewed.status).toBe(200);
+    expect(storage.sql.exec).toHaveBeenCalledTimes(8);
+    expect(storage.totalChanges - changesBefore).toBe(3);
+    expect(storage.leases).toHaveLength(1);
+    expect(storage.leases[0]).toMatchObject({ holder_id: target.holderId, sequence: 2 });
+    expect(storage.leases.some((lease) => lease['holder_id'] === stale.holderId)).toBe(false);
+    expect(storage.row).toMatchObject({
+      last_activity_at: NOW + 900_000,
+      idle_expires_at: NOW + 1_500_000,
+    });
+    expect(storage.alarmAt).toBe(NOW + 1_500_000);
   });
 
   it('returns canonical range failures and enforces four parallel leases', async () => {
@@ -823,9 +1070,22 @@ describe('DownloadSession lifecycle seams', () => {
     const failingStorage = new FakeDownloadStorage();
     const failing = object(failingStorage).session;
     expect((await initialize(failing)).status).toBe(201);
+    const failingLease = (await (await acquire(failing)).json()) as { readonly holderId: string };
     failingStorage.failSetAlarm = true;
     clock.mockReturnValue(NOW + 1);
-    expect((await acquire(failing)).status).toBe(500);
+    expect(
+      (
+        await failing.fetch(
+          jsonRequest('/renew', {
+            downloadId,
+            sessionHash,
+            holderId: failingLease.holderId,
+            sequence: 1,
+            progress: false,
+          }),
+        )
+      ).status,
+    ).toBe(500);
     expect(failingStorage.deleteAlarm).toHaveBeenCalled();
     expect(failingStorage.deleteAll).toHaveBeenCalled();
     expect(failingStorage.tables.size).toBe(0);

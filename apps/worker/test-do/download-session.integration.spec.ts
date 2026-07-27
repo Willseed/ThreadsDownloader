@@ -469,6 +469,7 @@ describe('DownloadSession lifecycle in workerd', () => {
       holder_id: acquired.holderId,
       sequence: 1,
     });
+    expect(heartbeatSnapshot.changes - acquiredSnapshot.changes).toBe(1);
     expect(heartbeatSnapshot.alarmAt).toBe(acquiredSnapshot.alarmAt);
     expect(
       (
@@ -570,6 +571,106 @@ describe('DownloadSession lifecycle in workerd', () => {
         })
       ).status,
     ).toBe(410);
+  });
+
+  it('renews one lease and prunes only its stale peer', async () => {
+    const current = fixture();
+    expect((await initialize(current)).status).toBe(201);
+    const target = (await (await acquire(current)).json()) as { readonly holderId: string };
+    const stale = (await (await acquire(current)).json()) as { readonly holderId: string };
+    await runInDurableObject(current.target, async (_instance, state) => {
+      const now = Date.now();
+      const issuedAt = now - 1_200_000;
+      state.storage.sql.exec(
+        `UPDATE download_session SET
+           issued_at = ?, start_expires_at = ?, last_activity_at = ?, idle_expires_at = ?,
+           absolute_expires_at = ?
+         WHERE singleton = 1`,
+        issuedAt,
+        issuedAt + DOWNLOAD_START_DEADLINE_MS,
+        now - 1_000,
+        now + 599_000,
+        issuedAt + 3_600_000,
+      );
+      state.storage.sql.exec(
+        `UPDATE download_active_leases
+         SET acquired_at = ?, renewed_at = ?, expires_at = ?
+         WHERE holder_id = ?`,
+        now - 500_000,
+        now - 1_000,
+        now + 899_000,
+        target.holderId,
+      );
+      state.storage.sql.exec(
+        `UPDATE download_active_leases
+         SET acquired_at = ?, renewed_at = ?, expires_at = ?
+         WHERE holder_id = ?`,
+        issuedAt,
+        now - 901_000,
+        now - 1_000,
+        stale.holderId,
+      );
+      await state.storage.setAlarm(now + 599_000);
+    });
+    const before = await snapshot(current.target);
+
+    const renewed = await post(current, '/renew', {
+      downloadId: current.downloadId,
+      sessionHash: current.sessionHash,
+      holderId: target.holderId,
+      sequence: 1,
+      progress: false,
+    });
+
+    expect(renewed.status).toBe(200);
+    const after = await snapshot(current.target);
+    expect(after.changes - before.changes).toBe(2);
+    expect(after.intervalRows).toEqual(before.intervalRows);
+    expect(after.leaseRows).toHaveLength(1);
+    expect(after.leaseRows[0]).toMatchObject({ holder_id: target.holderId, sequence: 1 });
+  });
+
+  it('rolls back the lease CAS when a later progress CAS fails', async () => {
+    const current = fixture();
+    expect((await initialize(current)).status).toBe(201);
+    const acquired = (await (await acquire(current)).json()) as { readonly holderId: string };
+    await runInDurableObject(current.target, (_instance, state) => {
+      state.storage.sql.exec(
+        `CREATE TRIGGER fail_progress_session_cas
+         AFTER UPDATE OF sequence, renewed_at, expires_at ON download_active_leases
+         BEGIN
+           UPDATE download_session
+           SET last_activity_at = last_activity_at + 1,
+               idle_expires_at = idle_expires_at + 1
+           WHERE singleton = 1;
+         END`,
+      );
+    });
+    const before = await snapshot(current.target);
+    const beforeState = {
+      alarmAt: before.alarmAt,
+      sessionRows: before.sessionRows,
+      intervalRows: before.intervalRows,
+      leaseRows: before.leaseRows,
+    };
+
+    const response = await post(current, '/renew', {
+      downloadId: current.downloadId,
+      sessionHash: current.sessionHash,
+      holderId: acquired.holderId,
+      sequence: 1,
+      progress: true,
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ ok: false });
+    const after = await snapshot(current.target);
+    expect({
+      alarmAt: after.alarmAt,
+      sessionRows: after.sessionRows,
+      intervalRows: after.intervalRows,
+      leaseRows: after.leaseRows,
+    }).toEqual(beforeState);
   });
 
   it('prunes expired leases on alarm, retains one lease, and deletes at idle expiry', async () => {

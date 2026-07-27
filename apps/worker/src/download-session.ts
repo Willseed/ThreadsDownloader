@@ -31,6 +31,7 @@ import {
   type DownloadSessionInspection,
   type DownloadSessionState,
   type DownloadStreamLease,
+  type RenewDownloadStreamResult,
 } from './security/download-session-state.js';
 import {
   decideIfRange,
@@ -144,6 +145,11 @@ interface LeaseRow {
   readonly requested_total: SqlValue;
 }
 
+interface AlarmDeadlineRow {
+  readonly [key: string]: SqlValue;
+  readonly alarm_at: SqlValue;
+}
+
 interface PersistedDownloadSession {
   readonly downloadId: string;
   readonly sessionHash: string;
@@ -157,6 +163,14 @@ interface PersistedDownloadSession {
   readonly rangeCapability: 'bytes' | 'none' | 'unknown';
   readonly state: DownloadSessionState;
 }
+
+type PersistedSessionInspectionResult =
+  | {
+      readonly status: 200;
+      readonly session: PersistedDownloadSession;
+      readonly inspection: DownloadSessionInspection;
+    }
+  | { readonly status: 401 | 410 | 500 };
 
 const SAFE_FILENAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$/u;
 const SAFE_SHORTCODE = /^[A-Za-z0-9_-]{5,64}$/u;
@@ -478,22 +492,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
     );
   }
 
-  private readPersistedSession(): PersistedDownloadSession | null {
-    if (!this.tableExists('download_session')) {
-      return null;
-    }
-    const row = this.ctx.storage.sql
-      .exec<SessionRow>(`SELECT ${SESSION_ROW_COLUMNS} FROM download_session WHERE singleton = 1`)
-      .toArray()[0];
-    if (row === undefined) {
-      return null;
-    }
-    if (
-      !this.tableExists('download_completed_intervals') ||
-      !this.tableExists('download_active_leases')
-    ) {
-      return corruptStorage();
-    }
+  private restoreSessionFromStateTables(row: SessionRow): PersistedDownloadSession {
     const intervals = this.ctx.storage.sql
       .exec<IntervalRow>(
         `SELECT start_byte, end_byte, total_bytes
@@ -512,26 +511,93 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
     return restorePersistedSession(row, intervals, leases);
   }
 
-  private inspectPersistedSession(identity: DownloadSessionIdentityRequest):
-    | {
-        readonly status: 200;
-        readonly session: PersistedDownloadSession;
-        readonly inspection: DownloadSessionInspection;
+  private readPersistedSession(): PersistedDownloadSession | null {
+    if (!this.tableExists('download_session')) {
+      return null;
+    }
+    const row = this.ctx.storage.sql
+      .exec<SessionRow>(`SELECT ${SESSION_ROW_COLUMNS} FROM download_session WHERE singleton = 1`)
+      .toArray()[0];
+    if (row === undefined) {
+      return null;
+    }
+    if (
+      !this.tableExists('download_completed_intervals') ||
+      !this.tableExists('download_active_leases')
+    ) {
+      return corruptStorage();
+    }
+    return this.restoreSessionFromStateTables(row);
+  }
+
+  private readPersistedSessionForRenewal(): PersistedDownloadSession | null {
+    const tableRows = this.ctx.storage.sql
+      .exec<{ readonly [key: string]: SqlValue; readonly name: SqlValue }>(
+        `SELECT name FROM sqlite_schema
+         WHERE type = 'table' AND name IN (?, ?, ?)
+         ORDER BY name`,
+        'download_session',
+        'download_completed_intervals',
+        'download_active_leases',
+      )
+      .toArray();
+    const tableNames = new Set<string>();
+    for (const row of tableRows) {
+      if (typeof row.name !== 'string' || tableNames.has(row.name)) {
+        return corruptStorage();
       }
-    | { readonly status: 401 | 410 | 500 } {
+      tableNames.add(row.name);
+    }
+    if (!tableNames.has('download_session')) {
+      return null;
+    }
+    if (
+      !tableNames.has('download_completed_intervals') ||
+      !tableNames.has('download_active_leases')
+    ) {
+      return corruptStorage();
+    }
+    const row = this.ctx.storage.sql
+      .exec<SessionRow>(`SELECT ${SESSION_ROW_COLUMNS} FROM download_session WHERE singleton = 1`)
+      .toArray()[0];
+    if (row === undefined) {
+      return null;
+    }
+    return this.restoreSessionFromStateTables(row);
+  }
+
+  private inspectLoadedSession(
+    identity: DownloadSessionIdentityRequest,
+    session: PersistedDownloadSession | null,
+  ): Exclude<PersistedSessionInspectionResult, { readonly status: 500 }> {
+    if (session === null) {
+      return { status: 410 };
+    }
+    if (
+      session.downloadId !== identity.downloadId ||
+      session.sessionHash !== identity.sessionHash
+    ) {
+      return { status: 401 };
+    }
+    const inspection = inspectDownloadSession(session.state, Date.now());
+    return inspection.available ? { status: 200, session, inspection } : { status: 410 };
+  }
+
+  private inspectPersistedSession(
+    identity: DownloadSessionIdentityRequest,
+  ): PersistedSessionInspectionResult {
     try {
-      const session = this.readPersistedSession();
-      if (session === null) {
-        return { status: 410 };
-      }
-      if (
-        session.downloadId !== identity.downloadId ||
-        session.sessionHash !== identity.sessionHash
-      ) {
-        return { status: 401 };
-      }
-      const inspection = inspectDownloadSession(session.state, Date.now());
-      return inspection.available ? { status: 200, session, inspection } : { status: 410 };
+      return this.inspectLoadedSession(identity, this.readPersistedSession());
+    } catch {
+      return { status: 500 };
+    }
+  }
+
+  private inspectPersistedSessionForRenewal(
+    identity: DownloadSessionIdentityRequest,
+  ): PersistedSessionInspectionResult {
+    try {
+      return this.inspectLoadedSession(identity, this.readPersistedSessionForRenewal());
     } catch {
       return { status: 500 };
     }
@@ -596,6 +662,109 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
         lease.requestedInterval?.total ?? null,
       );
     }
+  }
+
+  private renewalAlarmAt(state: DownloadSessionState, now: number): number {
+    const alarmAt = this.ctx.storage.sql
+      .exec<AlarmDeadlineRow>(
+        `SELECT MIN(absolute_expires_at, idle_expires_at,
+                    (SELECT MIN(expires_at) FROM download_active_leases)) AS alarm_at
+         FROM download_session
+         WHERE singleton = 1 AND status = 'ACTIVE'`,
+      )
+      .toArray()[0]?.alarm_at;
+    if (
+      alarmAt === undefined ||
+      !isSafeInteger(alarmAt) ||
+      alarmAt !== this.nextAlarmAt(state, now)
+    ) {
+      return corruptStorage();
+    }
+    return alarmAt;
+  }
+
+  private persistRenewal(
+    previous: DownloadSessionState,
+    renewed: RenewDownloadStreamResult,
+    now: number,
+    progress: boolean,
+  ): number {
+    const previousLease = previous.leases.find(
+      (lease) => lease.holderId === renewed.lease.holderId,
+    );
+    if (previousLease === undefined) {
+      return corruptStorage();
+    }
+    const previousInterval = previousLease.requestedInterval;
+    const updated = this.ctx.storage.sql
+      .exec<{ readonly [key: string]: SqlValue; readonly holder_id: SqlValue }>(
+        `UPDATE download_active_leases
+         SET sequence = ?, renewed_at = ?, expires_at = ?
+         WHERE holder_id = ? AND sequence = ? AND acquired_at = ?
+           AND renewed_at = ? AND expires_at = ?
+           AND requested_start IS ? AND requested_end IS ? AND requested_total IS ?
+         RETURNING holder_id`,
+        renewed.lease.sequence,
+        renewed.lease.renewedAt,
+        renewed.lease.expiresAt,
+        previousLease.holderId,
+        previousLease.sequence,
+        previousLease.acquiredAt,
+        previousLease.renewedAt,
+        previousLease.expiresAt,
+        previousInterval?.start ?? null,
+        previousInterval?.end ?? null,
+        previousInterval?.total ?? null,
+      )
+      .toArray();
+    if (updated.length !== 1 || updated[0]?.holder_id !== renewed.lease.holderId) {
+      return corruptStorage();
+    }
+
+    const expiredHolderIds = previous.leases
+      .filter((lease) => lease.expiresAt <= now)
+      .map((lease) => lease.holderId)
+      .sort();
+    if (expiredHolderIds.length > 0) {
+      const deletedHolderIds = this.ctx.storage.sql
+        .exec<{ readonly [key: string]: SqlValue; readonly holder_id: SqlValue }>(
+          `DELETE FROM download_active_leases
+           WHERE expires_at <= ?
+           RETURNING holder_id`,
+          now,
+        )
+        .toArray()
+        .map((row) => row.holder_id)
+        .sort();
+      if (
+        deletedHolderIds.some((holderId) => typeof holderId !== 'string') ||
+        deletedHolderIds.length !== expiredHolderIds.length ||
+        deletedHolderIds.some((holderId, index) => holderId !== expiredHolderIds[index])
+      ) {
+        return corruptStorage();
+      }
+    }
+
+    if (progress) {
+      const updatedSession = this.ctx.storage.sql
+        .exec<{ readonly [key: string]: SqlValue; readonly singleton: SqlValue }>(
+          `UPDATE download_session
+           SET last_activity_at = ?, idle_expires_at = ?
+           WHERE singleton = 1 AND status = 'ACTIVE'
+             AND last_activity_at IS ? AND idle_expires_at IS ?
+           RETURNING singleton`,
+          renewed.state.lastActivityAt,
+          renewed.state.idleExpiresAt,
+          previous.lastActivityAt,
+          previous.idleExpiresAt,
+        )
+        .toArray();
+      if (updatedSession.length !== 1 || updatedSession[0]?.singleton !== 1) {
+        return corruptStorage();
+      }
+    }
+
+    return this.renewalAlarmAt(renewed.state, now);
   }
 
   private nextAlarmAt(state: DownloadSessionState, now: number): number {
@@ -944,7 +1113,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
         };
     try {
       result = this.ctx.storage.transactionSync(() => {
-        const current = this.inspectPersistedSession(input);
+        const current = this.inspectPersistedSessionForRenewal(input);
         if (current.status !== 200) {
           return safeJson(current.status, { ok: false });
         }
@@ -955,8 +1124,7 @@ export class DownloadSession extends DurableObject<DownloadSessionEnv> {
           sequence: input.sequence,
           progress: input.progress,
         });
-        const alarmAt = this.nextAlarmAt(renewed.state, now);
-        this.replaceState(renewed.state);
+        const alarmAt = this.persistRenewal(current.session.state, renewed, now, input.progress);
         return {
           holderId: renewed.lease.holderId,
           sequence: renewed.lease.sequence,
