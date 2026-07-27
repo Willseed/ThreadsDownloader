@@ -32,9 +32,9 @@ export const RENDERED_RESOLVER_BUDGET_MS =
   RENDERED_BROWSER_BUDGET_MS + RENDERED_RESPONSE_READ_TIMEOUT_MS;
 
 export const RENDERED_ALLOWED_REQUEST_PATTERNS = [
-  '^https:\\/\\/www\\.threads\\.com\\/',
-  '^https:\\/\\/(?:[a-z0-9-]+\\.)*cdninstagram\\.com\\/',
-  '^https:\\/\\/instagram\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.fna\\.fbcdn\\.net\\/',
+  String.raw`^https:\/\/www\.threads\.com\/`,
+  String.raw`^https:\/\/(?:[a-z0-9-]+\.)*cdninstagram\.com\/`,
+  String.raw`^https:\/\/instagram\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.fna\.fbcdn\.net\/`,
 ] as const;
 
 export interface RenderedBrowserScrapeOptions {
