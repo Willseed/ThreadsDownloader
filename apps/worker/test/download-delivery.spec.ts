@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ProbedMedia } from '../src/resolver/media-probe.js';
+import { createUnverifiedMedia, type ProbedMedia } from '../src/resolver/media-probe.js';
 import {
   DownloadSessionClientError,
   type DownloadSessionNamespace,
@@ -326,6 +326,24 @@ describe('download delivery setup', () => {
       'admission:release',
     ]);
     expect(JSON.stringify(callBody(harness, '/finish'))).not.toContain(PRIVATE_URL);
+  });
+
+  it('redirects to the exact stored CDN URL only after the Worker fetch transport fails', async () => {
+    const acquiredMedia = createUnverifiedMedia(parseCdnUrl(PRIVATE_URL));
+    const harness = sessionHarness({ acquiredMedia });
+    const fetcher = vi.fn(async () => {
+      throw new Error(`${PRIVATE_URL} private transport detail`);
+    });
+
+    const response = await delivery(harness, fetcher)(input);
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe(PRIVATE_URL);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.text()).toBe('');
+    expect(paths(harness)).toEqual(['/inspect', '/acquire', '/interrupt']);
+    expect(harness.admissionCalls).toEqual(['acquire', 'release']);
   });
 
   it('canonicalizes a single range and its representation pin', async () => {

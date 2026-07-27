@@ -238,7 +238,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
           aria-labelledby="candidate-title"
           tabindex="-1"
         >
-          <h2 id="candidate-title">找到 {{ candidates().length }} 個可下載版本</h2>
+          <h2 id="candidate-title">找到 {{ candidates().length }} 個影片版本</h2>
           @if (candidateStatusMessage(); as message) {
             <p class="candidate-status" aria-live="polite" aria-atomic="true">
               {{ message }}
@@ -306,9 +306,9 @@ function statusText(state: DownloaderWorkflowState): string | null {
                     (click)="download(candidate.candidateId)"
                   >
                     @if (isIssuingCandidate(candidate.candidateId)) {
-                      正在準備下載……
+                      正在準備影片……
                     } @else {
-                      下載影片
+                      開啟或下載影片
                     }
                   </button>
                 </div>
@@ -482,7 +482,9 @@ export class DownloaderPageComponent implements OnDestroy {
   }
 
   candidateActionLabel(candidate: ResolveCandidate, index: number): string {
-    const action = this.isIssuingCandidate(candidate.candidateId) ? '正在準備下載' : '下載影片';
+    const action = this.isIssuingCandidate(candidate.candidateId)
+      ? '正在準備影片'
+      : '開啟或下載影片';
     return `${action}，版本 ${index + 1}：${candidate.filename}`;
   }
 

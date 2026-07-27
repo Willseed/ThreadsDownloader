@@ -8,10 +8,12 @@ No undocumented upstream field, event, sequence, subscription result, or market
 state is assumed by this design.
 
 The service resolves an allowed public download target and hands a browser a
-short-lived, same-origin download. The frontend never receives a CDN URL and
-the service never logs one. Download content is streamed statelessly by the
-Worker; durable state is limited to authorization, transfer accounting, and
-lifecycle control.
+short-lived, same-origin download capability. The frontend application and API
+JSON never receive a CDN URL, and the service never logs one. Download content
+normally streams statelessly through the Worker. If the Worker cannot establish
+the outbound media fetch, the capability may return a temporary redirect whose
+`Location` exposes the exact vaulted CDN URL to the browser; durable state
+remains limited to authorization, transfer accounting, and lifecycle control.
 
 ## Architecture vocabulary
 
@@ -60,14 +62,17 @@ The rendered fallback is a narrower exception at an external browser
 adapter whose Quick Action response does not expose its navigation redirect
 chain. Production binds exactly one `BROWSER` Browser Run binding after explicit
 approval and a credential-free remote proof. The adapter restricts every
-browser subrequest with anchored patterns, accepts only one canonically
-deduplicated candidate, and sends that candidate back through the central CDN
-policy and ordinary media probe. The Wrangler exposure gate rejects a missing,
+browser subrequest with anchored patterns, selects the first allowed
+canonically deduplicated candidate, and sends that candidate through the central
+CDN policy and ordinary media probe. A rendered candidate whose probe ends in
+the exact transport-unavailable state is retained with explicitly unverified
+metadata. The Wrangler exposure gate rejects a missing,
 renamed, remote-development, non-object, or extended browser configuration.
 
 Encrypted resolver credentials or tokens live only in a server vault using
 AES-GCM. Keys and plaintext do not enter source, frontend bundles, logs, or
-error messages. CDN URLs likewise never enter the frontend or logs.
+error messages. CDN URLs never enter Angular state, API JSON, or logs; the
+download response may disclose one only as the transport-fallback `Location`.
 
 Resolve failure telemetry is emitted when the public response is a 5xx, plus a
 narrow diagnostic exception for `MEDIA_NOT_FOUND` at the `resolve` stage. Its
@@ -116,7 +121,7 @@ lease. Otherwise the state remains interrupted or expires; it is not complete.
 ## HTTP range and streaming policy
 
 `DownloadWorkflow.issue` creates a same-origin capability after authorization.
-`head` obtains and validates metadata. `stream` proxies a single allowed
+`head` returns the stored metadata, `stream` first proxies a single allowed
 range, and `status` returns only safe lifecycle information. It never persists
 the content body and can resume after an isolate restart from validated state.
 
@@ -129,8 +134,14 @@ metadata and prevent joining bytes from different representations.
 
 Streaming is stateless with respect to bytes: the Worker pipes origin bytes to
 the response while updating bounded accounting through the DO. It does not
-buffer full files, construct a client-visible CDN redirect, or rely on a
-frontend retry to enforce safety.
+buffer full files. Only when an origin fetch throws or reaches the existing
+header timeout does delivery interrupt its acquired lease, release admission,
+and return a no-store `307` to the exact policy-validated URL already held in
+the encrypted session. Invalid status, redirect, content type, and transfer
+metadata still fail without this fallback. The redirected browser may open its
+media player instead of producing a download event because the final
+cross-origin response is authoritative; the intermediate same-origin
+`Content-Disposition` cannot guarantee attachment behavior.
 
 ## Angular application
 
@@ -141,9 +152,10 @@ status/errors rather than origin details.
 
 The form exposes clear labels, validation summaries, keyboard operation,
 visible focus, semantic status updates, and sufficient contrast to meet WCAG
-expectations. The final handoff is a same-origin download anchor; it avoids
-opening or displaying the CDN location. Legal notices, acceptable-use text,
-and a reporting path are part of handoff and error surfaces.
+expectations. The final handoff starts from a same-origin download anchor. On
+transport fallback the browser, but not Angular state, follows the vaulted CDN
+location and may display the media. Legal notices, acceptable-use text, and a
+reporting path are part of handoff and error surfaces.
 
 ### Primary success-path interaction budget
 
@@ -300,8 +312,10 @@ not establish any undocumented upstream Threads API semantics.
 - Downstream enforcement: the observed FNA hostname shape was added to the one
   central CDN parser without allowing the `fbcdn.net` apex, broad subdomains,
   extra labels, non-default ports, credentials, fragments, or lookalikes.
-  Rendered candidates still pass the existing HEAD/range media probe, encrypted
-  vault, same-origin download delivery, and per-hop download redirect checks.
+  Rendered candidates still attempt the existing HEAD/range media probe. Exact
+  probe transport unavailability stores a strict unverified descriptor in the
+  encrypted vault; other probe failures remain blocking. Download delivery then
+  attempts the same-origin proxy before its transport-only browser redirect.
 - Media probe transport evidence: after the rendered-video timing fix, a fresh
   production resolve reached the probe and returned the typed
   `MEDIA_PROBE_UNAVAILABLE` code, while a direct remote proof against the same
@@ -312,7 +326,11 @@ not establish any undocumented upstream Threads API semantics.
   when the initial HEAD throws that exact typed unavailable error. It reuses the
   same eight-second AbortSignal and existing request, redirect, CDN, identity
   encoding, status, and metadata policies; abort, policy, status, and metadata
-  failures do not trigger another path.
+  failures do not trigger another probe path. If both attempts end in exact
+  transport unavailability for a rendered candidate, the URL is retained as
+  `unverified` with assumed `video/mp4`, null length and validators, unknown
+  range support, and unreliable completion metadata. None of those assumptions
+  are returned as verified facts.
 - CDN request compatibility: the shared media-probe and download-delivery
   policy uses the fixed Chromium 119 user agent documented as the installed
   Browser Run default instead of the application-specific bot-like user agent.
@@ -320,10 +338,9 @@ not establish any undocumented upstream Threads API semantics.
   load the same public candidate. It is a bounded compatibility header, not
   credential impersonation: Cookie, Origin, Referer, client headers, and
   browser `sec-*` headers remain absent, and requests retain `credentials:
-  'omit'`, an empty referrer, and `no-referrer`. Host, redirect, retry, timeout,
-  response-metadata, and range policies are unchanged. Whether this resolves
-  the observed transport failure remains unconfirmed until a fresh production
-  resolve and download complete.
+  'omit'`, an empty referrer, and `no-referrer`. The compatibility header did not
+  eliminate repeated production transport failures, which motivates the
+  explicit unverified-vault and browser-redirect degradation described above.
 - Lease decision: session and IP resolve permits are both 60 seconds. Deadline
   gates require at least 38 seconds before rendering, 26 seconds before probing,
   and 18 seconds before vault storage. These budgets cover the ten-second
@@ -377,7 +394,8 @@ not establish any undocumented upstream Threads API semantics.
   access the same public Threads origin without cookies, forwarded headers, or
   credentials; the server still constructs the canonical `/media` URL, requires
   matching canonical and Open Graph identity with at least one allowed candidate, and
-  applies the existing media probe, encrypted vault, and same-origin download
+  applies the existing media probe or its exact transport-unavailable
+  degradation, encrypted vault, and same-origin-first download
   boundary. Login, access-denied, rate-limited, bot-blocked, redirect, and policy
   failures remain non-fallback.
 - Renderer timing evidence: a later fresh production session reached the

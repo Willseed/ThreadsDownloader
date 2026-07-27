@@ -70,13 +70,15 @@ test('hands a resolved candidate to the browser without claiming download comple
 
   const downloadEvent = page.waitForEvent('download');
   await performPrimarySuccessAction(completedActions, 'handoff-candidate-download', () =>
-    page.getByRole('button', { name: /^下載影片/u }).click(),
+    page.getByRole('button', { name: /^開啟或下載影片/u }).click(),
   );
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe('research-video-01.mp4');
   await download.cancel();
 
-  await expect(page.getByText('已交由瀏覽器下載管理器處理。')).toBeVisible();
+  await expect(
+    page.getByText('已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。'),
+  ).toBeVisible();
   await expect(page.getByText(/下載完成|儲存成功/u)).toHaveCount(0);
   expect(mockApi.calls.downloadSessions).toBe(1);
   expect(mockApi.calls.downloads).toBe(1);

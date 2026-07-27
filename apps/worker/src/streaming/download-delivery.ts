@@ -60,6 +60,19 @@ function fail(code: DownloadDeliveryErrorCode): never {
   throw new DownloadDeliveryError(code);
 }
 
+function directOriginRedirect(acquired: AcquiredDownloadStream): Response {
+  let target: CdnUrl;
+  try {
+    target = parseCdnUrl(acquired.media.finalUrl.url.href);
+  } catch {
+    return fail('DOWNLOAD_ORIGIN_INVALID');
+  }
+  return new Response(null, {
+    status: 307,
+    headers: { 'cache-control': 'no-store', location: target.url.href },
+  });
+}
+
 async function boundedLifecycleMutation<T>(operation: () => Promise<T>): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
@@ -646,6 +659,9 @@ export function createDownloadDelivery(
         void cancelResponse(response);
       }
       await cleanup;
+      if (error instanceof DownloadDeliveryError && error.code === 'DOWNLOAD_ORIGIN_UNAVAILABLE') {
+        return directOriginRedirect(acquired);
+      }
       throw error;
     }
   };

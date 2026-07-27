@@ -9,6 +9,7 @@ import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 
 import {
   createMediaProbe,
+  createUnverifiedMedia,
   MEDIA_PROBE_TIMEOUT_MS,
   MediaProbeError,
   type MediaProbeErrorCode,
@@ -594,7 +595,19 @@ async function resolveWithLease(
   );
 
   const resolved = await resolveCandidates(prepared.post, lease, bindings, runtime);
-  const candidates = await probeCandidates(resolved.candidates, runtime);
+  let candidates: readonly ProbedMedia[];
+  try {
+    candidates = await probeCandidates(resolved.candidates, runtime);
+  } catch (error: unknown) {
+    if (
+      !resolved.rendered ||
+      !(error instanceof ResolvePublicMediaError) ||
+      error.failureCode !== 'MEDIA_PROBE_UNAVAILABLE'
+    ) {
+      throw error;
+    }
+    candidates = resolved.candidates.map((candidate) => createUnverifiedMedia(candidate.value));
+  }
   if (resolved.rendered) {
     assertLeaseBudget(lease, runtime, POST_PROBE_LEASE_BUDGET_MS);
   }

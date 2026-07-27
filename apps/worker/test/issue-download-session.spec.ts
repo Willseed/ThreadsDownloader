@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ProbedMedia } from '../src/resolver/media-probe.js';
+import { createUnverifiedMedia, type ProbedMedia } from '../src/resolver/media-probe.js';
 import {
   DOWNLOAD_SESSION_CLIENT_REQUEST_TIMEOUT_MS,
   DownloadSessionClientError,
@@ -215,6 +215,22 @@ describe('browser-bound download-session issuer', () => {
     });
     expect(events).toEqual(['claim', 'initialize', 'consume']);
     expect(dependencies.downloadSessions.destroy).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain(PRIVATE_URL);
+  });
+
+  it('initializes a download session from an unverified rendered grant without publishing its URL', async () => {
+    const unverified = createUnverifiedMedia(parseCdnUrl(PRIVATE_URL));
+    const dependencies = ports({
+      claim: vi.fn(async () => ({ ...claim(), media: unverified })),
+      initialize: vi.fn(async (actual) => {
+        expect(actual.media).toEqual(unverified);
+        return initialized();
+      }),
+    });
+
+    const result = await createDownloadSessionIssuer(dependencies).issue(input);
+
+    expect(result).toEqual({ downloadId, startExpiresAt: NOW + 120_000 });
     expect(JSON.stringify(result)).not.toContain(PRIVATE_URL);
   });
 

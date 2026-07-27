@@ -357,8 +357,8 @@ describe('DownloaderPageComponent', () => {
     ).toEqual(['1920 × 1080', '00:13', '2.0 MB']);
     expect(root.textContent).not.toContain(CANDIDATE_ID);
     expect(actions.map((action) => action.getAttribute('aria-label'))).toEqual([
-      '下載影片，版本 1：threads_Abcde_1.mp4',
-      '下載影片，版本 2：threads_Abcde_2.mp4',
+      '開啟或下載影片，版本 1：threads_Abcde_1.mp4',
+      '開啟或下載影片，版本 2：threads_Abcde_2.mp4',
     ]);
     expect(new Set(actions.map((action) => action.getAttribute('aria-label'))).size).toBe(2);
     expect(root.ownerDocument.activeElement).toBe(root.querySelector('.candidate-section'));
@@ -380,7 +380,7 @@ describe('DownloaderPageComponent', () => {
         kind: 'handed-off',
         siteKey: SITE_KEY,
         candidates: [candidate, otherCandidate],
-        message: '已交由瀏覽器下載管理器處理。',
+        message: '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。',
       });
     });
     state.set({
@@ -399,11 +399,11 @@ describe('DownloaderPageComponent', () => {
     ];
 
     expect(actions[0]?.disabled).toBe(true);
-    expect(actions[0]?.textContent?.trim()).toBe('正在準備下載……');
+    expect(actions[0]?.textContent?.trim()).toBe('正在準備影片……');
     expect(actions[0]?.getAttribute('aria-label')).toBe(
-      '正在準備下載，版本 1：threads_Abcde_1.mp4',
+      '正在準備影片，版本 1：threads_Abcde_1.mp4',
     );
-    expect(actions[1]?.textContent?.trim()).toBe('下載影片');
+    expect(actions[1]?.textContent?.trim()).toBe('開啟或下載影片');
 
     finishDownload?.();
     await operation;
@@ -447,14 +447,14 @@ describe('DownloaderPageComponent', () => {
       kind: 'handed-off',
       siteKey: SITE_KEY,
       candidates: [candidate],
-      message: '已交由瀏覽器下載管理器處理。',
+      message: '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。',
     });
     await render();
     let root = fixture.nativeElement as HTMLElement;
 
     expect(root.querySelector('.status-line')).toBeNull();
     expect(root.querySelector('.candidate-status')?.textContent?.trim()).toBe(
-      '已交由瀏覽器下載管理器處理。',
+      '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。',
     );
     expect(root.textContent).not.toContain('檔案已成功儲存');
 

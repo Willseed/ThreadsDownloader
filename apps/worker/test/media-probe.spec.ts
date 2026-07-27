@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createMediaProbe,
+  createUnverifiedMedia,
   MediaProbeError,
   normalizeProbedMedia,
   type MediaProbeErrorCode,
@@ -167,6 +168,25 @@ describe('normalizeProbedMedia', () => {
         validator: { kind: 'last-modified', value: LAST_MODIFIED },
       }),
     ).toThrowError(
+      expect.objectContaining<Partial<MediaProbeError>>({ code: 'MEDIA_PROBE_METADATA_INVALID' }),
+    );
+  });
+
+  it('creates only unknown metadata for a policy-validated unverified candidate', () => {
+    const result = createUnverifiedMedia(candidate);
+
+    expect(result).toEqual({
+      finalUrl: candidate,
+      contentType: 'video/mp4',
+      contentLength: null,
+      rangeCapability: 'unknown',
+      strongEtag: null,
+      lastModified: null,
+      validator: null,
+      completionReliable: false,
+      probeMethod: 'unverified',
+    });
+    expect(() => normalizeProbedMedia({ ...result, strongEtag: '"forged"' })).toThrowError(
       expect.objectContaining<Partial<MediaProbeError>>({ code: 'MEDIA_PROBE_METADATA_INVALID' }),
     );
   });

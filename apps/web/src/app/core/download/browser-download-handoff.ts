@@ -3,7 +3,7 @@ import { inject, Injectable } from '@angular/core';
 
 const CANONICAL_DOWNLOAD_URL = /^\/api\/download\/[A-Za-z0-9_-]{32}$/u;
 
-export const DOWNLOAD_HANDOFF_MESSAGE = '已交由瀏覽器下載管理器處理。';
+export const DOWNLOAD_HANDOFF_MESSAGE = '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。';
 
 export class UnsafeDownloadUrlError extends Error {
   constructor() {

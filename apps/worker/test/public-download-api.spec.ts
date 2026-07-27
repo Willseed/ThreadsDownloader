@@ -34,6 +34,8 @@ const RESOLVE_ID = encodeBase64Url(new Uint8Array(24).fill(3));
 const CANDIDATE_ID = encodeBase64Url(new Uint8Array(24).fill(4));
 const DOWNLOAD_ID = encodeBase64Url(new Uint8Array(24).fill(5));
 const LAST_MODIFIED = 'Mon, 01 Jan 2024 00:00:00 GMT';
+const PRIVATE_CDN_URL =
+  'https://scontent.cdninstagram.com/o1/v/t16/f2/m69/private.mp4?private_token=secret';
 
 const metadata: DownloadSessionMetadataSnapshot = {
   filename: 'threads_Abcde_1.mp4',
@@ -412,6 +414,26 @@ describe('public browser-bound download API', () => {
       rangeHeader: null,
       ifRangeHeader: null,
     });
+  });
+
+  it('preserves a transport-fallback Location with an empty response body', async () => {
+    const harness = createHarness();
+    harness.deliver.mockResolvedValueOnce(
+      new Response(null, {
+        status: 307,
+        headers: { 'cache-control': 'no-store', location: PRIVATE_CDN_URL },
+      }),
+    );
+
+    const response = await harness.handler(
+      await apiRequest(`/api/download/${DOWNLOAD_ID}`),
+      harness.bindings,
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe(PRIVATE_CDN_URL);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.text()).toBe('');
   });
 
   it.each([

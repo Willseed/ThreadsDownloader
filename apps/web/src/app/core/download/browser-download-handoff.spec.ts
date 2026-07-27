@@ -31,7 +31,9 @@ describe('BrowserDownloadHandoff', () => {
     });
 
     expect(handoff.handoff(downloadUrl)).toBe(DOWNLOAD_HANDOFF_MESSAGE);
-    expect(DOWNLOAD_HANDOFF_MESSAGE).toBe('已交由瀏覽器下載管理器處理。');
+    expect(DOWNLOAD_HANDOFF_MESSAGE).toBe(
+      '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。',
+    );
     const clickedAnchor = clickedAnchors[0];
     expect(clickedAnchor).toBeDefined();
     if (clickedAnchor === undefined) {

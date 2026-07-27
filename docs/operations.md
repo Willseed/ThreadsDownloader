@@ -1,8 +1,9 @@
 # Threads Downloader 維護與部署手冊
 
-Threads Downloader 是公開 Threads 貼文的影片解析與同源串流服務。Angular SPA、
-API 與下載都由同一個 Cloudflare Worker origin 提供；瀏覽器只取得 opaque ID 與
-安全中繼資料，不會取得媒體來源 URL。Production resolver 先使用 Worker `fetch`；
+Threads Downloader 是公開 Threads 貼文的影片解析與同源優先串流服務。Angular SPA、
+API 與下載 capability 都由同一個 Cloudflare Worker origin 提供；Angular 與 API
+JSON 只取得 opaque ID 與安全中繼資料。若 Worker 無法建立媒體連線，瀏覽器
+可能透過限定的 `307 Location` 取得 vault 內的 exact CDN URL。Production resolver 先使用 Worker `fetch`；
 只有受控的靜態解析結果允許 fallback 時，才使用 Browser Run Quick Action。兩條路徑
 都不登入、不帶 Threads／Instagram Cookie，也不繞過任何存取控制。
 
@@ -20,7 +21,7 @@ secrets 名稱與 Durable Objects 做唯讀查證，不得沿用過往執行紀�
 遠端 `main` 移動、出現未知 worktree 變更，或要求 MFA／CAPTCHA，立即停止並交由
 帳號擁有者處理。
 
-## 架構與同源資料流
+## 架構與同源優先資料流
 
 ```mermaid
 flowchart LR
@@ -32,8 +33,10 @@ flowchart LR
   API -->|"fetch-only public page"| Threads["Public Threads origin"]
   API -->|"bounded fallback"| BrowserRun["Cloudflare Browser Run"]
   BrowserRun -->|"anonymous /media render"| Threads
-  API -->|"validate, seal, then stream"| Media["Allowed media origin"]
-  Media -->|"bytes through this Worker"| Browser
+  API -->|"validate, seal, proxy first"| Media["Allowed media origin"]
+  Media -->|"normal path: bytes through Worker"| Browser
+  API -.->|"transport-only 307 Location"| Browser
+  Browser -.->|"fallback request"| Media
 ```
 
 - `apps/web`：Angular standalone SPA、typed reactive forms、signals、OnPush 與法律頁。
@@ -49,7 +52,8 @@ flowchart LR
 Worker 驗證 exact host、Origin、CSRF、session 與 rate limit，再先以 `fetch` 解析公開
 貼文；符合有限 fallback 條件時才以 Browser Run 解析並驗證候選。來源 URL 在伺服器
 端密封，前端只看到 opaque candidate ID。
-使用者選擇後建立綁定 session 的 Download DO，再由同 origin 下載端點串流 bytes。
+使用者選擇後建立綁定 session 的 Download DO，再由同 origin 下載端點先嘗試
+串流 bytes；只有媒體連線無法建立時，才交由瀏覽器跟隨 exact CDN redirect。
 
 ## 固定工具鏈
 
@@ -191,8 +195,10 @@ production binding 改成 remote development 設定。
    limit 內。第一次只有在 exact `RENDERED_MEDIA_NOT_FOUND` 且仍有 38 秒租約時，才能對
    相同 canonical post 再做一次；第二次之後不再重試。
 4. 只接受 canonical 與 Open Graph identity 都吻合、且至少一個允許 CDN 候選的結果；
-   多個候選依 scrape／DOM 順序穩定選第一個。候選仍須通過既有 media probe、vault 與
-   同源下載流程。
+   多個候選依 scrape／DOM 順序穩定選第一個。候選仍先嘗試既有 media probe，再進入
+   vault 與同源優先下載流程。只有 rendered candidate 的 probe 最終為 exact
+   `MEDIA_PROBE_UNAVAILABLE` 時，才以 `unverified` metadata 進入 vault；其他 probe
+   failure 仍阻擋。
 
 Browser Run 是按用量計費且受平台 quota 限制。部署前後要在 Cloudflare Browser Run
 的 **Overview** 與 **Runs** 檢查總 sessions、browser hours、Quick Action requests、
@@ -213,8 +219,8 @@ remote proof 已成功，這個 typed transport failure 納入 bounded fallback�
 access-control bypass：兩條路徑都只匿名存取同一個公開 Threads origin，不傳 Cookie、
 client headers 或 credentials；renderer 仍只使用 server 建立的 canonical `/media`
 網址，要求 canonical 與 Open Graph identity 一致且至少一個允許候選，依 scrape／DOM
-順序選第一個，並繼續通過既有
-media probe、encrypted vault 與 same-origin download。login、access-denied、rate-limited、
+順序選第一個，並繼續通過 media probe 或 exact transport-unavailable degradation、
+encrypted vault 與 same-origin-first download。login、access-denied、rate-limited、
 bot-blocked、redirect 與 policy failure 仍不得進入 Browser Run。
 
 後續 fresh production session 在固定等待三秒的版本中，於 `resolve` stage 記錄 exact
@@ -251,8 +257,22 @@ Cloudflare Browser Run 型別所記載的預設值一致，用來對齊能成功
 請求外觀。這是無 credential 的相容性設定，不是冒用登入身分：不加入 Cookie、Origin、
 Referer、client headers 或瀏覽器 `sec-*` headers，request 仍固定 `credentials: omit`、空
 referrer 與 `no-referrer`。host allowlist、redirect、timeout、retry、range 與 response
-metadata 規則都不變。此變更是否能排除 `MEDIA_PROBE_UNAVAILABLE`，仍須以 fresh production
-resolve 及同源 download 成功後才能確認。
+metadata 檢查當時均保持不變；後續 production 證據顯示 User-Agent 對齊仍未排除
+`MEDIA_PROBE_UNAVAILABLE`，因此才採用下列精確 degradation。
+
+目前 production 已重複證明 rendered candidate 可通過 CDN allowlist，但 Worker probe
+仍回 exact `MEDIA_PROBE_UNAVAILABLE`。此狀態不再阻擋候選：server 以 `video/mp4`、未知
+長度與 range、空 validator、不可可靠完成的 `unverified` descriptor 加密存入既有
+vault／download session；resolve 與 issue JSON 仍只回 opaque ID、filename 與期限，不含
+CDN URL 或 query。
+
+下載 GET 仍先由 Worker 以既有 timeout、manual redirect 與 allowlist proxy。只有 outbound
+fetch throw／header timeout 映射為 exact `DOWNLOAD_ORIGIN_UNAVAILABLE` 時，才先 interrupt
+本次 stream lease、release admission，再回 no-store `307 Location` 到 session 內 exact
+CDN URL。invalid status、content type、redirect 或 transfer metadata 不使用此 fallback。
+瀏覽器因此能直接取得媒體，但 cross-origin 最終 response 決定行為，可能開啟播放器而非
+產生下載事件；中繼同源 response 的 `Content-Disposition` 不保證最終 attachment。URL 只
+出現在 fallback HTTP `Location`，不得寫入 API JSON、Angular state、log 或 failure event。
 
 ## API 與下載契約
 
@@ -637,8 +657,9 @@ Production resolver 先使用 Web Platform `fetch`、manual redirect、allowlist
 與大小限制；只有上一節列出的四種靜態解析結果才可使用有界 Browser Run Quick
 Action。Browser Run 不是登入或存取控制繞過路徑，也不使用 Puppeteer、Playwright
 或第三方下載 API；Playwright 僅用於 mock E2E。若公開頁需要登入、CAPTCHA、遭 bot
-block、地區／年齡限制或 markup 改變，解析可能失敗。必須回傳誠實錯誤，不能登入、
-上傳 Cookie、暴力重試或放寬安全邊界。
+block、地區／年齡限制或 markup 改變，解析可能失敗。不能登入、上傳 Cookie 或暴力重試；
+download-first degradation 的精確範圍與未驗證 metadata 必須如實記錄，不得描述成 probe
+成功。
 
 自動測試只用 mocks、fixtures 與受控 upstream。真實驗證最多使用使用者先前提供的
 單一公開貼文，不批次、不負載測試、不繞 rate limit；遇到登入牆、CAPTCHA 或 bot

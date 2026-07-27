@@ -55,7 +55,7 @@ export interface ProbedMedia {
   readonly lastModified: string | null;
   readonly validator: ReliableValidator | null;
   readonly completionReliable: boolean;
-  readonly probeMethod: 'head' | 'range-get';
+  readonly probeMethod: 'head' | 'range-get' | 'unverified';
 }
 
 export type MediaProbeFetch = (request: Request) => Promise<Response>;
@@ -335,12 +335,33 @@ function normalizeProbeMethod(
   rangeCapability: MediaRangeCapability,
 ): ProbedMedia['probeMethod'] {
   if (
-    (value !== 'head' && value !== 'range-get') ||
-    (value === 'range-get' && rangeCapability === 'unknown')
+    (value !== 'head' && value !== 'range-get' && value !== 'unverified') ||
+    (value === 'range-get' && rangeCapability === 'unknown') ||
+    (value === 'unverified' && rangeCapability !== 'unknown')
   ) {
     return fail('MEDIA_PROBE_METADATA_INVALID');
   }
   return value;
+}
+
+function assertUnverifiedRepresentation(
+  probeMethod: ProbedMedia['probeMethod'],
+  representation: {
+    readonly contentLength: number | null;
+    readonly lastModified: string | null;
+    readonly strongEtag: string | null;
+    readonly validator: ReliableValidator | null;
+  },
+): void {
+  if (
+    probeMethod === 'unverified' &&
+    (representation.contentLength !== null ||
+      representation.lastModified !== null ||
+      representation.strongEtag !== null ||
+      representation.validator !== null)
+  ) {
+    return fail('MEDIA_PROBE_METADATA_INVALID');
+  }
 }
 
 function normalizeCompletionReliability(
@@ -366,6 +387,7 @@ export function normalizeProbedMedia(value: unknown): ProbedMedia {
   const representation = normalizeRepresentation(record);
   const rangeCapability = normalizeRangeCapability(record['rangeCapability']);
   const probeMethod = normalizeProbeMethod(record['probeMethod'], rangeCapability);
+  assertUnverifiedRepresentation(probeMethod, representation);
 
   return {
     finalUrl: normalizeFinalUrl(record['finalUrl']),
@@ -381,6 +403,19 @@ export function normalizeProbedMedia(value: unknown): ProbedMedia {
     ),
     probeMethod,
   };
+}
+
+export function createUnverifiedMedia(candidate: CdnUrl): ProbedMedia {
+  return normalizeProbedMedia({
+    finalUrl: candidate,
+    contentType: 'video/mp4',
+    contentLength: null,
+    rangeCapability: 'unknown',
+    strongEtag: null,
+    lastModified: null,
+    completionReliable: false,
+    probeMethod: 'unverified',
+  });
 }
 
 function assertIdentityEncoding(headers: Headers): void {

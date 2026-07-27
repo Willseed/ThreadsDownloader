@@ -835,6 +835,37 @@ describe('resolve public media workflow', () => {
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, secondUrl, 'private-related-token']);
   });
 
+  it('stores an unverified rendered candidate when the media probe transport is unavailable', async () => {
+    const harness = createHarness({
+      rendererEnabled: true,
+      markupResponse: () =>
+        new Response('<noscript>Enable JavaScript because JavaScript is required.</noscript>', {
+          headers: { 'content-type': 'text/html' },
+        }),
+      probeResponse: () => Promise.reject(new Error('private rendered probe transport')),
+    });
+
+    const result = await execute(harness);
+
+    expect(result.response.status).toBe(200);
+    expect((JSON.parse(result.body) as { candidates: unknown[] }).candidates).toHaveLength(1);
+    expect(harness.controls.probeRequests).toHaveLength(2);
+    expect(harness.controls.vaultBodies[0]!['candidates']).toEqual([
+      {
+        finalUrl: RENDERED_PRIVATE_URL,
+        contentType: 'video/mp4',
+        contentLength: null,
+        rangeCapability: 'unknown',
+        strongEtag: null,
+        lastModified: null,
+        completionReliable: false,
+        probeMethod: 'unverified',
+      },
+    ]);
+    expect(harness.controls.failureEvents).toEqual([]);
+    expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, 'private rendered probe transport']);
+  });
+
   it('retries one empty rendered result with the same canonical post inside the lease', async () => {
     let renderCall = 0;
     const harness = createHarness({

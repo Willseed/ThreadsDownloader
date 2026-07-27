@@ -300,7 +300,7 @@ describe('DownloaderWorkflow', () => {
       kind: 'handed-off',
       siteKey: SITE_KEY,
       candidates: resolveResponse.candidates,
-      message: '已交由瀏覽器下載管理器處理。',
+      message: '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。',
     });
     const serialized = JSON.stringify(workflow.state());
     expect(serialized).not.toContain(RESOLVE_ID);
