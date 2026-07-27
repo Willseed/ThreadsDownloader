@@ -109,3 +109,33 @@
 - sealed authorization 與 sealed source URL 沿用既有技術界線；本輪未重新研究其密碼學實作，也不將其擴張為所有資料均已加密。
 - `LEGAL / A SOLICITUD` 沿用目前 eyebrow 的按需開啟角色；尚未透過實際畫面使用性測試比較更長的 `DISPONIBLE AL ABRIR`。
 - 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否使用 `Intl.NumberFormat('es')`。
+
+## ko 細項查核（2026-07-27）
+
+### 證據與範圍
+
+- 本輪只研究 `ko` 的韓國軟體 UI、존댓말、ARIA、API 錯誤、metadata、法務、隱私、著作權、外來語、韓文空格與 README；沒有重複研究 runtime signal service、typed catalog、fallback 或 route metadata 架構。
+- 依使用者指定，以 `ask-bridge 0.2.9 --provider chatgpt --model medium --timeout 1500 --headless=true` 附 `ko.ts` 與 `README.ko.md` 查核。第一次命令雖正常結束，卻回傳另一個 `navigator.languages`／IP geolocation 研究，沒有審閱附件，因此視為交叉污染而非有效證據；確認無其他 ask-bridge 程序後，以 `--new` 和聚焦韓文輸出契約單次重試成功。
+- 有效回覆只是外部 AI 的語言候選，不是官方韓文規範、法律意見、伺服器契約或測試結果。本輪沒有使用 Web Search；catalog 完整性、封閉 API code 映射、DOM metadata 與 route 行為由本機型別及測試驗證。
+
+### 結論
+
+1. locale 使用 `ko`、`ltr` 與原生名稱 `한국어`；主要 UI 固定使用 `동영상 버전`、`보안 인증`、`보안 세션`、`공개 게시물` 與 `다운로드 작업`，指示使用自然的 `-하세요`，說明與法務內容使用正式一致的 `-합니다`。
+2. ARIA 採 `주요 탐색`、`언어 선택`、`본문으로 건너뛰기` 與動作優先的候選標籤，避免把 primary navigation 誤解為預設值；HTTP range error 明示 `바이트 범위`。
+3. `URL`, `세션`, `토큰`, `해시`, `쿠키`, `메타데이터`, `동일 출처` 等外來語沿用韓國軟體常見寫法。Cookie 直接標示 `Path=/`；sealed URL 只描述為以密封形式保存，不擴張成所有資料均加密。
+4. ask-bridge 建議把分析許可、預約資料與下載 lease 全部統一為 `리스`，但英文 catalog 與程式狀態顯示 resolve permit、reservation、stream lease 是不同概念；最終只在真正的下載／串流 lease 首次標示 `리스(lease)`，其餘維持 `허가` 與 `예약`，避免改變技術事實。
+5. 法務韓文保留公開可見不等於授權、研究或非商業目的不當然構成許可或合法、不繞過限制、非官方隸屬，以及不宣稱全加密、完全無紀錄、立即物理刪除或特定法域程序。`세이프 하버` 只保留制度名稱並明確否認其已適用。
+6. 五份 README 使用一致的 `English | 繁體中文 | 简体中文 | Español | 한국어` 導覽並將當前語言加粗；`README.ko.md` 完整保留免登入範圍、受限內容排除、不繞過限制、權利要求、研究／非商業目的界線、無法保證每則貼文，以及不得在公開 issue 發布 개인정보、私人內容或帳號資訊等限制。
+
+### 適用範圍
+
+- 上述用詞適用於目前 Angular SPA 的韓文 UI、輔助科技標籤、錯誤提示、法務頁與獨立 README，不代表韓國或其他法域的法律意見。
+- API error 的持續時間與恢復建議沿用現有 worker 契約；本輪只在該證據範圍翻譯，未重新研究 Threads、Cloudflare 或 production 設定。
+
+### 尚未確認
+
+- locale 仍未進入 URL，且 SSR/prerender、`hreflang`、crawler 可讀的每語言 metadata 與韓文搜尋結果截斷效果仍未確認。
+- `lease` 在實作中可能分別表示執行權、串流所有權或其他狀態；若未來向維護者暴露精確欄位，最終韓文技術詞仍需依狀態機審閱。
+- `법률 정보` 簡化了原 eyebrow 的按需開啟角色；尚未透過實際畫面使用性測試比較是否應保留品牌式 `LEGAL / ON DEMAND`。
+- Cookie 屬性、保存期限、Cloudflare 接收者與 SpaceX 非隸屬名單沿用現有已測契約；本輪只審閱韓文表述，未重新驗證 production 設定或列名原因。
+- 影片時間與檔案大小仍沿用既有固定格式，尚未決定是否使用 `Intl.NumberFormat('ko')`。

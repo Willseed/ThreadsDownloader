@@ -1,6 +1,6 @@
 # Threads Downloader
 
-[English](README.md) | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md) | **Español**
+[English](README.md) | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md) | **Español** | [한국어](README.ko.md)
 
 [Abrir el servicio activo de Threads Downloader](https://threads.pylot.dev/)
 

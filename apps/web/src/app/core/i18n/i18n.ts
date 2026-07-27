@@ -6,10 +6,11 @@ import { type ApiErrorCode } from '@threads-downloader/contracts';
 
 import { en } from './locales/en.js';
 import { es } from './locales/es.js';
+import { ko } from './locales/ko.js';
 import { zhCN } from './locales/zh-CN.js';
 import { type MessageCatalog, zhTW } from './locales/zh-TW.js';
 
-export const SUPPORTED_LOCALES = ['zh-TW', 'zh-CN', 'en', 'es'] as const;
+export const SUPPORTED_LOCALES = ['zh-TW', 'zh-CN', 'en', 'es', 'ko'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 export type RouteTitleKey = keyof typeof zhTW.routes;
 export const DEFAULT_LOCALE: SupportedLocale = 'zh-TW';
@@ -18,6 +19,7 @@ export const MESSAGE_CATALOGS = {
   'zh-CN': zhCN,
   en,
   es,
+  ko,
 } as const satisfies Readonly<Record<SupportedLocale, MessageCatalog>>;
 
 function isSupportedLocale(value: unknown): value is SupportedLocale {

@@ -94,6 +94,7 @@ describe('AppComponent routing', () => {
       ['zh-CN', '简体中文'],
       ['en', 'English'],
       ['es', 'Español'],
+      ['ko', '한국어'],
     ]);
 
     select!.value = 'zh-CN';
@@ -134,6 +135,19 @@ describe('AppComponent routing', () => {
       'Descargar videos públicos de Threads',
     );
     expect(select?.getAttribute('aria-label')).toBe('Seleccionar idioma');
+
+    select!.value = 'ko';
+    select!.dispatchEvent(new Event('change'));
+    TestBed.flushEffects();
+    fixture.detectChanges();
+
+    expect(document.documentElement.lang).toBe('ko');
+    expect(document.title).toBe('Threads Downloader — 공개 콘텐츠 연구 도구');
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('다운로드 시작');
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe(
+      '공개 Threads 동영상 다운로드',
+    );
+    expect(select?.getAttribute('aria-label')).toBe('언어 선택');
   });
 
   it.each([
