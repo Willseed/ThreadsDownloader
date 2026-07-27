@@ -158,6 +158,9 @@ describe('DownloaderPageComponent', () => {
       '取得影片',
     );
     expect(root.querySelector('.operation-feedback')?.closest('.workbench')).not.toBeNull();
+    expect(root.textContent).not.toContain('PUBLIC THREADS MEDIA / RESEARCH INTERFACE');
+    expect(root.textContent).not.toContain('Public media.');
+    expect(root.textContent).not.toContain('Direct handoff.');
   });
 
   it('bootstraps once and owns one widget across same-site-key state changes', async () => {
@@ -169,10 +172,14 @@ describe('DownloaderPageComponent', () => {
     expect(
       (fixture.nativeElement as HTMLElement).querySelector('.status-line')?.textContent?.trim(),
     ).toBe('貼上網址並完成驗證後，即可取得影片。');
-    const verificationMessage = (fixture.nativeElement as HTMLElement).querySelector(
-      '.challenge-block [aria-live="polite"]',
-    );
-    expect(verificationMessage?.getAttribute('aria-atomic')).toBe('true');
+    const root = fixture.nativeElement as HTMLElement;
+    const container = root.querySelector('.turnstile-container');
+    expect(container?.getAttribute('role')).toBe('group');
+    expect(container?.getAttribute('aria-label')).toBe('Cloudflare Turnstile');
+    expect(container?.getAttribute('tabindex')).toBe('-1');
+    expect(root.querySelector('.challenge-block')).toBeNull();
+    expect(root.querySelector('#challenge-title')).toBeNull();
+    expect(root.textContent).not.toContain('安全驗證');
 
     state.set({ kind: 'resolving', siteKey: SITE_KEY });
     await render();
@@ -321,7 +328,7 @@ describe('DownloaderPageComponent', () => {
     await component.submit();
     expect(resolve).not.toHaveBeenCalled();
     expect(component.verificationRequired()).toBe(true);
-    expect(root.ownerDocument.activeElement).toBe(root.querySelector('.challenge-block'));
+    expect(root.ownerDocument.activeElement).toBe(root.querySelector('.turnstile-container'));
 
     widgets[0]?.token.set('verified-widget-response');
     widgets[0]?.status.set('verified');

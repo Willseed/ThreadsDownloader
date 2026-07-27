@@ -30,7 +30,12 @@ async function performPrimarySuccessAction(
 }
 
 async function waitForVerifiedChallenge(page: Page): Promise<void> {
-  await expect(page.getByText('安全驗證已就緒。')).toBeVisible();
+  const turnstile = page.locator('.turnstile-container');
+  await expect(turnstile).toHaveAttribute('aria-label', 'Cloudflare Turnstile');
+  await expect(turnstile.getByRole('status', { name: '安全驗證測試替身' })).toHaveText(
+    '安全驗證已完成',
+  );
+  await expect(page.locator('#challenge-title, .challenge-block')).toHaveCount(0);
 }
 
 async function completeResolveForm(page: Page): Promise<void> {

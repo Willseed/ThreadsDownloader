@@ -177,26 +177,25 @@ function statusText(state: DownloaderWorkflowState): string {
 
           <div
             #challengeRegion
-            class="challenge-block"
-            aria-labelledby="challenge-title"
+            #turnstileContainer
+            class="turnstile-container"
+            role="group"
+            aria-label="Cloudflare Turnstile"
             tabindex="-1"
-          >
-            <div>
-              <h2 id="challenge-title">安全驗證</h2>
-              <p aria-live="polite" aria-atomic="true">{{ verificationMessage() }}</p>
-              @if (verificationRetryAvailable()) {
-                <button
-                  type="button"
-                  class="verification-retry-action"
-                  [disabled]="busy()"
-                  (click)="retryVerification()"
-                >
-                  重新載入安全驗證
-                </button>
-              }
+          ></div>
+          @if (verificationRetryAvailable()) {
+            <div class="verification-recovery" role="alert">
+              <p>安全驗證無法使用，請重新載入安全驗證。</p>
+              <button
+                type="button"
+                class="verification-retry-action"
+                [disabled]="busy()"
+                (click)="retryVerification()"
+              >
+                重新載入安全驗證
+              </button>
             </div>
-            <div #turnstileContainer class="turnstile-container"></div>
-          </div>
+          }
           @if (verificationRequired()) {
             <p class="field-error" role="alert">請先完成安全驗證。</p>
           }
@@ -390,27 +389,6 @@ export class DownloaderPageComponent implements OnDestroy {
       return false;
     }
     return this.widgetMountFailed() || this.widgetValue()?.status() === 'error';
-  });
-  readonly verificationMessage = computed(() => {
-    if (this.widgetMountFailed()) {
-      return '安全驗證無法使用，請重新載入安全驗證。';
-    }
-    const widget = this.widgetValue();
-    if (widget === null) {
-      return siteKeyFrom(this.state()) === null ? '等待安全工作階段。' : '正在載入安全驗證。';
-    }
-    switch (widget.status()) {
-      case 'loading':
-        return '正在載入安全驗證。';
-      case 'ready':
-        return '請完成安全驗證。';
-      case 'verified':
-        return '安全驗證已就緒。';
-      case 'error':
-        return '安全驗證無法使用，請重新載入安全驗證。';
-      case 'removed':
-        return '安全驗證已停止。';
-    }
   });
   readonly statusMessage = computed(() => statusText(this.state()));
   readonly errorState = computed(() => {

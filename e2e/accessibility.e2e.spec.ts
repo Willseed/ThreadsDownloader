@@ -5,7 +5,11 @@ import { expect, test } from './fixtures/downloader-mock.js';
 
 async function waitForReadyPage(page: Page): Promise<void> {
   await page.goto('/');
-  await expect(page.getByText('安全驗證已就緒。')).toBeVisible();
+  const turnstile = page.locator('.turnstile-container');
+  await expect(turnstile.getByRole('status', { name: '安全驗證測試替身' })).toHaveText(
+    '安全驗證已完成',
+  );
+  await expect(page.locator('#challenge-title, .challenge-block')).toHaveCount(0);
 }
 
 function cssTimeToMilliseconds(value: string): number {
