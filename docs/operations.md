@@ -204,8 +204,9 @@ production binding 改成 remote development 設定。
    既有 CDN Instagram family 與 exact Instagram FNA shape；不得有 URL credentials、顯式
    port、Cookie、authorization、proxy authorization 或 referrer。
    `data:` URL 不走網路，且 Puppeteer 1.1.0 不支援攔截，handler 必須 no-op，不得宣稱已阻擋。
-4. 每個 Browser binding fetch 各限四秒，整次 launch/connect 另有八秒 absolute deadline，response settle 後立即清除 timer，
-   避免已升級 WebSocket 被 delayed abort。Navigation 以 `domcontentloaded` 限四秒；之後每
+4. 每個 Browser binding fetch 的 abort 上限與八秒 launch deadline 對齊；包住整次
+   acquire/connect 的 absolute launch attempt 仍合計最多八秒。Response settle 後立即清除
+   timer，避免已升級 WebSocket 被 delayed abort。Navigation 以 `domcontentloaded` 限四秒；之後每
    500 ms 讀 live DOM，最長八秒。空集合永遠不算 settled；非空候選只能在總觀察至少五秒、
    且 source/URL 集合連續三秒不變後成功。Readiness timeout 先 bounded close 該 context，再進
    第二個 fresh context，不得重新 acquire Browser。合法 identity 不是非空候選 settled 的必要條件；

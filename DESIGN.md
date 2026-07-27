@@ -323,10 +323,11 @@ not establish any undocumented upstream Threads API semantics.
   proxy-authorization, Referer, and Referrer headers are removed; every other
   network origin is aborted. `data:` URLs are non-network and are explicitly a
   no-op because Puppeteer 1.1.0 does not intercept them. Each Browser binding
-  control fetch is bounded
-  at four seconds and clears its timer as soon as the response settles so an
-  upgraded WebSocket is not aborted later. Navigation is bounded at four
-  seconds and waits for `domcontentloaded`.
+  control fetch has an abort ceiling aligned with the eight-second launch
+  deadline and clears its timer as soon as the response settles so an upgraded
+  WebSocket is not aborted later. The enclosing absolute launch attempt still
+  caps the combined acquire/connect sequence at eight seconds. Navigation is
+  bounded at four seconds and waits for `domcontentloaded`.
 - Browser readiness: the live DOM is polled every 500 ms for at most eight
   seconds. An empty candidate set is never settled. A nonempty set succeeds only
   after at least five seconds of total observation and after candidate source/URL

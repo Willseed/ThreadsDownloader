@@ -4,13 +4,13 @@ import { decodeExactRecord } from '@threads-downloader/contracts/strict-json';
 import { parseCdnUrl, UpstreamPolicyError } from '../security/upstream-policy.js';
 import type { RenderedThreadsPagePort } from './rendered-threads-media.js';
 
-const BROWSER_CONTROL_REQUEST_TIMEOUT_MS = 4_000;
+const BROWSER_LAUNCH_TIMEOUT_MS = 8_000;
+const BROWSER_CONTROL_REQUEST_TIMEOUT_MS = BROWSER_LAUNCH_TIMEOUT_MS;
 const NAVIGATION_TIMEOUT_MS = 4_000;
 const READINESS_TIMEOUT_MS = 8_000;
 const READINESS_POLL_MS = 500;
 const MINIMUM_OBSERVATION_MS = 5_000;
 const STABILITY_WAIT_MS = 3_000;
-const BROWSER_LAUNCH_TIMEOUT_MS = 8_000;
 const CONTEXT_ACTIVE_TIMEOUT_MS = 20_000;
 const CONTEXT_CLOSE_TIMEOUT_MS = 4_000;
 const SESSION_CLOSE_TIMEOUT_MS = 4_000;

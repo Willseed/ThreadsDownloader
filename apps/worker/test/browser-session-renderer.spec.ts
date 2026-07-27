@@ -1108,8 +1108,42 @@ describe('browser session rendered page adapter', () => {
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
 
-    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.advanceTimersByTimeAsync(8_000);
     expect(signals.every((signal) => !signal.aborted)).toBe(true);
+  });
+
+  it('allows browser acquisition to finish after four seconds within its launch deadline', async () => {
+    vi.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    const fetchBinding = browserRun(
+      (_input, init) =>
+        new Promise<Response>((resolve) => {
+          const signal = init?.signal as AbortSignal;
+          signals.push(signal);
+          setTimeout(() => resolve(new Response(null, { status: 200 })), 7_999);
+        }),
+    );
+    const currentSession = sessionFor();
+    const { launcher } = launcherFor([currentSession], [], async (binding) => {
+      await binding.fetch('https://browser-control.example/acquire');
+    });
+    const rendering = createBrowserSessionRenderedPagePort(fetchBinding, launcher).render(
+      TARGET_URL,
+    );
+    const settlement = observeSettlement(rendering);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settlement.settled()).toBe(false);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    await expect(rendering).resolves.toEqual(PRIMITIVE_ENVELOPE);
+    expect(signals[0]!.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signals[0]!.aborted).toBe(false);
   });
 
   it.each([
@@ -1142,14 +1176,21 @@ describe('browser session rendered page adapter', () => {
       const rendering = createBrowserSessionRenderedPagePort(fetchBinding, launcher).render(
         TARGET_URL,
       );
+      const settlement = observeSettlement(rendering);
       const outcome = rendering.then(
         () => ({ error: undefined }),
         (error: unknown) => ({ error }),
       );
 
-      await vi.advanceTimersByTimeAsync(4_000);
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(settlement.settled()).toBe(false);
+      expect(hangingSignals).toHaveLength(1);
+      expect(hangingSignals[0]!.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
       const { error } = await outcome;
 
+      expect(settlement.settled()).toBe(true);
       expect(error).toMatchObject({ message: 'BROWSER_SESSION_LAUNCH_TIMEOUT' });
       expect((error as Error).message).not.toContain('private control detail');
       expect(hangingSignals).toHaveLength(1);
