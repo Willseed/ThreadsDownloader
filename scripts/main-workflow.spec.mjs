@@ -20,6 +20,7 @@ const expectedSonarProperties = [
     'apps/web/src,apps/worker/test,apps/worker/test-do,packages/contracts/test,e2e,scripts',
   ],
   ['sonar.exclusions', 'apps/web/src/**/*.spec.ts,scripts/**/*.spec.mjs'],
+  ['sonar.cpd.exclusions', 'apps/web/src/app/core/i18n/locales/*.ts'],
   [
     'sonar.test.inclusions',
     'apps/web/src/**/*.spec.ts,apps/worker/test/**/*.spec.ts,apps/worker/test-do/**/*.spec.ts,packages/contracts/test/**/*.spec.ts,e2e/**/*.spec.ts,scripts/**/*.spec.mjs',
@@ -280,7 +281,7 @@ describe('main workflow policy', () => {
 });
 
 describe('Sonar project policy', () => {
-  it('allows only the exact approved source, test, and four-LCOV properties', async () => {
+  it('allows only the exact approved source, test, CPD exclusion, and four-LCOV properties', async () => {
     const properties = parseProperties(await readFile(sonarPropertiesPath, 'utf8'));
 
     expect([...properties]).toEqual(expectedSonarProperties);

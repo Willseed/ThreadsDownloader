@@ -251,6 +251,49 @@ type、回應大小、欄位型別、分頁一致性與預期 project/branch，�
 baseline。CI 不會降低門檻或豁免既有問題，必須由同一個 `GITHUB_SHA` 的新分析
 實際達到 Quality Gate `OK` 與全部零值後才能部署。
 
+## Sonar duplication 排除範圍
+
+### 問題、查證順序與證據
+
+2026-07-27 針對 exact Sonar gate 的 `SONAR_MEASURES_NOT_ZERO`，先依專案規則以
+ask-bridge `0.2.9` 執行：
+
+```text
+ask-bridge --provider chatgpt --model high --timeout 1500 --headless=true <focused-prompt>
+```
+
+provider 持續停在 waiting，沒有任何 assistant 回覆，因此 ask-bridge 對本細項
+不可用，也沒有把它當成結論證據。本地程式碼與既有研究不足以確認 Sonar CPD
+排除設定的語意，故後續才使用 Web Search；只採用下列 SonarSource 官方文件：
+
+- [Excluding from coverage or duplication](https://docs.sonarsource.com/sonarqube-cloud/managing-your-projects/project-analysis/setting-analysis-scope/exclude-from-coverage-duplication)
+  確認 `sonar.cpd.exclusions` 只排除 duplication check，值是 comma-separated path
+  matching patterns。
+- [Excluding based on path-matching patterns](https://docs.sonarsource.com/sonarqube-cloud/managing-your-projects/project-analysis/setting-analysis-scope/excluding-files-based-on-patterns)
+  確認路徑相對於 `sonar.projectBaseDir`；其預設值是 analysis 啟動目錄。
+
+官方 Sonar API 對 revision `d895945` 的分析顯示 `duplicated_lines=811`、
+`duplicated_lines_density=3.8`。同一分析的 file breakdown 顯示各 locale catalog 的
+duplicated lines 為 `en.ts=179`、`es.ts=158`、`zh-CN.ts=208`、`zh-TW.ts=208`，
+而 `downloader-workflow.ts=58`。locale catalogs 固定實作同一個 `MessageCatalog`
+schema，是本次 CPD 的絕大多數；`downloader-workflow.ts` 的真重複已由另一個原子
+重構處理，不納入排除。
+
+### 結論與適用範圍
+
+本專案從 repository root 啟動 Sonar analysis，因此採用精確 pattern
+`apps/web/src/app/core/i18n/locales/*.ts`。這只讓固定相同 catalog schema 的直接子層
+locale TypeScript 檔案不參與 duplication check，不排除 source analysis、coverage、
+issues 或其他目錄，也不降低 `check-sonar-open-issues` 的 zero duplication 門檻。
+其他 production code 的真重複仍必須修正。
+
+### 尚未確認事項
+
+加入排除後的新 Sonar analysis 尚未執行，因此新 revision 的實際 duplicated lines、
+Quality Gate 與 exact zero gate 結果尚未確認，必須由遠端 CI 以同一個
+`GITHUB_SHA` 驗證。若未來 locale catalogs 移出目前目錄、改成巢狀目錄，或 analysis
+不再從 repository root 啟動，這個 pattern 的適用性也必須重新查證。
+
 ## 適用範圍
 
 - 版本與 latest 判定是 2026-07-26 的快照；完整 SHA 可重現當時來源，但未來
