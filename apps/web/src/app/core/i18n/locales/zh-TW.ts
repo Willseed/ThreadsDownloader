@@ -17,6 +17,7 @@ export const zhTW = {
   },
   app: {
     brand: 'Threads Downloader',
+    languageLabel: '選擇語言',
     skipLink: '跳到主要內容',
     headerLabel: '網站標頭',
     homeLabel: 'Threads Downloader 首頁',

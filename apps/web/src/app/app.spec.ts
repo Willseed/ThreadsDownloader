@@ -80,6 +80,32 @@ describe('AppComponent routing', () => {
     expect(root.querySelectorAll('#main-content')).toHaveLength(1);
   });
 
+  it('switches all reactive copy and metadata between supported Chinese locales', async () => {
+    await router.navigateByUrl('/');
+    fixture.detectChanges();
+    expect(failPendingSessionRequests()).toBe(1);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const select = root.querySelector<HTMLSelectElement>('#language-select');
+    expect([...select!.options].map((option) => [option.value, option.text])).toEqual([
+      ['zh-TW', '繁體中文'],
+      ['zh-CN', '简体中文'],
+    ]);
+
+    select!.value = 'zh-CN';
+    select!.dispatchEvent(new Event('change'));
+    TestBed.flushEffects();
+    fixture.detectChanges();
+
+    expect(document.documentElement.lang).toBe('zh-CN');
+    expect(document.title).toBe('Threads Downloader — 公开媒体研究工具');
+    expect(root.querySelector('.site-nav a')?.textContent?.trim()).toBe('开始下载');
+    expect(root.querySelector('#page-title')?.textContent?.trim()).toBe('下载公开 Threads 视频');
+    expect(select?.getAttribute('aria-label')).toBe('选择语言');
+  });
+
   it.each([
     ['/terms', '使用條款'],
     ['/privacy', '隱私與資料處理說明'],

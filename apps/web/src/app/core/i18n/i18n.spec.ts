@@ -43,8 +43,16 @@ describe('I18nService', () => {
     }
   });
 
-  it('falls back safely and synchronizes the zh-TW document contract', () => {
+  it('switches metadata at runtime and falls back safely', () => {
     const service = TestBed.inject(I18nService);
+
+    expect(service.setLocale('zh-CN')).toBe('zh-CN');
+    TestBed.flushEffects();
+    expect(document.documentElement.lang).toBe('zh-CN');
+    expect(document.title).toBe(MESSAGE_CATALOGS['zh-CN'].routes.home);
+    expect(document.querySelector('meta[name="description"]')?.getAttribute('content')).toBe(
+      MESSAGE_CATALOGS['zh-CN'].metadata.description,
+    );
 
     expect(service.setLocale('unsupported')).toBe(DEFAULT_LOCALE);
     TestBed.flushEffects();
@@ -61,9 +69,12 @@ describe('I18nService', () => {
   it('maps every public API error code to a local message', () => {
     const service = TestBed.inject(I18nService);
 
-    expect(API_ERROR_CODES.map((code) => service.apiError(code))).toEqual(
-      API_ERROR_CODES.map((code) => MESSAGE_CATALOGS['zh-TW'].apiErrors[code]),
-    );
+    for (const locale of SUPPORTED_LOCALES) {
+      service.setLocale(locale);
+      expect(API_ERROR_CODES.map((code) => service.apiError(code))).toEqual(
+        API_ERROR_CODES.map((code) => MESSAGE_CATALOGS[locale].apiErrors[code]),
+      );
+    }
   });
 
   it('updates the current route title from a stable title key', () => {

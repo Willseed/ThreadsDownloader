@@ -1,7 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink, RouterOutlet } from '@angular/router';
 
-import { I18nService } from './core/i18n/i18n.js';
+import {
+  I18nService,
+  MESSAGE_CATALOGS,
+  SUPPORTED_LOCALES,
+  type SupportedLocale,
+} from './core/i18n/i18n.js';
 import {
   LegalModalOutletComponent,
   LegalModalTriggerDirective,
@@ -19,6 +24,17 @@ import {
       </a>
       <nav class="site-nav" [attr.aria-label]="text().primaryNavigationLabel">
         <a routerLink="/" fragment="download-workflow">{{ text().startDownload }}</a>
+        <label class="visually-hidden" for="language-select">{{ text().languageLabel }}</label>
+        <select
+          id="language-select"
+          [value]="locale()"
+          [attr.aria-label]="text().languageLabel"
+          (change)="changeLocale($event)"
+        >
+          @for (supportedLocale of supportedLocales; track supportedLocale) {
+            <option [value]="supportedLocale">{{ localeName(supportedLocale) }}</option>
+          }
+        </select>
       </nav>
     </header>
     <router-outlet />
@@ -35,5 +51,15 @@ import {
 })
 export class AppComponent {
   private readonly i18n = inject(I18nService);
+  protected readonly locale = this.i18n.locale;
   protected readonly text = computed(() => this.i18n.messages().app);
+  protected readonly supportedLocales = SUPPORTED_LOCALES;
+
+  protected localeName(locale: SupportedLocale): string {
+    return MESSAGE_CATALOGS[locale].locale.name;
+  }
+
+  protected changeLocale(event: Event): void {
+    this.i18n.setLocale((event.target as HTMLSelectElement).value);
+  }
 }
