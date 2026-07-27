@@ -1,120 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import worker, { authorizeSession, type Env, type SessionNamespace } from '../src/index.js';
+import worker, { type Env } from '../src/index.js';
+import {
+  createIpRateLimitNamespace,
+  createSessionNamespace,
+} from './support/session-namespaces.js';
 
 const expectedHost = 'threads.example.test';
 const downloadEncryptionKey = 'A'.repeat(43);
 const signingKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 const turnstileSiteKey = 'test-site-key';
 
-interface FakeSessionRecord {
-  readonly sessionHash: string;
-  readonly csrfHash: string;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
-}
-
-interface FakeSessionNamespace extends SessionNamespace {
-  delete(rawId: string): void;
-}
-
-function createSessionNamespace(
-  requests: unknown[] = [],
-  responseStatus = 200,
-): FakeSessionNamespace {
-  const ids = new Map<DurableObjectId, string>();
-  const records = new Map<string, FakeSessionRecord>();
-  return {
-    delete(rawId) {
-      records.delete(rawId);
-    },
-    idFromName(name: string) {
-      const id = {} as DurableObjectId;
-      ids.set(id, name);
-      return id;
-    },
-    get(id) {
-      const name = ids.get(id)!;
-      return {
-        async fetch(request) {
-          const pathname = new URL(request.url).pathname;
-          expect(request.method).toBe('POST');
-          expect(['/authorize', '/create', '/resume']).toContain(pathname);
-          const body: unknown = await request.json();
-          requests.push(body);
-          if (responseStatus !== 200) {
-            return Response.json({ ok: false }, { status: responseStatus });
-          }
-          if (pathname === '/authorize') {
-            return Response.json({ ok: true });
-          }
-          const input = body as FakeSessionRecord;
-          const current = records.get(name);
-          if (pathname === '/resume') {
-            if (current === undefined || current.sessionHash !== input.sessionHash) {
-              return Response.json({ ok: false }, { status: 410 });
-            }
-            records.set(name, { ...current, csrfHash: input.csrfHash });
-            return Response.json({ ok: true, expiresAt: current.expiresAt });
-          }
-          if (current !== undefined) {
-            return Response.json({ ok: false }, { status: 409 });
-          }
-          records.set(name, input);
-          return Response.json({ ok: true, expiresAt: input.expiresAt });
-        },
-      };
-    },
-  };
-}
-
-type FakeIpRateLimitNamespace = Env['IP_RATE_LIMITS'] & {
-  readonly requests: Request[];
-};
-
-function createIpRateLimitNamespace(
-  handler?: (request: Request) => Promise<Response>,
-): FakeIpRateLimitNamespace {
-  const requests: Request[] = [];
-  return {
-    requests,
-    idFromName(name: string) {
-      return { name } as unknown as DurableObjectId;
-    },
-    get() {
-      return {
-        async fetch(input: URL | RequestInfo) {
-          const request = input instanceof Request ? input : new Request(input);
-          requests.push(request.clone() as unknown as Request);
-          if (handler !== undefined) {
-            return handler(request);
-          }
-          const body = (await request.json()) as {
-            readonly now: number;
-            readonly reservationId: string;
-          };
-          const pathname = new URL(request.url).pathname;
-          return pathname === '/session-issuance/reserve'
-            ? Response.json(
-                {
-                  ok: true,
-                  reservationId: body.reservationId,
-                  expiresAt: body.now + 30_000,
-                },
-                { status: 201 },
-              )
-            : Response.json({ ok: true });
-        },
-      };
-    },
-  } as unknown as FakeIpRateLimitNamespace;
-}
-
 function createEnv(
   assetResponse = new Response('<app-root></app-root>', { status: 200 }),
   sessions = createSessionNamespace(),
   downloadSessions = {} as Env['DOWNLOAD_SESSIONS'],
-  ipRateLimits = createIpRateLimitNamespace(),
+  ipRateLimits: Env['IP_RATE_LIMITS'] = createIpRateLimitNamespace() as unknown as Env['IP_RATE_LIMITS'],
 ): Env {
   return {
     DOWNLOAD_ENCRYPTION_KEY: downloadEncryptionKey,
@@ -145,22 +46,6 @@ function createDownloadSessionNamespace(
   };
 }
 
-function createLostSessionNamespace(): FakeSessionNamespace {
-  return {
-    delete: () => undefined,
-    idFromName: () => ({}) as DurableObjectId,
-    get: () => ({
-      fetch: async () => {
-        throw new Error('session response lost');
-      },
-    }),
-  };
-}
-
-function issuancePaths(namespace: FakeIpRateLimitNamespace): string[] {
-  return namespace.requests.map((request) => new URL(request.url).pathname);
-}
-
 async function fetchWorker(path: string, env = createEnv()): Promise<Response> {
   return worker.fetch(
     new Request(`https://${expectedHost}${path}`, {
@@ -180,288 +65,16 @@ describe('worker entry policy', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 'ok' });
   });
 
-  it('creates an anonymous session without exposing internal identifiers', async () => {
-    const requests: unknown[] = [];
-    const response = await fetchWorker(
-      '/api/session',
-      createEnv(undefined, createSessionNamespace(requests)),
-    );
-    const text = await response.text();
+  it('routes session issuance through Hono and applies the worker response policy', async () => {
+    const env = createEnv();
+    const response = await fetchWorker('/api/session', env);
 
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('set-cookie')).toContain('__Host-td_session=');
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
-    expect(text).toContain('csrfToken');
-    expect(text).toContain('expiresAt');
-    expect(text).toContain(turnstileSiteKey);
-    expect(text).not.toContain('sessionHash');
-    expect(text).not.toContain('rawId');
-    expect(requests).toHaveLength(1);
-    expect(Object.keys(requests[0] as Record<string, unknown>).sort()).toEqual([
-      'csrfHash',
-      'expiresAt',
-      'issuedAt',
-      'sessionHash',
-    ]);
-  });
-
-  it('releases an issuance reservation only for a definite session create conflict', async () => {
-    const ipRateLimits = createIpRateLimitNamespace();
-    const response = await fetchWorker(
-      '/api/session',
-      createEnv(undefined, createSessionNamespace([], 409), undefined, ipRateLimits),
-    );
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get('set-cookie')).toBeNull();
-    expect(issuancePaths(ipRateLimits)).toEqual([
-      '/session-issuance/reserve',
-      '/session-issuance/release',
-    ]);
-  });
-
-  it('retains the reservation for known and ambiguous non-conflict create failures', async () => {
-    const failures: FakeSessionNamespace[] = [
-      createSessionNamespace([], 500),
-      createLostSessionNamespace(),
-    ];
-
-    for (const sessions of failures) {
-      const ipRateLimits = createIpRateLimitNamespace();
-      const response = await fetchWorker(
-        '/api/session',
-        createEnv(undefined, sessions, undefined, ipRateLimits),
-      );
-
-      expect(response.status).toBe(503);
-      expect(response.headers.get('set-cookie')).toBeNull();
-      expect(issuancePaths(ipRateLimits)).toEqual(['/session-issuance/reserve']);
-    }
-  });
-
-  it('retains a committed-or-unknown reservation and withholds the cookie when commit fails', async () => {
-    const ipRateLimits = createIpRateLimitNamespace(async (request) => {
-      if (new URL(request.url).pathname !== '/session-issuance/reserve') {
-        throw new Error('commit response lost');
-      }
-      const body = (await request.json()) as {
-        readonly now: number;
-        readonly reservationId: string;
-      };
-      return Response.json(
-        {
-          ok: true,
-          reservationId: body.reservationId,
-          expiresAt: body.now + 30_000,
-        },
-        { status: 201 },
-      );
-    });
-    const response = await fetchWorker(
-      '/api/session',
-      createEnv(undefined, createSessionNamespace(), undefined, ipRateLimits),
-    );
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get('set-cookie')).toBeNull();
-    expect(issuancePaths(ipRateLimits)).toEqual([
-      '/session-issuance/reserve',
-      '/session-issuance/commit',
-    ]);
-  });
-
-  it('reuses a valid cookie while rotating CSRF without resetting the cookie', async () => {
-    const sessions = createSessionNamespace();
-    const ipRateLimits = createIpRateLimitNamespace();
-    const env = createEnv(undefined, sessions, undefined, ipRateLimits);
-    const first = await fetchWorker('/api/session', env);
-    const firstBody = (await first.json()) as { csrfToken: string; expiresAt: string };
-    const cookie = first.headers.get('set-cookie')!.split(';', 1)[0]!;
-
-    const next = await worker.fetch(
-      new Request(`https://${expectedHost}/api/session`, { headers: { cookie } }),
-      env,
-      {} as ExecutionContext,
-    );
-    const nextBody = (await next.json()) as { csrfToken: string; expiresAt: string };
-    expect(next.headers.get('set-cookie')).toBeNull();
-    expect(nextBody.csrfToken).not.toBe(firstBody.csrfToken);
-    expect(nextBody.expiresAt).toBe(firstBody.expiresAt);
-    expect(ipRateLimits.requests).toHaveLength(2);
-  });
-
-  it('charges and replaces a signed cookie whose SessionCoordinator record is gone', async () => {
-    const sessions = createSessionNamespace();
-    const ipRateLimits = createIpRateLimitNamespace();
-    const env = createEnv(undefined, sessions, undefined, ipRateLimits);
-    const first = await fetchWorker('/api/session', env);
-    const signedCookie = first.headers.get('set-cookie')!.split(';', 1)[0]!.split('=', 2)[1]!;
-    const rawId = signedCookie.split('.', 1)[0]!;
-    sessions.delete(rawId);
-
-    const replacement = await worker.fetch(
-      new Request(`https://${expectedHost}/api/session`, {
-        headers: {
-          'CF-Connecting-IP': '203.0.113.42',
-          cookie: `__Host-td_session=${signedCookie}`,
-        },
-      }),
-      env,
-      {} as ExecutionContext,
-    );
-    expect(replacement.status).toBe(200);
-    expect(replacement.headers.get('set-cookie')).toContain('__Host-td_session=');
-    expect(replacement.headers.get('set-cookie')).not.toContain(signedCookie);
-    expect(ipRateLimits.requests).toHaveLength(4);
-  });
-
-  it.each([null, 'invalid client ip'])(
-    'fails closed before session allocation for CF IP %s',
-    async (clientIp) => {
-      const sessionRequests: unknown[] = [];
-      const ipRateLimits = createIpRateLimitNamespace();
-      const env = createEnv(
-        undefined,
-        createSessionNamespace(sessionRequests),
-        undefined,
-        ipRateLimits,
-      );
-      const headers = new Headers();
-      if (clientIp !== null) {
-        headers.set('CF-Connecting-IP', clientIp);
-      }
-      const response = await worker.fetch(
-        new Request(`https://${expectedHost}/api/session`, { headers }),
-        env,
-        {} as ExecutionContext,
-      );
-
-      expect(response.status).toBe(503);
-      expect(response.headers.get('cache-control')).toBe('no-store');
-      expect(response.headers.get('set-cookie')).toBeNull();
-      expect(response.headers.get('retry-after')).toBeNull();
-      await expect(response.json()).resolves.toMatchObject({
-        error: { code: 'SESSION_UNAVAILABLE' },
-      });
-      expect(sessionRequests).toHaveLength(0);
-      expect(ipRateLimits.requests).toHaveLength(0);
-    },
-  );
-
-  it('returns a secret-free 429 with the limiter retry deadline and no session side effect', async () => {
-    const sessionRequests: unknown[] = [];
-    const ipRateLimits = createIpRateLimitNamespace(async (request) => {
-      const input = (await request.json()) as { readonly now: number };
-      return Response.json({ ok: false, retryAt: input.now + 120_001 }, { status: 429 });
-    });
-    const env = createEnv(
-      undefined,
-      createSessionNamespace(sessionRequests),
-      undefined,
-      ipRateLimits,
-    );
-    const response = await fetchWorker('/api/session', env);
-    const text = await response.text();
-
-    expect(response.status).toBe(429);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(response.headers.get('retry-after')).toBe('121');
-    expect(response.headers.get('set-cookie')).toBeNull();
-    expect(text).toContain('RATE_LIMITED');
-    expect(text).not.toContain('203.0.113.42');
-    expect(text).not.toContain('ipHash');
-    expect(text).not.toContain('count');
-    expect(sessionRequests).toHaveLength(0);
-  });
-
-  it('returns a secret-free 503 when the issuance limiter fails without allocating a session', async () => {
-    const sessionRequests: unknown[] = [];
-    const ipRateLimits = createIpRateLimitNamespace(async () => {
-      throw new Error('private limiter failure');
-    });
-    const env = createEnv(
-      undefined,
-      createSessionNamespace(sessionRequests),
-      undefined,
-      ipRateLimits,
-    );
-    const response = await fetchWorker('/api/session', env);
-    const text = await response.text();
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get('cache-control')).toBe('no-store');
-    expect(response.headers.get('retry-after')).toBeNull();
-    expect(response.headers.get('set-cookie')).toBeNull();
-    expect(text).toContain('SESSION_UNAVAILABLE');
-    expect(text).not.toContain('private limiter failure');
-    expect(text).not.toContain('203.0.113.42');
-    expect(sessionRequests).toHaveLength(0);
-  });
-
-  it('does not touch either DO when session key import fails', async () => {
-    const sessionRequests: unknown[] = [];
-    const ipRateLimits = createIpRateLimitNamespace();
-    const env: Env = {
-      ...createEnv(undefined, createSessionNamespace(sessionRequests), undefined, ipRateLimits),
-      SESSION_SIGNING_KEY: 'invalid-key-material',
-    };
-    const response = await fetchWorker('/api/session', env);
-
-    expect(response.status).toBe(503);
-    expect(response.headers.get('set-cookie')).toBeNull();
-    expect(sessionRequests).toHaveLength(0);
-    expect(ipRateLimits.requests).toHaveLength(0);
-  });
-
-  it('replaces a tampered cookie and returns a safe internal denial', async () => {
-    const replacement = await worker.fetch(
-      new Request(`https://${expectedHost}/api/session`, {
-        headers: {
-          'CF-Connecting-IP': '203.0.113.42',
-          cookie: '__Host-td_session=tampered.secret',
-        },
-      }),
-      createEnv(),
-      {} as ExecutionContext,
-    );
-    expect(replacement.status).toBe(200);
-    expect(replacement.headers.get('set-cookie')).toContain('__Host-td_session=');
-
-    const denied = await fetchWorker(
-      '/api/session',
-      createEnv(undefined, createSessionNamespace([], 401)),
-    );
-    const body = await denied.text();
-    expect(denied.status).toBe(503);
-    expect(body).toContain('SESSION_UNAVAILABLE');
-    expect(body).not.toContain('sessionHash');
-  });
-
-  it('authorizes through a hash-only internal request and safely handles failures', async () => {
-    const requests: unknown[] = [];
-    await expect(
-      authorizeSession(
-        createSessionNamespace(requests),
-        'internal-id',
-        'A'.repeat(43),
-        'B'.repeat(43),
-        100,
-      ),
-    ).resolves.toBe(true);
-    expect(Object.keys(requests[0] as Record<string, unknown>).sort()).toEqual([
-      'csrfHash',
-      'now',
-      'sessionHash',
-    ]);
-    await expect(
-      authorizeSession(
-        createSessionNamespace([], 500),
-        'internal-id',
-        'A'.repeat(43),
-        'B'.repeat(43),
-      ),
-    ).resolves.toBe(false);
+    await expect(response.json()).resolves.toMatchObject({ turnstileSiteKey });
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
   });
 
   it.each([
