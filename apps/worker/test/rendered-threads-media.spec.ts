@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createRenderedThreadsMediaResolver,
   RENDERED_ALLOWED_REQUEST_PATTERNS,
+  RENDERED_BROWSER_BUDGET_MS,
   RENDERED_RESPONSE_READ_TIMEOUT_MS,
+  RENDERED_RESOLVER_BUDGET_MS,
   RenderedThreadsMediaResolverError,
   type BrowserRunScrapePort,
   type RenderedBrowserScrapeOptions,
@@ -130,13 +132,12 @@ describe('rendered Threads media resolver request policy', () => {
     expect(options.cacheTTL).toBe(0);
     expect(options.setJavaScriptEnabled).toBe(true);
     expect(options.gotoOptions).toEqual({ timeout: 4_000, waitUntil: 'domcontentloaded' });
-    expect(options.actionTimeout).toBe(6_000);
-    expect(options.waitForSelector).toEqual({
-      selector: VIDEO_SELECTOR,
-      visible: true,
-      timeout: 5_000,
-    });
-    expect(options.waitForTimeout).toBe(250);
+    expect(options.actionTimeout).toBe(8_000);
+    expect(options.waitForTimeout).toBe(5_000);
+    expect(options).not.toHaveProperty('waitForSelector');
+    expect(RENDERED_BROWSER_BUDGET_MS).toBe(12_000);
+    expect(RENDERED_RESPONSE_READ_TIMEOUT_MS).toBe(2_000);
+    expect(RENDERED_RESOLVER_BUDGET_MS).toBe(14_000);
     expect(options.bestAttempt).toBe(false);
     expect(options.elements).toEqual([
       { selector: CANONICAL_SELECTOR },
@@ -154,7 +155,6 @@ describe('rendered Threads media resolver request policy', () => {
       'gotoOptions',
       'setJavaScriptEnabled',
       'url',
-      'waitForSelector',
       'waitForTimeout',
     ]);
   });
@@ -342,25 +342,30 @@ describe('rendered Threads media resolver response contract', () => {
     );
   });
 
-  it('selects the first allowed video deterministically from multiple unique results', async () => {
+  it('returns three unique videos in DOM order while filtering unsafe and cross-selector duplicates', async () => {
+    const urls = Array.from(
+      { length: 3 },
+      (_, index) =>
+        `https://video.cdninstagram.com/${String(index)}.mp4?token=private-${String(index)}`,
+    );
     const results = [
       element([{ name: 'src', value: 'https://attacker.example/blocked.mp4' }]),
-      ...Array.from({ length: 2 }, (_, index) =>
-        element([
-          {
-            name: 'src',
-            value: `https://video.cdninstagram.com/${String(index)}.mp4?token=private-${String(index)}`,
-          },
-        ]),
-      ),
+      ...urls.map((url) => element([{ name: 'src', value: url }])),
     ];
     const result = await resolver(
-      browserReturning(() => jsonResponse(successBody(results))),
+      browserReturning(() =>
+        jsonResponse(
+          successBody(results, [
+            element([{ name: 'src', value: ` ${urls[1]!} ` }]),
+            element([{ name: 'src', value: 'https://attacker.example/source.mp4' }]),
+          ]),
+        ),
+      ),
     ).resolve(post);
 
-    expect(result.candidates.map(({ value }) => value.url.href)).toEqual([
-      'https://video.cdninstagram.com/0.mp4?token=private-0',
-    ]);
+    expect(result.candidates.map(({ source, value }) => [source, value.url.href])).toEqual(
+      urls.map((url) => ['rendered-video', url]),
+    );
   });
 
   it.each([

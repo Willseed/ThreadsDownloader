@@ -23,7 +23,8 @@ const OPEN_GRAPH_URL_SELECTOR = 'meta[property="og:url"]';
 const VIDEO_SELECTOR = 'video[src]';
 const SOURCE_SELECTOR = 'video source[src]';
 const NAVIGATION_TIMEOUT_MS = 4_000;
-const ACTION_TIMEOUT_MS = 6_000;
+const ACTION_TIMEOUT_MS = 8_000;
+const HYDRATION_DELAY_MS = 5_000;
 export const RENDERED_BROWSER_BUDGET_MS = NAVIGATION_TIMEOUT_MS + ACTION_TIMEOUT_MS;
 export const RENDERED_RESPONSE_READ_TIMEOUT_MS = 2_000;
 export const RENDERED_RESOLVER_BUDGET_MS =
@@ -48,12 +49,7 @@ export interface RenderedBrowserScrapeOptions {
   };
   readonly setJavaScriptEnabled: true;
   readonly url: string;
-  readonly waitForSelector: {
-    readonly selector: 'video[src]';
-    readonly timeout: 5_000;
-    readonly visible: true;
-  };
-  readonly waitForTimeout: number;
+  readonly waitForTimeout: 5_000;
 }
 
 export interface BrowserRunScrapePort {
@@ -175,8 +171,7 @@ function scrapeOptions(
     setJavaScriptEnabled: true,
     gotoOptions: { timeout: NAVIGATION_TIMEOUT_MS, waitUntil: 'domcontentloaded' },
     actionTimeout: ACTION_TIMEOUT_MS,
-    waitForSelector: { selector: VIDEO_SELECTOR, visible: true, timeout: 5_000 },
-    waitForTimeout: 250,
+    waitForTimeout: HYDRATION_DELAY_MS,
     bestAttempt: false,
     elements: targets.map(({ selector }) => ({ selector })),
   };
@@ -467,7 +462,7 @@ function decodeCandidates(
   if (identityValues.length !== 2 || identityValues[0] !== identityValues[1]) {
     return fail('RENDERED_RESPONSE_INVALID');
   }
-  return [...candidates.values()].slice(0, 1);
+  return [...candidates.values()];
 }
 
 async function decodeResponse(

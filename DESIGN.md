@@ -62,8 +62,8 @@ The rendered fallback is a narrower exception at an external browser
 adapter whose Quick Action response does not expose its navigation redirect
 chain. Production binds exactly one `BROWSER` Browser Run binding after explicit
 approval and a credential-free remote proof. The adapter restricts every
-browser subrequest with anchored patterns, selects the first allowed
-canonically deduplicated candidate, and sends that candidate through the central
+browser subrequest with anchored patterns, returns allowed canonically
+deduplicated candidates in scrape/DOM order, and sends them through the central
 CDN policy and ordinary media probe. A rendered candidate whose probe ends in
 the exact transport-unavailable state is retained with explicitly unverified
 metadata. The Wrangler exposure gate rejects a missing,
@@ -307,12 +307,14 @@ not establish any undocumented upstream Threads API semantics.
   redirects, and policy failures never use rendering as a bypass.
 - Browser containment: the Quick Action has empty cookies, does not forward
   client headers or cookies or set an explicit referrer, uses zero cache TTL,
-  and supplies provider-side navigation and action limits totalling ten seconds,
-  a provider-side visible `video[src]` wait of at most five seconds followed by
-  a 250 ms stabilization delay, and anchored request patterns for exact
-  `www.threads.com`, the existing `cdninstagram.com` family, and the observed
-  exact Instagram FNA hostname shape. The selector wait remains inside the
-  six-second action limit and does not enlarge the ten-second browser budget.
+  and supplies a four-second provider navigation limit, an eight-second action
+  limit, a fixed five-second hydration delay, and anchored request patterns for
+  exact `www.threads.com`, the existing `cdninstagram.com` family, and the observed
+  exact Instagram FNA hostname shape. The request deliberately omits
+  `waitForSelector`: fresh provider evidence showed that the field returned before
+  its requested deadline and before delayed carousel videos hydrated. The
+  provider-side browser budget is twelve seconds, followed by a separate
+  two-second absolute response-read budget.
   Its streamed JSON response, selectors, element records, attributes, values,
   and candidate count are all bounded and decoded exactly. Exactly one
   `link[rel="canonical"]` `href` and exactly one `meta[property="og:url"]`
@@ -323,11 +325,12 @@ not establish any undocumented upstream Threads API semantics.
   percent-encoding remain exact, fail-closed comparisons. Candidates come only
   from full-page `video[src]` and
   `video source[src]`; zero canonically deduplicated CDN candidates is not found
-  and one or more candidates deterministically select the first allowed URL in
-  scrape/DOM order. This ordering is an explicit download-first MVP tradeoff,
-  not proof that the selected video belongs to the post. These upstream-authored
-  DOM identity declarations are not described as proof of the browser's final
-  location.
+  and every allowed unique candidate is retained in scrape/DOM order. A URL
+  repeated across `video` and `source` is represented once at its first
+  occurrence. The workflow applies its existing eight-candidate probe bound and
+  retains later successful probes when an earlier candidate fails. These
+  upstream-authored DOM identity declarations are not described as proof of the
+  browser's final location.
 - Downstream enforcement: the observed FNA hostname shape was added to the one
   central CDN parser without allowing the `fbcdn.net` apex, broad subdomains,
   extra labels, non-default ports, credentials, fragments, or lookalikes.
@@ -361,14 +364,14 @@ not establish any undocumented upstream Threads API semantics.
   eliminate repeated production transport failures, which motivates the
   explicit unverified-vault and browser-redirect degradation described above.
 - Lease decision: session and IP resolve permits are both 60 seconds. Deadline
-  gates require at least 38 seconds before rendering, 26 seconds before probing,
-  and 18 seconds before vault storage. These budgets cover the ten-second
+  gates require at least 40 seconds before rendering, 26 seconds before probing,
+  and 18 seconds before vault storage. These budgets cover the twelve-second
   provider browser options, a two-second absolute response-body read limit, an
   eight-second media probe, two sequential eight-second vault operations, and a
   two-second margin. If and only if the first renderer result has matching
   canonical identity but no allowed media candidate, the workflow may make one
-  fresh request for the same canonical post when at least another 38 seconds
-  remain. The worst case after that gate is twelve seconds for the second
+  fresh request for the same canonical post when at least another 40 seconds
+  remain. The worst case after that gate is fourteen seconds for the second
   rendered response plus the existing 26-second probe, vault, and margin
   budget, so it remains within the fixed 60-second permit. A successful first
   render and every unavailable, invalid-identity, or other invalid response are
@@ -418,40 +421,38 @@ not establish any undocumented upstream Threads API semantics.
   boundary. Login, access-denied, rate-limited, bot-blocked, ordinary redirect,
   and policy failures remain non-fallback; the sole redirect exception is the
   exact dedicated ambiguous-post signature above.
-- Renderer timing evidence: a later fresh production session reached the
-  `resolve` stage with exact code `RENDERED_MEDIA_NOT_FOUND` while the renderer
-  used only a fixed three-second delay. An earlier anonymous Quick Action using
-  a provider-side visible `video[src]` wait (five-second maximum) plus 250 ms
-  stabilization completed in about 3.8 seconds and its diagnostic response
-  contained `video[src]`. This supports waiting for the actual media selector
-  instead of assuming a fixed hydration instant; it does not establish a
-  universal Threads hydration time or guarantee that every valid post renders
-  media.
-- Renderer variability evidence: repeated remote-dev runs through the exact
-  production resolver for the same anonymous public post reproduced both zero
-  candidates and a later single valid candidate; a separate run produced three
-  distinct allowed candidates while canonical and Open Graph identity still
-  matched. The retry therefore handles only the observed transient zero-result
-  state. At the user's explicit direction, one or more allowed candidates now
-  select the first scrape/DOM result to prioritize a usable download; provider,
-  transport, identity, malformed-response, and policy failures are still not
-  retried. No competitor backend behavior is inferred from browser timing
-  observations. Two independent fresh production requests also returned zero
-  candidates, so one retry is not claimed to guarantee recovery in every
-  execution region.
-- Evidence boundary and remaining limitations: those remote results
-  cover only that exact public single-video post, one anonymous run, and the
-  observed execution region. Multi-video or carousel posts, images, private or
-  deleted posts, login or challenge pages, redirect behavior beyond the exact
-  ambiguous-post signature, cross-post DOM stability, and long-term CDN hostname
-  stability remain unconfirmed. The
+- Delayed-carousel timing evidence: fresh anonymous Browser Run sessions for
+  public three-video carousel `DbR4-cwgSwC` exposed three distinct `video[src]`
+  elements only after about 4.52--4.56 seconds, both on clean `/media` and when
+  retaining the input `xmt` query. The same production Quick Action shape with
+  `waitForSelector` returned HTTP 200 after about 2.35--2.68 seconds with valid,
+  mutually matching redacted canonical/Open Graph identity but zero candidates.
+  In those executions the provider field did not enforce the intended five-second
+  wait. A fixed five-second hydration delay therefore replaces it. The matching
+  clean/query observations also show that retaining `xmt` was not required, so
+  normalized query stripping remains unchanged. These measurements do not
+  establish a universal Threads hydration time.
+- Carousel candidate evidence: all three hydrated videos were distinct while
+  their observed dimensions, classes, and safe attributes matched; there was no
+  evidenced single-video selector or ranking rule. The decoder therefore keeps
+  every allowed canonical-deduplicated candidate in scrape/DOM order instead of
+  discarding the second and third carousel entries. The workflow's existing
+  eight-candidate probe cap remains the bounded downstream seam and preserves
+  later successful candidates when earlier probes fail. The existing one-time
+  retry still applies only to an exact valid zero-candidate response; provider,
+  transport, identity, malformed-response, and policy failures are not retried.
+- Evidence boundary and remaining limitations: the delayed multi-video evidence
+  covers that exact public carousel, fresh anonymous runs, and the observed
+  execution region. Other carousel shapes, images, private or deleted posts,
+  login or challenge pages, redirect behavior beyond the exact ambiguous-post
+  signature, cross-post DOM stability, and long-term CDN hostname stability
+  remain unconfirmed. The
   canonical and Open Graph values are fail-closed upstream-authored identity
   evidence, not a direct final-location proof. `quickAction()` exposes no final
   URL or redirect chain and accepts no AbortSignal; request patterns contain
   each browser request's origin but do not prove every redirect hop. With no
-  stable post-scoped selector, canonical identity plus the first allowed
-  full-page video cannot exclude a recommendation video; this remains a stated
-  limitation of the download-first MVP rather than an inferred guarantee. A late
+  stable post-scoped selector, canonical identity plus full-page video results
+  cannot by itself prove that every candidate is post-owned. A late
   provider response is rejected by the subsequent lease deadline gate, not
   locally hard-cancelled. Activation changes only the reviewed binding and
   exposure gate; failure must not cause automatic host, cookie, header, or

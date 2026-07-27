@@ -843,7 +843,7 @@ describe('resolve public media workflow', () => {
     expect(harness.controls.vaultBodies).toHaveLength(1);
   });
 
-  it('probes only the first rendered result when rendering returns multiple valid videos', async () => {
+  it('keeps a later rendered video when an earlier candidate fails its probe', async () => {
     const secondUrl = 'https://video.cdninstagram.com/related.mp4?token=private-related-token';
     const harness = createHarness({
       markupResponse: () =>
@@ -865,15 +865,22 @@ describe('resolve public media workflow', () => {
             { selector: options.elements[3]!.selector, results: [] },
           ],
         }),
+      probeResponse: (request) =>
+        request.url === RENDERED_PRIVATE_URL
+          ? new Response(null, { status: 404 })
+          : videoResponse(77),
     });
 
     const result = await execute(harness);
 
     expect(result.response.status).toBe(200);
     expect(harness.controls.rendererCalls).toHaveLength(1);
-    expect(harness.controls.probeRequests.map(({ url }) => url)).toEqual([RENDERED_PRIVATE_URL]);
+    expect(harness.controls.probeRequests.map(({ url }) => url)).toEqual([
+      RENDERED_PRIVATE_URL,
+      secondUrl,
+    ]);
     expect(harness.controls.vaultBodies[0]!['candidates']).toEqual([
-      expect.objectContaining({ finalUrl: RENDERED_PRIVATE_URL }),
+      expect.objectContaining({ finalUrl: secondUrl, contentLength: 77 }),
     ]);
     expectPublicBodySafe(result.body, [RENDERED_PRIVATE_URL, secondUrl, 'private-related-token']);
   });
@@ -926,7 +933,7 @@ describe('resolve public media workflow', () => {
           NOW,
           NOW,
           NOW + 10_000,
-          NOW + 22_000,
+          NOW + 20_000,
           NOW + 34_000,
           NOW + 42_000,
           NOW + 42_000,
@@ -1065,7 +1072,7 @@ describe('resolve public media workflow', () => {
           NOW,
           NOW,
           NOW,
-          NOW + 22_000,
+          NOW + 20_000,
           NOW + 34_000,
           NOW + 42_000,
           NOW + 42_000,
@@ -1089,7 +1096,7 @@ describe('resolve public media workflow', () => {
           headers: { 'content-type': 'text/html' },
         }),
       rendererResponse: (options) => emptyRenderedResponse(options),
-      clock: (call) => [NOW, NOW, NOW, NOW + 10_000, NOW + 22_001][call]!,
+      clock: (call) => [NOW, NOW, NOW, NOW + 10_000, NOW + 20_001][call]!,
     });
 
     const result = await execute(harness);
@@ -1102,10 +1109,10 @@ describe('resolve public media workflow', () => {
   });
 
   it.each([
-    ['before rendering', [NOW, NOW, NOW, NOW + 22_001], 422, 'THREADS_JAVASCRIPT_REQUIRED', 0, 0],
+    ['before rendering', [NOW, NOW, NOW, NOW + 20_001], 422, 'THREADS_JAVASCRIPT_REQUIRED', 0, 0],
     [
       'after rendering',
-      [NOW, NOW, NOW, NOW + 22_000, NOW + 34_001],
+      [NOW, NOW, NOW, NOW + 20_000, NOW + 34_001],
       503,
       'RESOLVE_UNAVAILABLE',
       1,
@@ -1113,7 +1120,7 @@ describe('resolve public media workflow', () => {
     ],
     [
       'after probing',
-      [NOW, NOW, NOW, NOW + 22_000, NOW + 34_000, NOW + 42_001],
+      [NOW, NOW, NOW, NOW + 20_000, NOW + 34_000, NOW + 42_001],
       503,
       'RESOLVE_UNAVAILABLE',
       1,

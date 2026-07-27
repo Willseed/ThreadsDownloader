@@ -192,16 +192,19 @@ production binding 改成 remote development 設定。
    userinfo、port、相似 host、其他 redirect status 或後續 redirect 都維持一般 redirect
    failure。login、access、bot、rate、其他 redirect 或 policy failure 不得以渲染繞過。
 3. 租約剩餘時間足夠時，對 server 自行正規化並附加 `/media` 的網址執行匿名、有界
-   Quick Action；不傳 Cookie、client headers 或 referrer。供應端最多等待五秒，直到
-   可見的 `video[src]` 出現，再保留 250 ms 穩定時間；這兩者都在每次既有六秒 action
-   limit 內。第一次只有在 exact `RENDERED_MEDIA_NOT_FOUND` 且仍有 38 秒租約時，才能對
+   Quick Action；不傳 Cookie、client headers 或 referrer。每次固定等待五秒 hydration，
+   不使用供應端曾提早返回的 `waitForSelector`；navigation limit 維持四秒，action limit
+   為八秒，另有兩秒 response read limit。第一次只有在 exact
+   `RENDERED_MEDIA_NOT_FOUND` 且仍有 40 秒租約時，才能對
    相同 canonical post 再做一次；第二次之後不再重試。
 4. 只接受 canonical link 與 Open Graph identity 各恰好一筆、彼此一致，且等於完整
    normalized canonical；唯一替代形狀是兩者都精確等於
    `https://www.threads.com/@/post/<same-shortcode>`。替代形狀仍須 byte-for-byte 綁定原
    shortcode，scheme、host、port、query、fragment、path、大小寫或 percent-encoding
-   任一不同皆拒絕。結果還必須至少有一個允許 CDN 候選；多個候選依 scrape／DOM 順序
-   穩定選第一個。候選仍先嘗試既有 media probe，再進入 vault 與同源優先下載流程。只有
+   任一不同皆拒絕。結果還必須至少有一個允許 CDN 候選；所有 canonical-deduped 候選依
+   scrape／DOM 順序保留，跨 `video`／`source` 的相同 URL 只保留第一次出現，workflow
+   最多 probe 前八個並保留後續 probe 成功的候選。候選仍先嘗試既有 media probe，再進入
+   vault 與同源優先下載流程。只有
    rendered candidate 的 probe 最終為 exact
    `MEDIA_PROBE_UNAVAILABLE` 時，才以 `unverified` metadata 進入 vault；其他 probe
    failure 仍阻擋。
@@ -226,28 +229,28 @@ access-control bypass：兩條路徑都只匿名存取同一個公開 Threads or
 client headers 或 credentials；renderer 仍只使用 server 建立的 canonical `/media`
 網址，要求 canonical 與 Open Graph identity 各恰好一筆、彼此一致，且符合完整 canonical
 或同 shortcode 的 exact username-redacted identity，並至少有一個允許候選，依 scrape／DOM
-順序選第一個，並繼續通過 media probe 或 exact transport-unavailable degradation、
+順序保留所有 canonical-deduped 結果，並繼續通過 media probe 或 exact
+transport-unavailable degradation、
 encrypted vault 與 same-origin-first download。login、access-denied、rate-limited、
 bot-blocked、一般 redirect 與 policy failure 仍不得進入 Browser Run；唯一 redirect 例外是
 本節定義的 `THREADS_POST_REDIRECT_AMBIGUOUS` exact signature。
 
-後續 fresh production session 在固定等待三秒的版本中，於 `resolve` stage 記錄 exact
-code `RENDERED_MEDIA_NOT_FOUND`。較早的匿名 Quick Action 使用可見 `video[src]` 的五秒
-上限等待再加 250 ms 穩定時間，約 3.8 秒完成，diagnostic response 當時有
-`video[src]`。因此 renderer 改為等待實際 selector，而不是假設固定 hydration 時點；
-這份觀察不代表所有 Threads 貼文都會在相同時間出現影片，也不保證每個有效貼文都有
-可下載 media。
+同日針對指定三影片公開 carousel 的 fresh 匿名 Browser Run 診斷，在 clean `/media` 與
+保留輸入 `xmt` query 兩種情況下，都約在 4.52--4.56 秒才出現三個不同 `video[src]`。
+相同 production Quick Action 選項卻約 2.35--2.68 秒便回 HTTP 200；canonical 與 Open
+Graph identity 有效且一致，但候選為零。這證明該次供應端 `waitForSelector` 沒有實現預期
+等待，所以改用固定五秒 hydration delay。兩種 URL 的結果一致也表示本案例不需保留
+`xmt`；輸入 query 仍由 normalization 丟棄，preview 又只可能發生在 resolve 成功之後，
+兩者都不是此失敗原因。
 
-同日 exact production resolver 的重複 remote-dev 診斷，在相同匿名公開貼文上觀察到
-第一次零候選、後續一次單一有效候選，也另觀察到 canonical／Open Graph identity 皆
-吻合但有三個不同候選的結果。工作流程因此只吸收第一次 exact
-`RENDERED_MEDIA_NOT_FOUND` 的瞬時波動；首試成功不重試，多候選依順序取第一個，
-identity、provider、transport、格式或 policy failure 都不重試。重試前至少須剩餘 38
-秒，涵蓋第二次最多
-12 秒 rendered resolver、8 秒 probe、兩次各 8 秒 vault 與 2 秒 margin，總流程不超過
-既有 60 秒 permit；失敗路徑最多消耗兩次 Browser Run 計費請求。兩次獨立的 fresh
-production request 都曾得到零候選，因此這個重試只降低瞬時失敗機率，不保證不同執行
-區域都能恢復。
+三個 hydrated video 的尺寸、classes 與可安全觀察 attributes 相同，沒有證據支持單選或
+排序規則；resolver 因此按 scrape／DOM 順序保留所有 canonical-deduped 合規候選。workflow
+仍最多 probe 八個，前一候選 probe 失敗不會丟棄後續成功候選。第一次 exact
+`RENDERED_MEDIA_NOT_FOUND` 的單次 retry 保留，identity、provider、transport、格式或
+policy failure 都不重試。render 前與 retry 前至少須剩餘 40 秒，涵蓋最多 14 秒 rendered
+resolver、8 秒 probe、兩次各 8 秒 vault 與 2 秒 margin，維持既有 60 秒 permit；失敗路徑
+最多消耗兩次 Browser Run 計費請求。這些數據只涵蓋該公開 carousel、當次匿名 session 與
+觀察區域，不保證所有 Threads 貼文都在五秒內完成 hydration。
 
 renderer timing 修正後，fresh production resolve 已到達 media probe，PII-free telemetry
 只記錄 exact code `MEDIA_PROBE_UNAVAILABLE`；同一公開候選的 direct remote proof 則成功
@@ -673,7 +676,7 @@ Production resolver 先使用 Web Platform `fetch`、manual redirect、allowlist
 Action。Browser Run 不是登入或存取控制繞過路徑，也不使用 Puppeteer、Playwright
 或第三方下載 API；Playwright 僅用於 mock E2E。若公開頁需要登入、CAPTCHA、遭 bot
 block、地區／年齡限制或 markup 改變，解析可能失敗。不能登入、上傳 Cookie 或暴力重試；
-download-first degradation 的精確範圍與未驗證 metadata 必須如實記錄，不得描述成 probe
+transport-only degradation 的精確範圍與未驗證 metadata 必須如實記錄，不得描述成 probe
 成功。
 
 自動測試只用 mocks、fixtures 與受控 upstream。真實驗證最多使用使用者先前提供的
