@@ -32,7 +32,7 @@ describe('legal pages', () => {
     }).compileComponents();
   });
 
-  function render<T>(component: Type<T>): ComponentFixture<T> {
+  function render(component: Type<unknown>): ComponentFixture<unknown> {
     const fixture = TestBed.createComponent(component);
     fixture.detectChanges();
     return fixture;

@@ -21,6 +21,8 @@ import {
 } from '@angular/forms';
 import { type ResolveCandidate } from '@threads-downloader/contracts';
 
+import { I18nService } from '../../core/i18n/i18n.js';
+import { type MessageCatalog } from '../../core/i18n/locales/zh-TW.js';
 import {
   TURNSTILE_CHALLENGE,
   type TurnstileWidgetHandle,
@@ -75,7 +77,10 @@ function candidatesFrom(state: DownloaderWorkflowState): readonly ResolveCandida
   return state.kind === 'error' ? (state.candidates ?? []) : [];
 }
 
-function statusText(state: DownloaderWorkflowState): string | null {
+function statusText(
+  state: DownloaderWorkflowState,
+  text: MessageCatalog['downloader'],
+): string | null {
   switch (state.kind) {
     case 'idle':
     case 'ready':
@@ -83,9 +88,9 @@ function statusText(state: DownloaderWorkflowState): string | null {
     case 'error':
       return null;
     case 'bootstrapping':
-      return '正在建立安全工作階段……';
+      return text.bootstrapStatus;
     case 'resolving':
-      return '正在解析公開貼文……';
+      return text.resolveStatus;
     case 'issuing':
     case 'handed-off':
       return null;
@@ -99,11 +104,11 @@ function statusText(state: DownloaderWorkflowState): string | null {
   template: `
     <main id="main-content" class="downloader-page" aria-labelledby="page-title">
       <header class="hero">
-        <h1 id="page-title">下載公開 Threads 影片</h1>
-        <p class="hero-copy">貼上貼文網址，驗證後選擇影片版本。</p>
+        <h1 id="page-title">{{ text().pageTitle }}</h1>
+        <p class="hero-copy">{{ text().heroCopy }}</p>
       </header>
 
-      <section id="download-workflow" class="workbench" aria-label="取得影片">
+      <section id="download-workflow" class="workbench" [attr.aria-label]="text().workflowLabel">
         <form
           [formGroup]="form"
           [attr.aria-busy]="busy() ? 'true' : null"
@@ -111,7 +116,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
           novalidate
         >
           <div class="field">
-            <label for="post-url">Threads 貼文網址</label>
+            <label for="post-url">{{ text().postUrlLabel }}</label>
             <input
               #postUrlInput
               id="post-url"
@@ -120,7 +125,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
               autocomplete="url"
               spellcheck="false"
               formControlName="postUrl"
-              placeholder="https://www.threads.com/@username/post/shortcode"
+              [placeholder]="text().postUrlPlaceholder"
               [attr.aria-invalid]="
                 form.controls.postUrl.invalid && form.controls.postUrl.touched ? 'true' : null
               "
@@ -131,10 +136,10 @@ function statusText(state: DownloaderWorkflowState): string | null {
               "
               required
             />
-            <p id="post-url-help" class="field-help">支援 threads.com 與 threads.net</p>
+            <p id="post-url-help" class="field-help">{{ text().postUrlHelp }}</p>
             @if (form.controls.postUrl.invalid && form.controls.postUrl.touched) {
               <p id="post-url-error" class="field-error" role="alert">
-                請輸入有效的公開 Threads 貼文網址。
+                {{ text().postUrlError }}
               </p>
             }
           </div>
@@ -158,17 +163,17 @@ function statusText(state: DownloaderWorkflowState): string | null {
                 "
                 required
               />
-              <span id="rights-help">我確認我有權下載及使用此內容</span>
+              <span id="rights-help">{{ text().rightsConfirmation }}</span>
             </label>
             <p id="rights-detail" class="visually-hidden">
-              我確認我擁有內容、已取得授權，或依適用法律得以保存；我了解學術或非商業目的本身不構成授權，並自行負責遵守法律與平台條款。
+              {{ text().rightsDetail }}
             </p>
-            <a class="rights-detail-link" href="/terms" legalModalTrigger="terms"
-              >查看內容使用責任</a
-            >
+            <a class="rights-detail-link" href="/terms" legalModalTrigger="terms">{{
+              text().rightsDetailLink
+            }}</a>
           </div>
           @if (form.controls.rightsConfirmed.invalid && form.controls.rightsConfirmed.touched) {
-            <p id="rights-error" class="field-error" role="alert">必須先確認內容使用權利。</p>
+            <p id="rights-error" class="field-error" role="alert">{{ text().rightsError }}</p>
           }
 
           <div
@@ -176,31 +181,31 @@ function statusText(state: DownloaderWorkflowState): string | null {
             #turnstileContainer
             class="turnstile-container"
             role="group"
-            aria-label="Cloudflare Turnstile"
+            [attr.aria-label]="text().turnstileLabel"
             tabindex="-1"
           ></div>
           @if (verificationRetryAvailable()) {
             <div class="verification-recovery" role="alert">
-              <p>安全驗證無法使用，請重新載入安全驗證。</p>
+              <p>{{ text().verificationUnavailable }}</p>
               <button
                 type="button"
                 class="verification-retry-action"
                 [disabled]="busy()"
                 (click)="retryVerification()"
               >
-                重新載入安全驗證
+                {{ text().reloadVerification }}
               </button>
             </div>
           }
           @if (verificationRequired()) {
-            <p class="field-error" role="alert">請先完成安全驗證。</p>
+            <p class="field-error" role="alert">{{ text().verificationRequired }}</p>
           }
 
           <button class="primary-action" type="submit" [disabled]="busy()">
             @if (state().kind === 'resolving') {
-              正在取得影片……
+              {{ text().resolvingAction }}
             } @else {
-              取得影片
+              {{ text().resolveAction }}
             }
           </button>
           @if (state().kind === 'resolving') {
@@ -234,7 +239,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
               <div #workflowErrorPanel class="error-panel" role="alert" tabindex="-1">
                 <p>{{ error.message }}</p>
                 @if (error.requestId !== null) {
-                  <p class="request-reference">參考編號：{{ error.requestId }}</p>
+                  <p class="request-reference">{{ text().requestReference(error.requestId) }}</p>
                 }
                 @if (canRetryBootstrap()) {
                   <button
@@ -243,7 +248,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
                     [disabled]="busy()"
                     (click)="retryBootstrap()"
                   >
-                    重新建立安全工作階段
+                    {{ text().retryBootstrap }}
                   </button>
                 }
               </div>
@@ -259,7 +264,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
           aria-labelledby="candidate-title"
           tabindex="-1"
         >
-          <h2 id="candidate-title">找到 {{ candidates().length }} 個影片版本</h2>
+          <h2 id="candidate-title">{{ text().candidateCount(candidates().length) }}</h2>
           @if (candidateStatusMessage(); as message) {
             <p class="candidate-status" aria-live="polite" aria-atomic="true">
               {{ message }}
@@ -269,7 +274,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
             <div #workflowErrorPanel class="error-panel candidate-error" role="alert" tabindex="-1">
               <p>{{ error.message }}</p>
               @if (error.requestId !== null) {
-                <p class="request-reference">參考編號：{{ error.requestId }}</p>
+                <p class="request-reference">{{ text().requestReference(error.requestId) }}</p>
               }
             </div>
           }
@@ -280,18 +285,18 @@ function statusText(state: DownloaderWorkflowState): string | null {
                   @if (candidate.width !== undefined && candidate.height !== undefined) {
                     <dl>
                       <div>
-                        <dt>畫質</dt>
+                        <dt>{{ text().quality }}</dt>
                         <dd>{{ candidate.width }} × {{ candidate.height }}</dd>
                       </div>
                       @if (candidate.duration !== undefined) {
                         <div>
-                          <dt>時長</dt>
+                          <dt>{{ text().duration }}</dt>
                           <dd>{{ formatDuration(candidate.duration) }}</dd>
                         </div>
                       }
                       @if (candidate.contentLength !== undefined) {
                         <div>
-                          <dt>大小</dt>
+                          <dt>{{ text().size }}</dt>
                           <dd>{{ formatBytes(candidate.contentLength) }}</dd>
                         </div>
                       }
@@ -302,19 +307,19 @@ function statusText(state: DownloaderWorkflowState): string | null {
                     <dl>
                       @if (candidate.duration !== undefined) {
                         <div>
-                          <dt>時長</dt>
+                          <dt>{{ text().duration }}</dt>
                           <dd>{{ formatDuration(candidate.duration) }}</dd>
                         </div>
                       }
                       @if (candidate.contentLength !== undefined) {
                         <div>
-                          <dt>大小</dt>
+                          <dt>{{ text().size }}</dt>
                           <dd>{{ formatBytes(candidate.contentLength) }}</dd>
                         </div>
                       }
                     </dl>
                   } @else {
-                    <p class="candidate-fallback">影片資訊由來源決定</p>
+                    <p class="candidate-fallback">{{ text().candidateFallback }}</p>
                   }
                 </div>
                 <div class="candidate-handoff">
@@ -327,9 +332,9 @@ function statusText(state: DownloaderWorkflowState): string | null {
                     (click)="download(candidate.candidateId)"
                   >
                     @if (isIssuingCandidate(candidate.candidateId)) {
-                      正在準備影片……
+                      {{ text().preparingCandidate }}
                     } @else {
-                      開啟或下載影片
+                      {{ text().openOrDownload }}
                     }
                   </button>
                 </div>
@@ -342,6 +347,7 @@ function statusText(state: DownloaderWorkflowState): string | null {
   `,
 })
 export class DownloaderPageComponent implements OnDestroy {
+  private readonly i18n = inject(I18nService);
   private readonly workflow = inject(DownloaderWorkflow);
   private readonly challenge = inject(TURNSTILE_CHALLENGE);
   private readonly turnstileContainer = viewChild<ElementRef<HTMLDivElement>>('turnstileContainer');
@@ -426,7 +432,8 @@ export class DownloaderPageComponent implements OnDestroy {
     }
     return this.widgetMountFailed() || this.widgetValue()?.status() === 'error';
   });
-  readonly statusMessage = computed(() => statusText(this.state()));
+  protected readonly text = computed(() => this.i18n.messages().downloader);
+  readonly statusMessage = computed(() => statusText(this.state(), this.text()));
   readonly candidateStatusMessage = computed(() => {
     const state = this.state();
     return state.kind === 'handed-off' ? state.message : null;
@@ -504,9 +511,9 @@ export class DownloaderPageComponent implements OnDestroy {
 
   candidateActionLabel(candidate: ResolveCandidate, index: number): string {
     const action = this.isIssuingCandidate(candidate.candidateId)
-      ? '正在準備影片'
-      : '開啟或下載影片';
-    return `${action}，版本 ${index + 1}：${candidate.filename}`;
+      ? this.text().preparingCandidateLabel
+      : this.text().openOrDownload;
+    return this.text().candidateActionLabel(action, index + 1, candidate.filename);
   }
 
   formatDuration(duration: number): string {

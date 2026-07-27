@@ -16,14 +16,13 @@ import {
 } from '@threads-downloader/contracts';
 import { catchError, map, throwError, type Observable } from 'rxjs';
 
+import { I18nService } from '../i18n/i18n.js';
+
 const SESSION_PATH = '/api/session';
 const RESOLVE_PATH = '/api/resolve';
 const DOWNLOAD_SESSIONS_PATH = '/api/download-sessions';
 const DOWNLOAD_STATUS_PATH_PREFIX = '/api/download-status/';
 const CANONICAL_DOWNLOAD_ID = /^[A-Za-z0-9_-]{32}$/u;
-
-const REQUEST_INVALID_MESSAGE = '下載識別碼格式不正確。';
-const API_UNAVAILABLE_MESSAGE = '服務暫時無法使用，請稍後再試。';
 
 type ResponseDecoder<T> = (value: unknown) => T | null;
 
@@ -41,11 +40,11 @@ export class DownloaderApiError {
   }
 }
 
-function unavailableError(): DownloaderApiError {
-  return new DownloaderApiError('CLIENT_UNAVAILABLE', API_UNAVAILABLE_MESSAGE, null);
+function unavailableError(message: string): DownloaderApiError {
+  return new DownloaderApiError('CLIENT_UNAVAILABLE', message, null);
 }
 
-function applicationError(reason: unknown): DownloaderApiError {
+function applicationError(reason: unknown, fallbackMessage: string): DownloaderApiError {
   if (reason instanceof DownloaderApiError) {
     return reason;
   }
@@ -60,12 +59,13 @@ function applicationError(reason: unknown): DownloaderApiError {
       );
     }
   }
-  return unavailableError();
+  return unavailableError(fallbackMessage);
 }
 
 @Injectable({ providedIn: 'root' })
 export class DownloaderApi {
   private readonly http = inject(HttpClient);
+  private readonly i18n = inject(I18nService);
 
   getSession(): Observable<SessionResponse> {
     return this.decode(this.http.get<unknown>(SESSION_PATH), decodeSessionResponse);
@@ -96,7 +96,12 @@ export class DownloaderApi {
   getDownloadStatus(downloadId: string): Observable<DownloadStatusResponse> {
     if (!CANONICAL_DOWNLOAD_ID.test(downloadId)) {
       return throwError(
-        () => new DownloaderApiError('CLIENT_REQUEST_INVALID', REQUEST_INVALID_MESSAGE, null),
+        () =>
+          new DownloaderApiError(
+            'CLIENT_REQUEST_INVALID',
+            this.i18n.messages().downloader.invalidDownloadId,
+            null,
+          ),
       );
     }
     return this.decode(
@@ -110,11 +115,13 @@ export class DownloaderApi {
       map((body) => {
         const decoded = decoder(body);
         if (decoded === null) {
-          throw unavailableError();
+          throw unavailableError(this.i18n.messages().downloader.genericError);
         }
         return decoded;
       }),
-      catchError((reason: unknown) => throwError(() => applicationError(reason))),
+      catchError((reason: unknown) =>
+        throwError(() => applicationError(reason, this.i18n.messages().downloader.genericError)),
+      ),
     );
   }
 }

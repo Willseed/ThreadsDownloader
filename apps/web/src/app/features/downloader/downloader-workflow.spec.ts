@@ -181,7 +181,7 @@ describe('DownloaderWorkflow', () => {
       kind: 'error',
       siteKey: null,
       code: 'SESSION_INVALID',
-      message: '工作階段無效，請重新建立。',
+      message: '工作階段無效，請重新建立安全工作階段。',
       requestId: REQUEST_ID,
     });
 
@@ -333,7 +333,7 @@ describe('DownloaderWorkflow', () => {
       kind: 'error',
       siteKey: null,
       code: 'SESSION_EXPIRED',
-      message: '工作階段已過期，請重新建立。',
+      message: '工作階段已過期，請重新建立安全工作階段。',
       requestId: REQUEST_ID,
     });
 

@@ -7,14 +7,9 @@ import {
   DownloaderApiError,
   type DownloaderApiErrorCode,
 } from '../../core/api/downloader-api.js';
-import {
-  BrowserDownloadHandoff,
-  DOWNLOAD_HANDOFF_MESSAGE,
-} from '../../core/download/browser-download-handoff.js';
-
-const GENERIC_ERROR_MESSAGE = '服務暫時無法使用，請稍後再試。';
-const RESOLVE_REQUIREMENTS_MESSAGE = '請確認權利、網址與驗證狀態後再試。';
-const CANDIDATE_INVALID_MESSAGE = '下載候選無效，請重新解析貼文。';
+import { BrowserDownloadHandoff } from '../../core/download/browser-download-handoff.js';
+import { I18nService } from '../../core/i18n/i18n.js';
+import { type MessageCatalog } from '../../core/i18n/locales/zh-TW.js';
 
 export interface DownloaderChallengeHandle {
   readonly token: Signal<string | null>;
@@ -40,7 +35,7 @@ export type DownloaderWorkflowState =
       readonly kind: 'handed-off';
       readonly siteKey: string;
       readonly candidates: readonly ResolveCandidate[];
-      readonly message: typeof DOWNLOAD_HANDOFF_MESSAGE;
+      readonly message: string;
     }
   | {
       readonly kind: 'error';
@@ -71,6 +66,7 @@ function safeCandidates(candidates: readonly ResolveCandidate[]): readonly Resol
 function safeError(
   reason: unknown,
   siteKey: string | null,
+  messages: MessageCatalog,
   candidates?: readonly ResolveCandidate[],
 ): Extract<DownloaderWorkflowState, { readonly kind: 'error' }> {
   const context = candidates === undefined ? {} : { candidates };
@@ -79,7 +75,10 @@ function safeError(
       kind: 'error',
       siteKey,
       code: reason.code,
-      message: reason.message,
+      message:
+        reason.code === 'CLIENT_REQUEST_INVALID' || reason.code === 'CLIENT_UNAVAILABLE'
+          ? messages.downloader.genericError
+          : messages.apiErrors[reason.code],
       requestId: reason.requestId,
       ...context,
     };
@@ -88,7 +87,7 @@ function safeError(
     kind: 'error',
     siteKey,
     code: 'CLIENT_UNAVAILABLE',
-    message: GENERIC_ERROR_MESSAGE,
+    message: messages.downloader.genericError,
     requestId: null,
     ...context,
   };
@@ -114,6 +113,7 @@ function invalidatesSession(reason: unknown): boolean {
 export class DownloaderWorkflow {
   private readonly api = inject(DownloaderApi);
   private readonly handoff = inject(BrowserDownloadHandoff);
+  private readonly i18n = inject(I18nService);
   private readonly stateValue = signal<DownloaderWorkflowState>({ kind: 'idle' });
 
   private session: SessionResponse | null = null;
@@ -156,7 +156,7 @@ export class DownloaderWorkflow {
       if (!this.isCurrent(generation)) {
         return;
       }
-      this.stateValue.set(safeError(reason, null));
+      this.stateValue.set(safeError(reason, null, this.i18n.messages()));
     }
   }
 
@@ -200,7 +200,7 @@ export class DownloaderWorkflow {
       rightsConfirmed !== true ||
       postUrl.trim().length === 0
     ) {
-      this.rejectOperation(RESOLVE_REQUIREMENTS_MESSAGE);
+      this.rejectOperation(this.i18n.messages().downloader.resolveRequirements);
       return;
     }
 
@@ -208,7 +208,7 @@ export class DownloaderWorkflow {
     this.resolveId = null;
     this.pendingHandoff = null;
     if (!this.resetChallenge()) {
-      this.stateValue.set(safeError(null, session.turnstileSiteKey));
+      this.stateValue.set(safeError(null, session.turnstileSiteKey, this.i18n.messages()));
       return;
     }
     this.stateValue.set({ kind: 'resolving', siteKey: session.turnstileSiteKey });
@@ -261,7 +261,10 @@ export class DownloaderWorkflow {
       resolveId === null ||
       !candidates.some((candidate) => candidate.candidateId === candidateId)
     ) {
-      this.rejectOperation(CANDIDATE_INVALID_MESSAGE, candidates ?? undefined);
+      this.rejectOperation(
+        this.i18n.messages().downloader.candidateInvalid,
+        candidates ?? undefined,
+      );
       return;
     }
 
@@ -308,7 +311,7 @@ export class DownloaderWorkflow {
         kind: 'handed-off',
         siteKey: session.turnstileSiteKey,
         candidates,
-        message: DOWNLOAD_HANDOFF_MESSAGE,
+        message: this.i18n.messages().downloader.handoffMessage,
       });
     } catch (reason: unknown) {
       if (!this.isCurrent(generation)) {
@@ -355,14 +358,14 @@ export class DownloaderWorkflow {
     candidates?: readonly ResolveCandidate[],
   ): void {
     if (!invalidatesSession(reason)) {
-      this.stateValue.set(safeError(reason, siteKey, candidates));
+      this.stateValue.set(safeError(reason, siteKey, this.i18n.messages(), candidates));
       return;
     }
 
     const generation = this.invalidatePending();
     this.clearSessionOwnedState();
     if (this.isCurrent(generation)) {
-      this.stateValue.set(safeError(reason, null));
+      this.stateValue.set(safeError(reason, null, this.i18n.messages()));
     }
   }
 

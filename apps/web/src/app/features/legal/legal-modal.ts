@@ -17,6 +17,8 @@ import {
 } from '@angular/core';
 import { Router } from '@angular/router';
 
+import { I18nService } from '../../core/i18n/i18n.js';
+
 export type LegalDocumentKind = 'terms' | 'privacy' | 'copyright';
 
 const LEGAL_DOCUMENT_LOADERS: Readonly<Record<LegalDocumentKind, () => Promise<Type<unknown>>>> = {
@@ -30,12 +32,6 @@ const LEGAL_DOCUMENT_LOADERS: Readonly<Record<LegalDocumentKind, () => Promise<T
     import('./copyright-page.js').then(
       ({ CopyrightPageComponent }): Type<unknown> => CopyrightPageComponent,
     ),
-};
-
-const LEGAL_DOCUMENT_TITLES: Readonly<Record<LegalDocumentKind, string>> = {
-  terms: '使用條款',
-  privacy: '隱私與資料處理說明',
-  copyright: '著作權與下架通知',
 };
 
 @Injectable({ providedIn: 'root' })
@@ -156,21 +152,21 @@ export class LegalModalTriggerDirective {
       <div class="legal-modal-frame">
         <header class="legal-modal-header">
           <div>
-            <p class="eyebrow">LEGAL / ON DEMAND</p>
+            <p class="eyebrow">{{ text().eyebrow }}</p>
             <h2 [id]="titleId()">{{ title() }}</h2>
           </div>
           <button #closeButton type="button" class="legal-modal-close" (click)="close()">
-            關閉
+            {{ text().close }}
           </button>
         </header>
 
         <div class="legal-modal-body">
           @if (loading()) {
-            <p class="legal-modal-status" role="status">正在載入法務資訊。</p>
+            <p class="legal-modal-status" role="status">{{ text().loading }}</p>
           } @else if (error()) {
             <div class="legal-modal-error" role="alert">
-              <p>法務資訊暫時無法載入，請稍後再試。</p>
-              <button type="button" (click)="retry()">重新載入</button>
+              <p>{{ text().error }}</p>
+              <button type="button" (click)="retry()">{{ text().retry }}</button>
             </div>
           } @else if (document(); as legalDocument) {
             <ng-container
@@ -184,13 +180,22 @@ export class LegalModalTriggerDirective {
 })
 export class LegalModalOutletComponent {
   private readonly modal = inject(LegalModalState);
+  private readonly i18n = inject(I18nService);
   private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('dialog');
   private readonly closeButton = viewChild.required<ElementRef<HTMLButtonElement>>('closeButton');
   protected readonly loading = this.modal.loading;
   protected readonly error = this.modal.error;
   protected readonly document = this.modal.document;
   protected readonly modalDocumentInputs = { modal: true };
-  protected readonly title = computed(() => LEGAL_DOCUMENT_TITLES[this.modal.kind()]);
+  protected readonly text = computed(() => this.i18n.messages().legalModal);
+  protected readonly title = computed(() => {
+    const messages = this.i18n.messages();
+    return {
+      terms: messages.terms.title,
+      privacy: messages.privacy.title,
+      copyright: messages.copyright.title,
+    }[this.modal.kind()];
+  });
   protected readonly titleId = computed(() => `legal-modal-${this.modal.kind()}-title`);
   private readonly synchronizeDialog = effect(() => {
     const opened = this.modal.opened();

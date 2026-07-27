@@ -1,9 +1,12 @@
 import { DOCUMENT } from '@angular/common';
 import { inject, Injectable } from '@angular/core';
 
+import { I18nService } from '../i18n/i18n.js';
+import { zhTW } from '../i18n/locales/zh-TW.js';
+
 const CANONICAL_DOWNLOAD_URL = /^\/api\/download\/[A-Za-z0-9_-]{32}$/u;
 
-export const DOWNLOAD_HANDOFF_MESSAGE = '已交由瀏覽器處理；若開啟播放器，請使用瀏覽器的儲存功能。';
+export const DOWNLOAD_HANDOFF_MESSAGE = zhTW.downloader.handoffMessage;
 
 export class UnsafeDownloadUrlError extends Error {
   constructor() {
@@ -19,6 +22,7 @@ export interface DownloadHandoff {
 @Injectable({ providedIn: 'root' })
 export class BrowserDownloadHandoff implements DownloadHandoff {
   private readonly document = inject(DOCUMENT);
+  private readonly i18n = inject(I18nService);
 
   handoff(downloadUrl: string): string {
     if (!CANONICAL_DOWNLOAD_URL.test(downloadUrl)) {
@@ -33,7 +37,7 @@ export class BrowserDownloadHandoff implements DownloadHandoff {
     try {
       this.document.body.append(anchor);
       anchor.click();
-      return DOWNLOAD_HANDOFF_MESSAGE;
+      return this.i18n.messages().downloader.handoffMessage;
     } finally {
       anchor.remove();
     }

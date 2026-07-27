@@ -8,17 +8,18 @@ export const appRoutes: Routes = [
     path: '',
     pathMatch: 'full',
     component: DownloaderPageComponent,
+    data: { titleKey: 'home' },
     providers: [DownloaderWorkflow],
   },
   {
     path: 'terms',
-    title: '使用條款｜Threads Downloader',
+    data: { titleKey: 'terms' },
     loadComponent: () =>
       import('./features/legal/terms-page.js').then(({ TermsPageComponent }) => TermsPageComponent),
   },
   {
     path: 'privacy',
-    title: '隱私與資料處理｜Threads Downloader',
+    data: { titleKey: 'privacy' },
     loadComponent: () =>
       import('./features/legal/privacy-page.js').then(
         ({ PrivacyPageComponent }) => PrivacyPageComponent,
@@ -26,7 +27,7 @@ export const appRoutes: Routes = [
   },
   {
     path: 'copyright',
-    title: '著作權與下架通知｜Threads Downloader',
+    data: { titleKey: 'copyright' },
     loadComponent: () =>
       import('./features/legal/copyright-page.js').then(
         ({ CopyrightPageComponent }) => CopyrightPageComponent,
