@@ -147,11 +147,20 @@ const oauthDiscovery = {
   id_token_signing_alg_values_supported: ['RS256'],
   identity_assertion: 'https://threads.pylot.dev/.well-known/agent-card.json',
   agent_auth: {
+    skill: 'https://threads.pylot.dev/auth.md',
     register_uri: 'https://threads.pylot.dev/auth/agent/register',
-    identity_endpoint: 'https://threads.pylot.dev/.well-known/agent-card.json',
-    claim_endpoint: 'https://threads.pylot.dev/.well-known/agent-skills/index.json',
-    revocation_endpoint: 'https://threads.pylot.dev/oauth/revoke',
-    identity_types_supported: ['agent_uri'],
+    supported_identity_types: ['anonymous', 'identity_assertion'],
+    claim_uri: 'https://threads.pylot.dev/agent/auth/claim',
+    revocation_uri: 'https://threads.pylot.dev/agent/auth/revoke',
+    anonymous: {
+      identity: ['api_key'],
+      credential_types_supported: ['api_key'],
+    },
+    identity_assertion: {
+      assertion_types_supported: ['urn:ietf:params:oauth:token-type:id-jag'],
+      credential_types_supported: ['api_key'],
+    },
+    identity_types_supported: ['anonymous', 'identity_assertion'],
   },
 };
 
@@ -359,21 +368,44 @@ app.get('/robots.txt', () => robotsResponse());
 app.get('/sitemap.xml', () => sitemapResponse());
 app.get('/auth.md', () =>
   markdownResponse(
-    `# auth.md\n\nThis site supports manual agent registration discovery metadata.\n\n` +
+    `# auth.md\n\n` +
+      `This service supports AI agent registration via the auth.md protocol.\n\n` +
+      `Public access is read-only. Registration helps operators request explicit correspondence.\n\n` +
       `## Agent registration\n\n` +
-      `This service supports AI agent registration via the endpoint metadata below.\n\n` +
-      `## Discovery metadata\n` +
-      `- Agent card: https://threads.pylot.dev/.well-known/agent-card.json\n` +
-      `- A2A card: https://threads.pylot.dev/.well-known/agent-skills/index.json\n` +
-      `- OAuth discovery: https://threads.pylot.dev/.well-known/oauth-authorization-server\n\n` +
+      `Threads Downloader publishes public metadata for AI registration and access.\n` +
+      `No user accounts are required to fetch public Threads data.\n\n` +
+      `## Well-known metadata\n` +
+      `- OAuth Protected Resource metadata: https://threads.pylot.dev/.well-known/oauth-protected-resource\n` +
+      `- OAuth Authorization Server metadata: https://threads.pylot.dev/.well-known/oauth-authorization-server\n\n` +
+      `## Supported flows\n\n` +
+      `- anonymous — register without user identity first.\n` +
+      `- identity_assertion — register with a provider-issued identity assertion.\n\n` +
+      `## Supported identity types\n\n` +
+      `- anonymous: returns no immediate access credential; public data is still available.\n` +
+      `- identity_assertion: accepts ` +
+      `'urn:ietf:params:oauth:token-type:id-jag'` +
+      ` assertions where available.\n\n` +
+      `## Scopes\n\n` +
+      `- \`public:read\` — read public Threads resource data.\n\n` +
+      `## How to register\n\n` +
+      `POST https://threads.pylot.dev/auth/agent/register\n\n` +
+      `OAuth metadata: /.well-known/oauth-protected-resource\n\n` +
       '```json\n' +
       '{\n' +
       '  "agent_auth": {\n' +
+      '    "skill": "https://threads.pylot.dev/auth.md",\n' +
       '    "register_uri": "https://threads.pylot.dev/auth/agent/register",\n' +
-      '    "identity_endpoint": "https://threads.pylot.dev/.well-known/agent-card.json",\n' +
-      '    "claim_endpoint": "https://threads.pylot.dev/.well-known/agent-skills/index.json",\n' +
-      '    "identity_types_supported": ["agent_uri"],\n' +
-      '    "identity_assertion": "https://threads.pylot.dev/.well-known/agent-card.json"\n' +
+      '    "supported_identity_types": ["anonymous", "identity_assertion"],\n' +
+      '    "claim_uri": "https://threads.pylot.dev/agent/auth/claim",\n' +
+      '    "revocation_uri": "https://threads.pylot.dev/agent/auth/revoke",\n' +
+      '    "anonymous": {\n' +
+      '      "identity": ["api_key"],\n' +
+      '      "credential_types_supported": ["api_key"]\n' +
+      '    },\n' +
+      '    "identity_assertion": {\n' +
+      '      "assertion_types_supported": ["urn:ietf:params:oauth:token-type:id-jag"],\n' +
+      '      "credential_types_supported": ["api_key"]\n' +
+      '    }\n' +
       '  }\n' +
       '}\n' +
       '```\n',

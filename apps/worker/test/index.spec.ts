@@ -346,6 +346,8 @@ describe('worker entry policy', () => {
     const mcpServerCard = await fetchWorker('/.well-known/mcp.json', env);
     const agentSkills = await fetchWorker('/.well-known/agent-skills/index.json', env);
     const agentCard = await fetchWorker('/.well-known/agent-card.json', env);
+    const oauthDiscovery = await fetchWorker('/.well-known/openid-configuration', env);
+    const oauthAuthorizationServer = await fetchWorker('/.well-known/oauth-authorization-server', env);
     const oauthProtectedResource = await fetchWorker('/.well-known/oauth-protected-resource', env);
     const authMd = await fetchWorker('/auth.md', env);
 
@@ -378,6 +380,33 @@ describe('worker entry policy', () => {
       transport: { type: 'streamable-http' },
     });
 
+    expect(oauthDiscovery.status).toBe(200);
+    expect(oauthDiscovery.headers.get('content-type')).toBe('application/json');
+    const oauthDiscoveryJson = await oauthDiscovery.json();
+    expect(oauthDiscoveryJson).toMatchObject({
+      agent_auth: {
+        skill: 'https://threads.pylot.dev/auth.md',
+        register_uri: 'https://threads.pylot.dev/auth/agent/register',
+        claim_uri: 'https://threads.pylot.dev/agent/auth/claim',
+        revocation_uri: 'https://threads.pylot.dev/agent/auth/revoke',
+      },
+    });
+    expect(oauthDiscoveryJson.agent_auth.supported_identity_types).toEqual(
+      expect.arrayContaining(['anonymous', 'identity_assertion']),
+    );
+    expect(oauthDiscoveryJson.agent_auth.anonymous).toMatchObject({
+      identity: ['api_key'],
+      credential_types_supported: ['api_key'],
+    });
+    expect(oauthDiscoveryJson.agent_auth.identity_assertion).toMatchObject({
+      assertion_types_supported: ['urn:ietf:params:oauth:token-type:id-jag'],
+      credential_types_supported: ['api_key'],
+    });
+
+    expect(oauthAuthorizationServer.status).toBe(200);
+    expect(oauthAuthorizationServer.headers.get('content-type')).toBe('application/json');
+    expect(await oauthAuthorizationServer.json()).toEqual(oauthDiscoveryJson);
+
     expect(await agentSkills.json()).toMatchObject({
       $schema: 'https://schemas.agentskills.io/discovery/0.2.0/schema.json',
     });
@@ -406,8 +435,34 @@ describe('worker entry policy', () => {
     });
 
     const authMdBody = await authMd.text();
-    expect(authMdBody).toContain('## Agent registration');
+    expect(authMdBody).toMatch(/^#\s*auth\.md/m);
+    expect(authMdBody).toContain('## Supported flows');
     expect(authMdBody).toContain('agent_auth');
+    expect(authMdBody).toContain('supported_identity_types');
+    expect(authMdBody).toContain('/.well-known/oauth-protected-resource');
+    expect(authMdBody).toContain('/.well-known/oauth-authorization-server');
+    const authDiscoveryMatch = authMdBody.match(/```json\n([\s\S]*?)```/);
+    expect(authDiscoveryMatch).toBeTruthy();
+    const authMdMetadata = JSON.parse(authDiscoveryMatch![1] ?? '{}');
+    expect(authMdMetadata).toMatchObject({
+      agent_auth: {
+        skill: 'https://threads.pylot.dev/auth.md',
+        register_uri: 'https://threads.pylot.dev/auth/agent/register',
+        claim_uri: 'https://threads.pylot.dev/agent/auth/claim',
+        revocation_uri: 'https://threads.pylot.dev/agent/auth/revoke',
+      },
+    });
+    expect(authMdMetadata.agent_auth.supported_identity_types).toEqual(
+      expect.arrayContaining(['anonymous', 'identity_assertion']),
+    );
+    expect(authMdMetadata.agent_auth.anonymous).toMatchObject({
+      identity: ['api_key'],
+      credential_types_supported: ['api_key'],
+    });
+    expect(authMdMetadata.agent_auth.identity_assertion).toMatchObject({
+      assertion_types_supported: ['urn:ietf:params:oauth:token-type:id-jag'],
+      credential_types_supported: ['api_key'],
+    });
     expect(authMd.status).toBe(200);
     expect(authMd.headers.get('content-type')).toBe('text/markdown');
 

@@ -1,14 +1,22 @@
+interface ThreadsModelTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: 'object';
+    properties: Record<string, never>;
+    required: string[];
+  };
+  execute: () => Promise<unknown>;
+}
+
 interface ModelContext {
-  registerTool(tool: {
-    name: string;
-    description: string;
-    inputSchema: {
-      type: 'object';
-      properties: Record<string, never>;
-      required: string[];
-    };
-    execute: () => Promise<unknown>;
-  }): Promise<unknown>;
+  registerTool(tool: ThreadsModelTool): Promise<unknown>;
+}
+
+interface NavigatorWithModelContext {
+  modelContext?: {
+    registerTool?: unknown;
+  };
 }
 
 function registerAgentTools(modelContext: Pick<ModelContext, 'registerTool'>): void {
@@ -37,7 +45,7 @@ function isModelContext(modelContext: unknown): modelContext is Pick<ModelContex
   );
 }
 
-((navigatorObject) => {
+((navigatorObject: Navigator & NavigatorWithModelContext) => {
   const modelContext = navigatorObject.modelContext;
   if (modelContext === undefined || modelContext === null) {
     return;
@@ -48,4 +56,4 @@ function isModelContext(modelContext: unknown): modelContext is Pick<ModelContex
   }
 
   registerAgentTools(modelContext);
-})(globalThis.navigator as Navigator & { modelContext?: unknown });
+})(globalThis.navigator as Navigator & NavigatorWithModelContext);
